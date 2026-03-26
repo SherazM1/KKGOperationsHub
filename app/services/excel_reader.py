@@ -23,10 +23,6 @@ def _normalize_header(header: str) -> str:
 
 
 def _resolve_columns(columns: list[str]) -> dict[str, str]:
-    """
-    Map actual Excel headers to required logical fields.
-    Accepts minor header variations (case, spaces, optional #).
-    """
     normalized = {_normalize_header(col): col for col in columns}
 
     resolved: dict[str, str] = {}
@@ -53,12 +49,6 @@ def _coerce_to_string(value: Any) -> str:
 
 
 def _normalize_sap(value: str, row_number: int) -> str:
-    """
-    Normalize SAP to a 10-digit string.
-    Accepts 9 or 10 digit numeric values.
-    Pads 9-digit values with leading zero.
-    """
-
     cleaned = value.strip()
 
     if not cleaned:
@@ -84,10 +74,6 @@ def _normalize_sap(value: str, row_number: int) -> str:
 
 
 def read_excel(file: Any) -> list[Label]:
-    """
-    Read an Excel file-like object and return label records.
-    """
-
     df = pd.read_excel(file, dtype=str)
 
     if df.empty:
@@ -98,7 +84,7 @@ def read_excel(file: Any) -> list[Label]:
     labels: list[Label] = []
 
     for index, row in df.iterrows():
-        row_number = index + 2  # +2 because Excel rows start at 1 and row 1 is header
+        row_number = index + 2  # Excel row number (header is row 1)
 
         supplier = _coerce_to_string(row[column_map["supplier"]])
         store = _coerce_to_string(row[column_map["store"]])
@@ -106,12 +92,11 @@ def read_excel(file: Any) -> list[Label]:
         description = _coerce_to_string(row[column_map["description"]])
         sap_raw = _coerce_to_string(row[column_map["sap"]])
 
-        print(
-            f"[DEBUG] Row {row_number} -> "
-            f"Supplier='{supplier}', Store='{store}', "
-            f"PO='{po}', SAP='{sap_raw}'"
-        )
+        # 🔹 Skip completely empty trailing rows
+        if not any([supplier, store, po, description, sap_raw]):
+            continue
 
+        # 🔹 If partially filled, enforce required fields
         if not supplier:
             raise ValueError(f"Row {row_number}: Supplier is blank.")
 
@@ -132,5 +117,8 @@ def read_excel(file: Any) -> list[Label]:
                 sap=sap,
             )
         )
+
+    if not labels:
+        raise ValueError("No valid label rows found in Excel file.")
 
     return labels
