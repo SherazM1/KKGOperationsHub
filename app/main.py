@@ -47,7 +47,7 @@ def main() -> None:
         st.download_button(
             label="Download Labels PDF",
             data=pdf_bytes,
-            file_name="eotf_labels.pdf",
+            file_name="kkg_labels.pdf",
             mime="application/pdf",
         )
 
