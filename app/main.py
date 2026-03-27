@@ -10,11 +10,11 @@ from app.services.pdf_generator import generate_label_pdf
 
 def main() -> None:
     """Run the Streamlit user interface."""
-    st.set_page_config(page_title="EOTF Label Maker", layout="centered")
+    st.set_page_config(page_title="Kendal King Label Maker", layout="centered")
 
-    st.title("EOTF Shipping Label Maker")
+    st.title("Kendal King Shipping Label Maker")
     st.write(
-        "Upload an Excel workbook to generate print-ready, letter-sized EOTF labels."
+        "Upload an Excel workbook to generate print-ready, letter-sized barcodes and labels."
     )
 
     uploaded_file = st.file_uploader(
