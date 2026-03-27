@@ -90,7 +90,7 @@ def _draw_label_page(c: canvas.Canvas, label: Label) -> None:
     po_barcode = generate_code128_barcode(
         label.po,
         bar_height=34,   # increased height
-        bar_width=0.55,  # thinner bars = longer overall width
+        bar_width=0.20,  # thinner bars = longer overall width
     )
     barcode_y = PAGE_HEIGHT - 194.9
     renderPDF.draw(po_barcode, c, LEFT_MARGIN, barcode_y)
@@ -119,7 +119,7 @@ def _draw_label_page(c: canvas.Canvas, label: Label) -> None:
     sap_barcode = generate_code128_barcode(
         label.sap,
         bar_height=36,   # slightly taller than PO
-        bar_width=0.55,  # thinner bars for stretched appearance
+        bar_width=0.20,  # thinner bars for stretched appearance
     )
     barcode_y = PAGE_HEIGHT - 335.9
     renderPDF.draw(sap_barcode, c, LEFT_MARGIN, barcode_y)
