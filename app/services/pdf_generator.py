@@ -53,8 +53,8 @@ def _draw_label_page(c: canvas.Canvas, label: Label) -> None:
     # 7️⃣ PO Barcode (24pt height)
     po_barcode = generate_code128_barcode(
         label.po,
-        bar_height=24,
-        bar_width=0.72,
+        bar_height=32,
+        bar_width=0.85,
     )
     barcode_y = PAGE_HEIGHT - 194.9
     renderPDF.draw(po_barcode, c, LEFT_MARGIN, barcode_y)
