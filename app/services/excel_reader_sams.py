@@ -30,10 +30,14 @@ REQUIRED_COLUMNS = [
     "Desc",
 ]
 
+HEADER_ALIASES = {
+    "shipper adress": "shipper address",
+    "ship to adress": "ship to address",
+}
 
 def _normalize_header(header: str) -> str:
-    return header.strip().lower()
-
+    cleaned = " ".join(header.strip().lower().split())
+    return HEADER_ALIASES.get(cleaned, cleaned)
 
 def _resolve_columns(columns: list[str]) -> dict[str, str]:
     normalized_to_actual = {_normalize_header(col): col for col in columns}
