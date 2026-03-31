@@ -33,7 +33,7 @@ REQUIRED_COLUMNS = [
 HEADER_ALIASES = {
     "shipper adress": "shipper address",
     "ship to adress": "ship to address",
-    "ship to adderss": "ship to address",  # exact typo from template
+    "ship to adderss": "ship to address",  
 }
 
 def _normalize_header(header: str) -> str:
