@@ -66,19 +66,31 @@ def _coerce_to_string(value: Any) -> str:
     return str(value).strip()
 
 
-def _validate_zip(zip_value: str, field_name: str, row_number: int) -> str:
+def _validate_shipper_zip(zip_value: str, row_number: int) -> str:
     if not zip_value:
-        raise ValueError(f"Row {row_number}: {field_name} is blank.")
+        raise ValueError(f"Row {row_number}: SHIPPER ZIP is blank.")
+
+    if not zip_value.isdigit() or len(zip_value) != 5:
+        raise ValueError(
+            f"Row {row_number}: SHIPPER ZIP must be 5 digits."
+        )
+
+    return zip_value
+
+
+def _validate_ship_to_zip(zip_value: str, row_number: int) -> str:
+    if not zip_value:
+        raise ValueError(f"Row {row_number}: ZIP is blank.")
 
     if "-" not in zip_value:
         raise ValueError(
-            f"Row {row_number}: {field_name} must be 5+4 format (#####-####)."
+            f"Row {row_number}: ZIP must be 5+4 format (#####-####)."
         )
 
     digits_only = zip_value.replace("-", "")
     if len(digits_only) != 9 or not digits_only.isdigit():
         raise ValueError(
-            f"Row {row_number}: {field_name} must contain 9 digits plus a dash."
+            f"Row {row_number}: ZIP must contain 9 digits plus a dash."
         )
 
     return zip_value
@@ -122,8 +134,8 @@ def read_excel_sams(file: Any) -> list[SamsLabel]:
         if not po_number and not upc:
             break
 
-        shipper_zip = _validate_zip(values["SHIPPER ZIP"], "SHIPPER ZIP", row_number)
-        ship_to_zip = _validate_zip(values["ZIP"], "ZIP", row_number)
+        shipper_zip = _validate_shipper_zip(values["SHIPPER ZIP"], row_number)
+        ship_to_zip = _validate_ship_to_zip(values["ZIP"], row_number)
         validated_upc = _validate_upc(upc, row_number)
 
         labels.append(
