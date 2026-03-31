@@ -149,47 +149,55 @@ def _draw_label_page(c: canvas.Canvas, label: SamsLabel) -> None:
     )
 
     top_block_bottom_y = min(left_end_y, right_end_y) - 7
-    c.setLineWidth(0.9)
+    c.setLineWidth(1.0)
     c.line(divider_x, top_y - 12, divider_x, top_block_bottom_y + 4)
     c.line(LEFT_MARGIN, top_block_bottom_y, PAGE_WIDTH - RIGHT_MARGIN, top_block_bottom_y)
 
     postal_barcode_value = "420" + label.ship_to_zip.replace("-", "")
     postal_barcode = _create_fitted_barcode(
         postal_barcode_value,
-        target_width=PRINT_WIDTH * 0.88,
-        bar_height=0.58 * inch,
-        max_bar_width=1.35,
-        min_bar_width=0.80,
+        target_width=PRINT_WIDTH * 0.90,
+        bar_height=0.66 * inch,
+        max_bar_width=1.55,
+        min_bar_width=0.90,
     )
     postal_x = (PAGE_WIDTH - postal_barcode.width) / 2
-    postal_bottom = top_block_bottom_y - 0.76 * inch
+    postal_bottom = top_block_bottom_y - 0.71 * inch
     renderPDF.draw(postal_barcode, c, postal_x, postal_bottom)
 
     postal_text = f"(420){label.ship_to_zip}"
     c.setFont("Helvetica", 8.5)
     postal_text_width = c.stringWidth(postal_text, "Helvetica", 8.5)
-    c.drawString((PAGE_WIDTH - postal_text_width) / 2, postal_bottom - 11, postal_text)
+    c.drawString((PAGE_WIDTH - postal_text_width) / 2, postal_bottom - 8, postal_text)
 
-    middle_divider_y = postal_bottom - 18
-    c.setLineWidth(0.85)
+    static_x = PAGE_WIDTH - RIGHT_MARGIN - 0.62 * inch
+    static_y = postal_bottom + 0.58 * inch
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(static_x, static_y, "CLUB")
+    c.drawString(static_x, static_y - 11, "PRO")
+    c.drawString(static_x, static_y - 22, "B/L")
+
+    middle_divider_y = postal_bottom - 14
+    c.setLineWidth(0.95)
     c.line(LEFT_MARGIN, middle_divider_y, PAGE_WIDTH - RIGHT_MARGIN, middle_divider_y)
 
-    middle_y = middle_divider_y - 12
-    left_cluster = (
-        f"DC# {sanitize_text(label.whse)}    "
-        f"TYPE {sanitize_text(label.type_code)}    "
-        f"DEPT {sanitize_text(label.dept)}"
-    )
-    order_value = f"ORDER# {sanitize_text(label.po_number)}"
+    middle_y = middle_divider_y - 10
     c.setFont("Helvetica-Bold", 9.5)
-    c.drawString(LEFT_MARGIN, middle_y, left_cluster)
-    c.drawRightString(PAGE_WIDTH - RIGHT_MARGIN, middle_y, order_value)
+    c.drawString(LEFT_MARGIN, middle_y, "DC#")
+    c.drawString(LEFT_MARGIN + 20, middle_y, sanitize_text(label.whse))
+    c.drawString(LEFT_MARGIN + 52, middle_y, "TYPE")
+    c.drawString(LEFT_MARGIN + 80, middle_y, sanitize_text(label.type_code))
+    c.drawString(LEFT_MARGIN + 104, middle_y, "DEPT")
+    c.drawString(LEFT_MARGIN + 135, middle_y, sanitize_text(label.dept))
+    c.drawRightString(PAGE_WIDTH - RIGHT_MARGIN, middle_y, f"ORDER# {sanitize_text(label.po_number)}")
 
-    middle_y -= 14
+    middle_y -= 13
     c.setFont("Helvetica-Bold", 10)
-    c.drawString(LEFT_MARGIN, middle_y, f"WMIT: {sanitize_text(label.item_number)}")
+    c.drawString(LEFT_MARGIN, middle_y, "WMIT:")
+    c.setFont("Helvetica", 10)
+    c.drawString(LEFT_MARGIN + 31, middle_y, sanitize_text(label.item_number))
 
-    middle_y -= 12
+    middle_y -= 11
     c.setFont("Helvetica", 9)
     desc = f"DESC: {sanitize_text(label.description)}"
     c.drawString(LEFT_MARGIN, middle_y, desc)
@@ -197,14 +205,14 @@ def _draw_label_page(c: canvas.Canvas, label: SamsLabel) -> None:
     c.drawRightString(
         PAGE_WIDTH - RIGHT_MARGIN,
         middle_y,
-        f"QTY {sanitize_text(label.quantity)}",
+        f"Qty {sanitize_text(label.quantity)}",
     )
 
     upc_barcode = _create_fitted_barcode(
         label.upc,
         target_width=PRINT_WIDTH * 0.94,
-        bar_height=0.96 * inch,
-        max_bar_width=1.45,
+        bar_height=1.02 * inch,
+        max_bar_width=1.50,
         min_bar_width=0.90,
     )
     upc_x = (PAGE_WIDTH - upc_barcode.width) / 2
