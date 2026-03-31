@@ -82,18 +82,43 @@ def _validate_ship_to_zip(zip_value: str, row_number: int) -> str:
     if not zip_value:
         raise ValueError(f"Row {row_number}: ZIP is blank.")
 
-    if "-" not in zip_value:
-        raise ValueError(
-            f"Row {row_number}: ZIP must be 5+4 format (#####-####)."
-        )
+    zip_value = zip_value.strip()
 
-    digits_only = zip_value.replace("-", "")
-    if len(digits_only) != 9 or not digits_only.isdigit():
-        raise ValueError(
-            f"Row {row_number}: ZIP must contain 9 digits plus a dash."
-        )
+    # Case 1: 5+4 format
+    if "-" in zip_value:
+        parts = zip_value.split("-")
+        if len(parts) != 2:
+            raise ValueError(
+                f"Row {row_number}: ZIP format invalid."
+            )
 
-    return zip_value
+        left, right = parts
+
+        if not (left.isdigit() and right.isdigit()):
+            raise ValueError(
+                f"Row {row_number}: ZIP must contain digits only."
+            )
+
+        if len(left) != 5 or len(right) != 4:
+            raise ValueError(
+                f"Row {row_number}: ZIP must be 5+4 format (#####-####)."
+            )
+
+        return zip_value
+
+    # Case 2: 5-digit only format
+    else:
+        if not zip_value.isdigit():
+            raise ValueError(
+                f"Row {row_number}: ZIP must contain digits only."
+            )
+
+        if len(zip_value) != 5:
+            raise ValueError(
+                f"Row {row_number}: ZIP must be 5 digits or 5+4 format."
+            )
+
+        return zip_value
 
 
 def _validate_upc(upc: str, row_number: int) -> str:
