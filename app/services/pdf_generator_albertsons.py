@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from io import BytesIO
-import re
 
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -15,24 +14,18 @@ from app.utils.formatting import sanitize_text
 PAGE_WIDTH, PAGE_HEIGHT = letter
 LEFT_MARGIN = 48
 RIGHT_MARGIN = 48
-ORDER_LABEL_FONT_SIZE = 15
+ORDER_LABEL_FONT_SIZE = 16
 ORDER_VALUE_FONT_SIZE = 13
 ORDER_DESC_VALUE_FONT_SIZE = 12
 ORDER_LABEL_X = LEFT_MARGIN
-ORDER_VALUE_X = LEFT_MARGIN + 138
+ORDER_PO_VALUE_X = LEFT_MARGIN + 185
+ORDER_ITEM_VALUE_X = LEFT_MARGIN + 185
+ORDER_DESC_VALUE_X = LEFT_MARGIN + 90
 
 
 def _draw_divider(c: canvas.Canvas, y: float) -> None:
     c.setLineWidth(1)
     c.line(LEFT_MARGIN, y, PAGE_WIDTH - RIGHT_MARGIN, y)
-
-
-def _split_description_and_pack(description: str) -> tuple[str, str]:
-    clean = sanitize_text(description)
-    match = re.search(r"(.+?)\s+(\d+/\S+\s+\S+)$", clean)
-    if match:
-        return match.group(1).strip(), match.group(2).strip()
-    return clean, ""
 
 
 def _draw_label_page(c: canvas.Canvas, label: AlbertsonsLabel) -> None:
@@ -78,24 +71,20 @@ def _draw_label_page(c: canvas.Canvas, label: AlbertsonsLabel) -> None:
     c.setFont("Helvetica-Bold", ORDER_LABEL_FONT_SIZE)
     c.drawString(ORDER_LABEL_X, order_top_y, "PURCHASE ORDER#")
     c.setFont("Helvetica", ORDER_VALUE_FONT_SIZE)
-    c.drawString(ORDER_VALUE_X, order_top_y, sanitize_text(label.po_number))
+    c.drawString(ORDER_PO_VALUE_X, order_top_y, sanitize_text(label.po_number))
 
     c.setFont("Helvetica-Bold", ORDER_LABEL_FONT_SIZE)
     c.drawString(ORDER_LABEL_X, order_top_y - 22, "ITEM#")
     c.setFont("Helvetica", ORDER_VALUE_FONT_SIZE)
-    c.drawString(ORDER_VALUE_X, order_top_y - 22, sanitize_text(label.item_number))
+    c.drawString(ORDER_ITEM_VALUE_X, order_top_y - 22, sanitize_text(label.item_number))
 
     c.setFont("Helvetica-Bold", ORDER_LABEL_FONT_SIZE)
     c.drawString(ORDER_LABEL_X, order_top_y - 44, "DESC")
-    desc_text, pack_info = _split_description_and_pack(label.description)
     c.setFont("Helvetica", ORDER_DESC_VALUE_FONT_SIZE)
-    c.drawString(ORDER_VALUE_X, order_top_y - 44, desc_text)
+    c.drawString(ORDER_DESC_VALUE_X, order_top_y - 44, sanitize_text(label.description))
 
     c.setFont("Helvetica-Bold", 15)
     c.drawRightString(PAGE_WIDTH - RIGHT_MARGIN, order_top_y - 22, f"Qty {sanitize_text(label.quantity)}")
-    if pack_info:
-        c.setFont("Helvetica-Bold", 13)
-        c.drawRightString(PAGE_WIDTH - RIGHT_MARGIN, order_top_y - 44, pack_info)
 
     divider_two_y = order_top_y - 64
     _draw_divider(c, divider_two_y)
