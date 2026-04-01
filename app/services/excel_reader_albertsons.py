@@ -21,6 +21,16 @@ COLUMN_MAP = {
     "quantity": "Qty",
 }
 
+REQUIRED_LOGICAL_COLUMNS = {
+    "ship_to_name",
+    "ship_to_address",
+    "ship_to_city",
+    "ship_to_state",
+    "ship_to_zip",
+    "po_number",
+    "description",
+}
+
 
 def _normalize_header(header: str) -> str:
     return header.strip().lower()
@@ -35,7 +45,7 @@ def _resolve_columns(columns: list[str]) -> dict[str, str]:
         normalized_expected = _normalize_header(expected_header)
         if normalized_expected in normalized_to_actual:
             resolved[logical_name] = normalized_to_actual[normalized_expected]
-        else:
+        elif logical_name in REQUIRED_LOGICAL_COLUMNS:
             missing.append(expected_header)
 
     if missing:
@@ -68,9 +78,17 @@ def read_excel_albertsons(file: Any) -> list[AlbertsonsLabel]:
         ship_to_state = _coerce_to_string(row[column_map["ship_to_state"]])
         ship_to_zip = _coerce_to_string(row[column_map["ship_to_zip"]])
         po_number = _coerce_to_string(row[column_map["po_number"]])
-        item_number = _coerce_to_string(row[column_map["item_number"]])
+        item_number = (
+            _coerce_to_string(row[column_map["item_number"]])
+            if "item_number" in column_map
+            else ""
+        )
         description = _coerce_to_string(row[column_map["description"]])
-        quantity = _coerce_to_string(row[column_map["quantity"]])
+        quantity = (
+            _coerce_to_string(row[column_map["quantity"]])
+            if "quantity" in column_map
+            else ""
+        )
 
         if not any(
             [
@@ -92,9 +110,6 @@ def read_excel_albertsons(file: Any) -> list[AlbertsonsLabel]:
 
         if not po_number:
             raise ValueError(f"Row {row_number}: Purchase Order Number is blank.")
-
-        if not item_number:
-            raise ValueError(f"Row {row_number}: Item # is blank.")
 
         labels.append(
             AlbertsonsLabel(
