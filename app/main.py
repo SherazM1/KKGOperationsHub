@@ -19,17 +19,17 @@ def _apply_theme_styles() -> None:
         """
         <style>
         [data-testid="stAppViewContainer"] {
-            background: linear-gradient(180deg, #0b3a73 0%, #0f4f96 55%, #155ba8 100%);
+            background: #ffffff;
         }
         [data-testid="stHeader"] {
             background: rgba(0, 0, 0, 0);
         }
         .stApp, [data-testid="stMarkdownContainer"], [data-testid="stText"] {
-            color: #eef5ff;
+            color: #1f2937;
         }
         .kkg-module-card {
-            background: rgba(255, 255, 255, 0.10);
-            border: 1px solid rgba(255, 255, 255, 0.22);
+            background: #f7f9fc;
+            border: 1px solid #d6dee8;
             border-radius: 12px;
             padding: 1rem 1rem 0.35rem 1rem;
             margin-top: 0.5rem;
