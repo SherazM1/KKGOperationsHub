@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import re
 
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -21,30 +22,43 @@ def _draw_divider(c: canvas.Canvas, y: float) -> None:
     c.line(LEFT_MARGIN, y, PAGE_WIDTH - RIGHT_MARGIN, y)
 
 
+def _split_description_and_pack(description: str) -> tuple[str, str]:
+    clean = sanitize_text(description)
+    match = re.search(r"(.+?)\s+(\d+/\S+\s+\S+)$", clean)
+    if match:
+        return match.group(1).strip(), match.group(2).strip()
+    return clean, ""
+
+
 def _draw_label_page(c: canvas.Canvas, label: AlbertsonsLabel) -> None:
     c.setFillColorRGB(0, 0, 0)
 
     c.setFont("Helvetica-Bold", 30)
-    c.drawCentredString(PAGE_WIDTH / 2, PAGE_HEIGHT - 68, "CARTON LABEL")
+    header_y = PAGE_HEIGHT - 68
+    c.drawCentredString(PAGE_WIDTH / 2, header_y, "CARTON LABEL")
+    _draw_divider(c, header_y - 14)
 
-    ship_block_top = PAGE_HEIGHT - 128
+    ship_section_top = PAGE_HEIGHT - 108
+    _draw_divider(c, ship_section_top)
+
+    ship_block_top = ship_section_top - 22
     left_x = LEFT_MARGIN
     right_x = PAGE_WIDTH / 2 + 20
 
-    c.setFont("Helvetica-Bold", 12)
+    c.setFont("Helvetica-Bold", 14)
     c.drawString(left_x, ship_block_top, "SHIP FROM")
     c.drawString(right_x, ship_block_top, "SHIP TO")
 
-    c.setFont("Helvetica", 11)
-    c.drawString(left_x, ship_block_top - 20, "KENDAL KING")
-    c.drawString(left_x, ship_block_top - 36, "975 W OAKDALE RD")
-    c.drawString(left_x, ship_block_top - 52, "GRAND PRAIRIE, TX 75050")
+    c.setFont("Helvetica", 13)
+    c.drawString(left_x, ship_block_top - 24, "KENDAL KING")
+    c.drawString(left_x, ship_block_top - 42, "975 W OAKDALE RD")
+    c.drawString(left_x, ship_block_top - 60, "GRAND PRAIRIE, TX 75050")
 
-    c.drawString(right_x, ship_block_top - 20, sanitize_text(label.ship_to_name))
-    c.drawString(right_x, ship_block_top - 36, sanitize_text(label.ship_to_address))
+    c.drawString(right_x, ship_block_top - 24, sanitize_text(label.ship_to_name))
+    c.drawString(right_x, ship_block_top - 42, sanitize_text(label.ship_to_address))
     c.drawString(
         right_x,
-        ship_block_top - 52,
+        ship_block_top - 60,
         (
             f"{sanitize_text(label.ship_to_city)}, "
             f"{sanitize_text(label.ship_to_state)} "
@@ -52,32 +66,42 @@ def _draw_label_page(c: canvas.Canvas, label: AlbertsonsLabel) -> None:
         ),
     )
 
-    divider_one_y = PAGE_HEIGHT - 202
+    divider_one_y = ship_block_top - 76
     _draw_divider(c, divider_one_y)
 
-    order_top_y = divider_one_y - 30
-    c.setFont("Helvetica-Bold", 12)
+    order_top_y = divider_one_y - 28
+    c.setFont("Helvetica-Bold", 13)
     c.drawString(left_x, order_top_y, "PURCHASE ORDER#")
-    c.drawString(left_x + 150, order_top_y, sanitize_text(label.po_number))
+    c.setFont("Helvetica", 13)
+    c.drawString(left_x + 170, order_top_y, sanitize_text(label.po_number))
 
+    c.setFont("Helvetica-Bold", 13)
     c.drawString(left_x, order_top_y - 22, "ITEM#")
-    c.drawString(left_x + 150, order_top_y - 22, sanitize_text(label.item_number))
+    c.setFont("Helvetica", 13)
+    c.drawString(left_x + 170, order_top_y - 22, sanitize_text(label.item_number))
 
+    c.setFont("Helvetica-Bold", 13)
     c.drawString(left_x, order_top_y - 44, "DESC")
-    c.setFont("Helvetica", 11)
-    c.drawString(left_x + 150, order_top_y - 44, sanitize_text(label.description))
+    desc_text, pack_info = _split_description_and_pack(label.description)
+    c.setFont("Helvetica", 12)
+    c.drawString(left_x + 170, order_top_y - 44, desc_text)
 
-    c.setFont("Helvetica-Bold", 14)
+    c.setFont("Helvetica-Bold", 15)
     c.drawRightString(PAGE_WIDTH - RIGHT_MARGIN, order_top_y - 22, f"Qty {sanitize_text(label.quantity)}")
+    if pack_info:
+        c.setFont("Helvetica-Bold", 13)
+        c.drawRightString(PAGE_WIDTH - RIGHT_MARGIN, order_top_y - 44, pack_info)
 
-    divider_two_y = order_top_y - 68
+    divider_two_y = order_top_y - 64
     _draw_divider(c, divider_two_y)
 
-    center_y = divider_two_y - 64
-    c.setFont("Helvetica-Bold", 44)
+    center_y = divider_two_y - 56
+    c.setFont("Helvetica-Bold", 34)
     c.drawCentredString(PAGE_WIDTH / 2, center_y, sanitize_text(label.dc_label))
-    c.drawCentredString(PAGE_WIDTH / 2, center_y - 56, sanitize_text(label.dc_value))
-    c.drawCentredString(PAGE_WIDTH / 2, center_y - 112, sanitize_text(label.carton_number))
+    c.setFont("Helvetica-Bold", 38)
+    c.drawCentredString(PAGE_WIDTH / 2, center_y - 52, sanitize_text(label.dc_value))
+    c.setFont("Helvetica-Bold", 40)
+    c.drawCentredString(PAGE_WIDTH / 2, center_y - 106, sanitize_text(label.carton_number))
 
     c.setFont("Helvetica-Bold", 42)
     c.drawCentredString(PAGE_WIDTH / 2, 56, "DO NOT DESTROY")
