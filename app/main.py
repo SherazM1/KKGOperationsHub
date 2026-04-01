@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
 from app.services.excel_reader import read_excel
@@ -12,9 +14,60 @@ from app.services.pdf_generator import generate_label_pdf
 from app.services.pdf_generator_sams import generate_sams_pdf
 
 
+def _apply_theme_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        [data-testid="stAppViewContainer"] {
+            background: linear-gradient(180deg, #0b3a73 0%, #0f4f96 55%, #155ba8 100%);
+        }
+        [data-testid="stHeader"] {
+            background: rgba(0, 0, 0, 0);
+        }
+        .stApp, [data-testid="stMarkdownContainer"], [data-testid="stText"] {
+            color: #eef5ff;
+        }
+        .kkg-module-card {
+            background: rgba(255, 255, 255, 0.10);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            border-radius: 12px;
+            padding: 1rem 1rem 0.35rem 1rem;
+            margin-top: 0.5rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _resolve_logo_path() -> Path | None:
+    current = Path(__file__).resolve()
+    candidates = [
+        current.parents[2] / "assets" / "KKG-Logo-02.png",
+        current.parents[1] / "assets" / "KKG-Logo-02.png",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def render_hub_header() -> None:
+    logo_col, title_col = st.columns([1, 6], vertical_alignment="center")
+
+    logo_path = _resolve_logo_path()
+    if logo_path is not None:
+        with logo_col:
+            st.image(str(logo_path), width=110)
+
+    with title_col:
+        st.title("Kendal King Operations Hub")
+        st.caption("Internal tools for shipping, labels, and operations workflows.")
+
+
 def render_mode_selector() -> str | None:
-    st.title("Kendal King Label Maker")
-    st.markdown("---")
+    st.subheader("Label Maker")
+    st.write("Select a label workflow.")
 
     if "label_mode" not in st.session_state:
         st.session_state["label_mode"] = None
@@ -141,9 +194,14 @@ def render_albertsons_mode() -> None:
 
 def main() -> None:
     """Run the Streamlit user interface."""
-    st.set_page_config(page_title="Kendal King Label Maker", layout="centered")
-
+    st.set_page_config(page_title="Kendal King Operations Hub", layout="centered")
+    _apply_theme_styles()
+    render_hub_header()
+    st.markdown('<div class="kkg-module-card">', unsafe_allow_html=True)
     render_mode_selector()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("---")
 
     if st.session_state["label_mode"] == "walmart":
         render_walmart_mode()
