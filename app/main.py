@@ -193,13 +193,15 @@ def render_albertsons_mode() -> None:
 
 
 def render_home() -> None:
-    logo_path = Path(__file__).resolve().parents[2] / "assets" / "KKG-Logo-02.png"
+    logo_path = Path.cwd() / "assets" / "KKG-Logo-02.png"
 
     col1, col2 = st.columns([1, 5])
 
     with col1:
         if logo_path.exists():
-            st.image(str(logo_path), width=80)
+            st.image(str(logo_path), width=100)
+        else:
+            st.warning(f"Logo not found at {logo_path}")
 
     with col2:
         st.title("Kendal King Operations Hub")
