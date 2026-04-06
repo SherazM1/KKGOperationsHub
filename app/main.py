@@ -41,9 +41,14 @@ def _apply_theme_styles() -> None:
 
 
 def _resolve_logo_path() -> Path | None:
-    candidate = Path.cwd() / "assets" / "KKG-Logo-02.png"
-    if candidate.exists():
-        return candidate
+    logo_candidates = (
+        Path.cwd() / "assets" / "KKG-Logo-02.png",
+        Path.cwd() / "label-maker" / "assets" / "KKG-Logo-02.png",
+        Path.cwd().parent / "assets" / "KKG-Logo-02.png",
+    )
+    for candidate in logo_candidates:
+        if candidate.exists():
+            return candidate
     return None
 
 
@@ -191,6 +196,7 @@ def render_home() -> None:
     logo_candidates = (
         Path.cwd() / "assets" / "KKG-Logo-02.png",
         Path.cwd() / "label-maker" / "assets" / "KKG-Logo-02.png",
+        Path.cwd().parent / "assets" / "KKG-Logo-02.png",
     )
     logo_path = next((p for p in logo_candidates if p.exists()), logo_candidates[0])
 
