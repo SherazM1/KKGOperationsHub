@@ -41,14 +41,9 @@ def _apply_theme_styles() -> None:
 
 
 def _resolve_logo_path() -> Path | None:
-    current = Path(__file__).resolve()
-    candidates = [
-        current.parents[2] / "assets" / "KKG-Logo-02.png",
-        current.parents[1] / "assets" / "KKG-Logo-02.png",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
+    candidate = Path.cwd() / "assets" / "KKG-Logo-02.png"
+    if candidate.exists():
+        return candidate
     return None
 
 
