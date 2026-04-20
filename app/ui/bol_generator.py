@@ -2,8 +2,26 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
+
+from app.models.bol_standard_record import BolStandardRecord
+from app.models.bol_standard_row import BolStandardRow
+from app.services.bol_file_bundle_service import StandardBundleResult, create_standard_bundles
+from app.services.bol_standard_docx_generator import (
+    StandardDocxGenerationResult,
+    generate_standard_docx_set,
+    resolve_output_filename_prefix_for_mode,
+    resolve_template_path_for_mode,
+)
+from app.services.bol_standard_mapper import map_standard_rows_to_records
+from app.services.bol_standard_pdf_converter import (
+    StandardPdfConversionResult,
+    convert_standard_docx_set_to_pdf,
+)
+from app.services.bol_standard_parser import parse_standard_bol_excel
 
 
 def _initialize_bol_state() -> None:
@@ -13,57 +31,183 @@ def _initialize_bol_state() -> None:
         st.session_state["bol_uploaded_filename"] = None
     if "bol_parse_requested" not in st.session_state:
         st.session_state["bol_parse_requested"] = False
+    if "bol_parse_error" not in st.session_state:
+        st.session_state["bol_parse_error"] = None
+    if "bol_parsed_rows" not in st.session_state:
+        st.session_state["bol_parsed_rows"] = []
+    if "bol_grouped_records" not in st.session_state:
+        st.session_state["bol_grouped_records"] = []
+    if "bol_record_comments" not in st.session_state:
+        st.session_state["bol_record_comments"] = {}
+    if "bol_record_selection" not in st.session_state:
+        st.session_state["bol_record_selection"] = {}
     if "bol_generation_status" not in st.session_state:
         st.session_state["bol_generation_status"] = "Waiting for generation action."
+    if "bol_docx_result" not in st.session_state:
+        st.session_state["bol_docx_result"] = None
+    if "bol_pdf_result" not in st.session_state:
+        st.session_state["bol_pdf_result"] = None
+    if "bol_bundle_result" not in st.session_state:
+        st.session_state["bol_bundle_result"] = None
+    if "bol_bundle_error" not in st.session_state:
+        st.session_state["bol_bundle_error"] = None
 
 
-def _placeholder_review_records(mode: str) -> pd.DataFrame:
-    return pd.DataFrame(
-        [
-            {
-                "BOL number": "BOL-10001",
-                "Load number": "LD-2231",
-                "PO number": "PO-88412",
-                "Ship date": "2026-04-16",
-                "Carrier": "Carrier A",
-                "Ship from": "Dallas, TX",
-                "Ship to": "Kansas City, MO",
-                "Total quantity": 128,
-                "Total weight": "4,120 lb",
-                "Item line count": 7,
-                "Mode": mode,
-                "Status": "Ready",
-            },
-            {
-                "BOL number": "BOL-10002",
-                "Load number": "LD-2232",
-                "PO number": "PO-88433",
-                "Ship date": "2026-04-17",
-                "Carrier": "Carrier B",
-                "Ship from": "Fort Worth, TX",
-                "Ship to": "Omaha, NE",
-                "Total quantity": 96,
-                "Total weight": "3,010 lb",
-                "Item line count": 5,
-                "Mode": mode,
-                "Status": "Issue",
-            },
-            {
-                "BOL number": "BOL-10003",
-                "Load number": "LD-2233",
-                "PO number": "PO-88444",
-                "Ship date": "2026-04-18",
-                "Carrier": "Carrier C",
-                "Ship from": "Houston, TX",
-                "Ship to": "Tulsa, OK",
-                "Total quantity": 112,
-                "Total weight": "3,700 lb",
-                "Item line count": 6,
-                "Mode": mode,
-                "Status": "Ready",
-            },
+def _clear_review_state() -> None:
+    st.session_state["bol_record_comments"] = {}
+    st.session_state["bol_record_selection"] = {}
+    st.session_state["bol_docx_result"] = None
+    st.session_state["bol_pdf_result"] = None
+    st.session_state["bol_bundle_result"] = None
+    st.session_state["bol_bundle_error"] = None
+    st.session_state["bol_generation_status"] = "Waiting for generation action."
+
+
+def _refresh_bundles() -> StandardBundleResult | None:
+    docx_result = st.session_state["bol_docx_result"]
+    pdf_result = st.session_state["bol_pdf_result"]
+
+    if not isinstance(docx_result, StandardDocxGenerationResult):
+        st.session_state["bol_bundle_result"] = None
+        st.session_state["bol_bundle_error"] = None
+        return None
+
+    try:
+        bundle_result = create_standard_bundles(
+            generated_docx_files=docx_result.generated_files,
+            converted_pdf_files=(
+                pdf_result.converted_files
+                if isinstance(pdf_result, StandardPdfConversionResult)
+                else []
+            ),
+        )
+        st.session_state["bol_bundle_result"] = bundle_result
+        st.session_state["bol_bundle_error"] = None
+        return bundle_result
+    except Exception as exc:
+        st.session_state["bol_bundle_result"] = None
+        st.session_state["bol_bundle_error"] = f"Bundle creation failed: {exc}"
+        return None
+
+
+def _clear_generation_state() -> None:
+    st.session_state["bol_docx_result"] = None
+    st.session_state["bol_pdf_result"] = None
+    st.session_state["bol_bundle_result"] = None
+    st.session_state["bol_bundle_error"] = None
+    st.session_state["bol_generation_status"] = "Waiting for generation action."
+
+
+def _resolve_generation_context() -> tuple[str, Path]:
+    mode = st.session_state["bol_mode"]
+    template_path = resolve_template_path_for_mode(mode)
+    return mode, template_path
+
+
+def _read_file_bytes(path: str) -> bytes | None:
+    file_path = Path(path)
+    if not file_path.exists():
+        return None
+    return file_path.read_bytes()
+
+
+def _format_total_skids(value: float) -> int | float:
+    if float(value).is_integer():
+        return int(value)
+    return value
+
+
+def _record_key(record: BolStandardRecord, index: int) -> str:
+    bol_number = record.bol_number.strip()
+    return bol_number if bol_number else f"__MISSING_BOL__{index}"
+
+
+def _widget_safe_key(raw_key: str) -> str:
+    return "".join(char if char.isalnum() else "_" for char in raw_key)
+
+
+def _sync_review_state(records: list[BolStandardRecord]) -> None:
+    comments_state: dict[str, str] = st.session_state["bol_record_comments"]
+    selection_state: dict[str, bool] = st.session_state["bol_record_selection"]
+
+    current_keys: set[str] = set()
+    for index, record in enumerate(records):
+        key = _record_key(record, index)
+        current_keys.add(key)
+
+        if key not in comments_state:
+            comments_state[key] = record.comments
+
+        if key not in selection_state:
+            selection_state[key] = record.is_ready
+
+        record.comments = comments_state[key]
+        record.selected_for_generation = selection_state[key]
+
+    stale_comment_keys = [key for key in comments_state if key not in current_keys]
+    for key in stale_comment_keys:
+        del comments_state[key]
+
+    stale_selection_keys = [key for key in selection_state if key not in current_keys]
+    for key in stale_selection_keys:
+        del selection_state[key]
+
+
+def _records_to_review_records(records: list[BolStandardRecord], mode: str) -> pd.DataFrame:
+    if not records:
+        return pd.DataFrame(
+            columns=[
+                "BOL number",
+                "Load number",
+                "PO number",
+                "Ship date",
+                "Carrier",
+                "Ship from",
+                "Ship to",
+                "Total quantity",
+                "Total weight",
+                "Item line count",
+                "Mode",
+                "Status",
+            ]
+        )
+
+    review_rows: list[dict[str, str | int | float]] = []
+    for record in records:
+        ship_from = (
+            f"{record.ship_from.company}, "
+            f"{record.ship_from.street}, "
+            f"{record.ship_from.city_state_zip}"
+        )
+        ship_to_parts = [
+            part
+            for part in [
+                record.consignee_company,
+                record.consignee_street,
+                record.consignee_city_state_zip,
+            ]
+            if part
         ]
-    )
+        ship_to = " - ".join(ship_to_parts)
+
+        review_rows.append(
+            {
+                "BOL number": record.bol_number,
+                "Load number": record.kk_load_number,
+                "PO number": record.po_number,
+                "Ship date": record.ship_date,
+                "Carrier": record.carrier,
+                "Ship from": ship_from,
+                "Ship to": ship_to,
+                "Total quantity": _format_total_skids(record.total_skids),
+                "Total weight": "N/A",
+                "Item line count": len(record.item_lines),
+                "Mode": mode,
+                "Status": record.status,
+            }
+        )
+
+    return pd.DataFrame(review_rows)
 
 
 def render_bol_generator_view() -> None:
@@ -96,12 +240,25 @@ def render_bol_generator_view() -> None:
         type=["xlsx", "xlsm", "xls"],
         key="bol_excel_uploader",
     )
+
+    previous_filename = st.session_state["bol_uploaded_filename"]
     if uploaded_file is None:
         st.info("No Excel file uploaded yet.")
         st.session_state["bol_uploaded_filename"] = None
+        st.session_state["bol_parsed_rows"] = []
+        st.session_state["bol_grouped_records"] = []
+        _clear_review_state()
+        st.session_state["bol_parse_error"] = None
+        st.session_state["bol_parse_requested"] = False
     else:
         st.session_state["bol_uploaded_filename"] = uploaded_file.name
         st.success(f"Uploaded file: {uploaded_file.name}")
+        if previous_filename != uploaded_file.name:
+            st.session_state["bol_parsed_rows"] = []
+            st.session_state["bol_grouped_records"] = []
+            _clear_review_state()
+            st.session_state["bol_parse_error"] = None
+            st.session_state["bol_parse_requested"] = False
 
     st.markdown("---")
 
@@ -109,16 +266,58 @@ def render_bol_generator_view() -> None:
     parse_disabled = st.session_state["bol_uploaded_filename"] is None
     if st.button("Parse Excel", type="primary", disabled=parse_disabled):
         st.session_state["bol_parse_requested"] = True
+        st.session_state["bol_parse_error"] = None
+        _clear_generation_state()
+
+        selected_mode = st.session_state["bol_mode"]
+        if selected_mode == "Multistop":
+            st.session_state["bol_parsed_rows"] = []
+            st.session_state["bol_grouped_records"] = []
+            _clear_review_state()
+            st.session_state["bol_parse_error"] = (
+                "Parsing is currently implemented for Standard and No Recourse modes only."
+            )
+        else:
+            try:
+                parsed_rows: list[BolStandardRow] = parse_standard_bol_excel(uploaded_file)
+                grouped_records = map_standard_rows_to_records(parsed_rows)
+                if not grouped_records:
+                    raise ValueError("No grouped BOL records were created from parsed rows.")
+                st.session_state["bol_parsed_rows"] = parsed_rows
+                st.session_state["bol_grouped_records"] = grouped_records
+                _sync_review_state(st.session_state["bol_grouped_records"])
+            except ValueError as exc:
+                st.session_state["bol_parsed_rows"] = []
+                st.session_state["bol_grouped_records"] = []
+                _clear_review_state()
+                st.session_state["bol_parse_error"] = str(exc)
+            except Exception as exc:
+                st.session_state["bol_parsed_rows"] = []
+                st.session_state["bol_grouped_records"] = []
+                _clear_review_state()
+                st.session_state["bol_parse_error"] = f"Unexpected parse error: {exc}"
 
     if parse_disabled:
         st.info("Upload an Excel file to enable parsing.")
-    elif st.session_state["bol_parse_requested"]:
-        st.success("Parse complete (placeholder).")
+    elif st.session_state["bol_parse_error"]:
+        st.error(st.session_state["bol_parse_error"])
+    elif st.session_state["bol_parse_requested"] and st.session_state["bol_grouped_records"]:
+        parsed_rows: list[BolStandardRow] = st.session_state["bol_parsed_rows"]
+        grouped_records: list[BolStandardRecord] = st.session_state["bol_grouped_records"]
+        unique_bol_count = len({row.bol_number for row in parsed_rows if row.bol_number})
+        ready_count = sum(1 for record in grouped_records if record.is_ready)
+        issue_count = len(grouped_records) - ready_count
+        st.success("Parse complete.")
         st.write(
             {
                 "source_file": st.session_state["bol_uploaded_filename"],
                 "mode": st.session_state["bol_mode"],
-                "summary": "Placeholder parse output for UI wiring.",
+                "worksheet": "MAIN LOAD SHEET",
+                "rows_parsed": len(parsed_rows),
+                "unique_bol_numbers_found": unique_bol_count,
+                "grouped_records": len(grouped_records),
+                "ready_records": ready_count,
+                "records_with_issues": issue_count,
             }
         )
     else:
@@ -127,10 +326,49 @@ def render_bol_generator_view() -> None:
     st.markdown("---")
 
     st.subheader("Review Records")
-    total_records = 3
-    ready_records = 2
-    issue_records = 1
-    selected_records = 2
+    grouped_records: list[BolStandardRecord] = st.session_state["bol_grouped_records"]
+    _sync_review_state(grouped_records)
+
+    comments_state: dict[str, str] = st.session_state["bol_record_comments"]
+    selection_state: dict[str, bool] = st.session_state["bol_record_selection"]
+
+    for index, record in enumerate(grouped_records):
+        key = _record_key(record, index)
+        safe_key = _widget_safe_key(key)
+        label = record.bol_number or "(missing BOL #)"
+
+        include_value = st.checkbox(
+            f"Include BOL {label}",
+            value=selection_state.get(key, record.is_ready),
+            key=f"bol_include_{index}_{safe_key}",
+        )
+        selection_state[key] = include_value
+        record.selected_for_generation = include_value
+
+        comments_value = st.text_area(
+            f"Comments for BOL {label}",
+            value=comments_state.get(key, record.comments),
+            key=f"bol_comments_{index}_{safe_key}",
+            placeholder="Optional notes for this BOL record.",
+        )
+        comments_state[key] = comments_value
+        record.comments = comments_value
+
+        if record.missing_required_fields:
+            st.caption("Missing required: " + ", ".join(record.missing_required_fields))
+        if record.warnings:
+            st.caption("Warnings: " + " | ".join(record.warnings))
+        if record.issues and not (record.missing_required_fields or record.warnings):
+            st.caption("Issues: " + " | ".join(record.issues))
+
+    total_records = len(grouped_records)
+    ready_records = sum(1 for record in grouped_records if record.is_ready)
+    issue_records = total_records - ready_records
+    selected_records = sum(
+        1
+        for record in grouped_records
+        if record.selected_for_generation and record.is_ready
+    )
 
     metric_cols = st.columns(4)
     metric_cols[0].metric("Total records found", total_records)
@@ -139,7 +377,7 @@ def render_bol_generator_view() -> None:
     metric_cols[3].metric("Records selected for generation", selected_records)
 
     st.dataframe(
-        _placeholder_review_records(st.session_state["bol_mode"]),
+        _records_to_review_records(grouped_records, st.session_state["bol_mode"]),
         use_container_width=True,
         hide_index=True,
     )
@@ -147,21 +385,265 @@ def render_bol_generator_view() -> None:
     st.markdown("---")
 
     st.subheader("Generate")
-    st.button("Generate DOCX Set", disabled=True, use_container_width=True)
-    st.button("Generate PDF Set", disabled=True, use_container_width=True)
-    st.button("Generate All", disabled=True, use_container_width=True)
-    st.caption("Generation actions are placeholders and will be enabled when backend logic is connected.")
+    selected_records_total = sum(1 for record in grouped_records if record.selected_for_generation)
+    selected_ready_records = sum(
+        1
+        for record in grouped_records
+        if record.selected_for_generation and record.is_ready
+    )
+
+    if grouped_records and selected_records_total == 0:
+        st.warning("No records are selected for generation.")
+    elif grouped_records and selected_records_total > 0 and selected_ready_records == 0:
+        st.warning("Selected records exist, but none are ready for generation. Resolve missing data first.")
+
+    generate_docx_disabled = not any(
+        record.selected_for_generation and record.is_ready for record in grouped_records
+    )
+    if st.button("Generate DOCX Set", disabled=generate_docx_disabled, use_container_width=True):
+        try:
+            mode, template_path = _resolve_generation_context()
+            result = generate_standard_docx_set(
+                grouped_records,
+                template_path=template_path,
+                file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
+            )
+            st.session_state["bol_docx_result"] = result
+            st.session_state["bol_pdf_result"] = None
+            _refresh_bundles()
+            st.session_state["bol_generation_status"] = (
+                f"{mode} DOCX generation complete. Generated {result.generated_count}, "
+                f"skipped {result.skipped_count}, failed {result.failed_count}."
+            )
+        except FileNotFoundError as exc:
+            mode = st.session_state["bol_mode"]
+            st.session_state["bol_docx_result"] = None
+            st.session_state["bol_pdf_result"] = None
+            st.session_state["bol_bundle_result"] = None
+            st.session_state["bol_bundle_error"] = None
+            st.session_state["bol_generation_status"] = (
+                f"{mode} DOCX generation failed: selected template file was not found ({exc})."
+            )
+        except ValueError as exc:
+            mode = st.session_state["bol_mode"]
+            st.session_state["bol_docx_result"] = None
+            st.session_state["bol_pdf_result"] = None
+            st.session_state["bol_bundle_result"] = None
+            st.session_state["bol_bundle_error"] = None
+            st.session_state["bol_generation_status"] = f"{mode} DOCX generation failed: {exc}"
+        except Exception as exc:
+            mode = st.session_state["bol_mode"]
+            st.session_state["bol_docx_result"] = None
+            st.session_state["bol_pdf_result"] = None
+            st.session_state["bol_bundle_result"] = None
+            st.session_state["bol_bundle_error"] = None
+            st.session_state["bol_generation_status"] = (
+                f"Unexpected {mode} DOCX generation error: {exc}"
+            )
+
+    docx_result = st.session_state["bol_docx_result"]
+    generate_pdf_disabled = not (
+        isinstance(docx_result, StandardDocxGenerationResult)
+        and docx_result.generated_count > 0
+    )
+    if st.button("Generate PDF Set", disabled=generate_pdf_disabled, use_container_width=True):
+        try:
+            mode = st.session_state["bol_mode"]
+            if not isinstance(docx_result, StandardDocxGenerationResult):
+                raise ValueError("Generate DOCX Set first.")
+
+            pdf_result = convert_standard_docx_set_to_pdf(docx_result.generated_files)
+            st.session_state["bol_pdf_result"] = pdf_result
+            _refresh_bundles()
+
+            if not pdf_result.conversion_available:
+                st.session_state["bol_generation_status"] = (
+                    f"{mode} PDF conversion unavailable. "
+                    f"{pdf_result.unavailable_reason}"
+                )
+            else:
+                st.session_state["bol_generation_status"] = (
+                    f"{mode} PDF conversion complete. Converted {pdf_result.converted_count}, "
+                    f"failed {pdf_result.failed_count}."
+                )
+        except Exception as exc:
+            mode = st.session_state["bol_mode"]
+            st.session_state["bol_pdf_result"] = None
+            _refresh_bundles()
+            st.session_state["bol_generation_status"] = f"{mode} PDF generation failed: {exc}"
+
+    if st.button("Generate All", disabled=generate_docx_disabled, use_container_width=True):
+        try:
+            mode, template_path = _resolve_generation_context()
+            docx_result_all = generate_standard_docx_set(
+                grouped_records,
+                template_path=template_path,
+                file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
+            )
+            st.session_state["bol_docx_result"] = docx_result_all
+
+            pdf_result_all = convert_standard_docx_set_to_pdf(docx_result_all.generated_files)
+            st.session_state["bol_pdf_result"] = pdf_result_all
+            _refresh_bundles()
+
+            if not pdf_result_all.conversion_available:
+                st.session_state["bol_generation_status"] = (
+                    f"{mode} Generate All: DOCX generated {docx_result_all.generated_count}. "
+                    "PDF conversion unavailable. "
+                    f"{pdf_result_all.unavailable_reason}"
+                )
+            else:
+                st.session_state["bol_generation_status"] = (
+                    f"{mode} Generate All complete. DOCX {docx_result_all.generated_count}, "
+                    f"PDF {pdf_result_all.converted_count}, "
+                    f"PDF failures {pdf_result_all.failed_count}."
+                )
+        except Exception as exc:
+            mode = st.session_state["bol_mode"]
+            st.session_state["bol_generation_status"] = f"{mode} Generate All failed: {exc}"
+
+    st.caption("DOCX and PDF generation are enabled for Standard and No Recourse modes.")
 
     st.markdown("---")
 
     st.subheader("Download")
-    st.button("Download DOCX Bundle", disabled=True, use_container_width=True)
-    st.button("Download PDF Bundle", disabled=True, use_container_width=True)
-    st.button("Download All Files", disabled=True, use_container_width=True)
+    bundle_result = st.session_state["bol_bundle_result"]
+    docx_bundle_bytes = None
+    pdf_bundle_bytes = None
+    all_bundle_bytes = None
+
+    if isinstance(bundle_result, StandardBundleResult):
+        if bundle_result.docx_bundle:
+            docx_bundle_bytes = _read_file_bytes(bundle_result.docx_bundle.file_path)
+        if bundle_result.pdf_bundle:
+            pdf_bundle_bytes = _read_file_bytes(bundle_result.pdf_bundle.file_path)
+        if bundle_result.all_files_bundle:
+            all_bundle_bytes = _read_file_bytes(bundle_result.all_files_bundle.file_path)
+
+    st.download_button(
+        "Download DOCX Bundle",
+        data=docx_bundle_bytes or b"",
+        file_name=(
+            bundle_result.docx_bundle.file_name
+            if isinstance(bundle_result, StandardBundleResult) and bundle_result.docx_bundle
+            else f"{st.session_state['bol_mode'].lower().replace(' ', '_')}_bol_docx_bundle.zip"
+        ),
+        mime="application/zip",
+        disabled=docx_bundle_bytes is None,
+        use_container_width=True,
+    )
+    st.download_button(
+        "Download PDF Bundle",
+        data=pdf_bundle_bytes or b"",
+        file_name=(
+            bundle_result.pdf_bundle.file_name
+            if isinstance(bundle_result, StandardBundleResult) and bundle_result.pdf_bundle
+            else f"{st.session_state['bol_mode'].lower().replace(' ', '_')}_bol_pdf_bundle.zip"
+        ),
+        mime="application/zip",
+        disabled=pdf_bundle_bytes is None,
+        use_container_width=True,
+    )
+    st.download_button(
+        "Download All Files",
+        data=all_bundle_bytes or b"",
+        file_name=(
+            bundle_result.all_files_bundle.file_name
+            if isinstance(bundle_result, StandardBundleResult) and bundle_result.all_files_bundle
+            else f"{st.session_state['bol_mode'].lower().replace(' ', '_')}_bol_all_files_bundle.zip"
+        ),
+        mime="application/zip",
+        disabled=all_bundle_bytes is None,
+        use_container_width=True,
+    )
 
     st.markdown("---")
 
     st.subheader("Status & Results")
-    st.info("Generation status: Not started (placeholder).")
-    st.info("Bundle readiness: No bundles available yet (placeholder).")
+    st.info(f"Generation status: {st.session_state['bol_generation_status']}")
+    if st.session_state["bol_bundle_error"]:
+        st.error(st.session_state["bol_bundle_error"])
 
+    docx_result = st.session_state["bol_docx_result"]
+    pdf_result = st.session_state["bol_pdf_result"]
+    if isinstance(docx_result, StandardDocxGenerationResult):
+        selected_mode = st.session_state["bol_mode"]
+        selected_template: str | None = None
+        try:
+            selected_template = str(resolve_template_path_for_mode(selected_mode))
+        except ValueError:
+            selected_template = None
+
+        st.write(
+            {
+                "mode": selected_mode,
+                "template_path": selected_template,
+                "output_directory": docx_result.output_dir,
+                "docx_generated": docx_result.generated_count,
+                "records_skipped": docx_result.skipped_count,
+                "docx_generation_failures": docx_result.failed_count,
+                "docx_generation_notices": len(docx_result.notices),
+                "selected_records_total": selected_records_total,
+                "selected_ready_records": selected_ready_records,
+            }
+        )
+
+        if isinstance(pdf_result, StandardPdfConversionResult):
+            st.write(
+                {
+                    "pdf_generated": pdf_result.converted_count,
+                    "pdf_conversion_failures": pdf_result.failed_count,
+                    "pdf_converter": pdf_result.converter_name,
+                    "pdf_conversion_available": pdf_result.conversion_available,
+                    "pdf_unavailable_reason": pdf_result.unavailable_reason,
+                }
+            )
+
+        if isinstance(bundle_result, StandardBundleResult):
+            st.write(
+                {
+                    "docx_bundle_ready": bundle_result.docx_bundle is not None and docx_bundle_bytes is not None,
+                    "pdf_bundle_ready": bundle_result.pdf_bundle is not None and pdf_bundle_bytes is not None,
+                    "combined_bundle_ready": bundle_result.all_files_bundle is not None and all_bundle_bytes is not None,
+                }
+            )
+
+        if isinstance(bundle_result, StandardBundleResult):
+            st.write(
+                {
+                    "docx_bundle_file_count": (
+                        bundle_result.docx_bundle.file_count if bundle_result.docx_bundle else 0
+                    ),
+                    "pdf_bundle_file_count": (
+                        bundle_result.pdf_bundle.file_count if bundle_result.pdf_bundle else 0
+                    ),
+                    "combined_bundle_file_count": (
+                        bundle_result.all_files_bundle.file_count if bundle_result.all_files_bundle else 0
+                    ),
+                }
+            )
+
+        if docx_result.generated_files:
+            st.caption("Generated DOCX files:")
+            for generated in docx_result.generated_files:
+                st.write(f"- {generated.file_name} ({generated.bol_number})")
+
+        if docx_result.skipped_records:
+            st.caption("Skipped records:")
+            for skipped in docx_result.skipped_records:
+                st.write(f"- {skipped.bol_number}: {skipped.reason}")
+
+        if docx_result.failed_records:
+            st.caption("Failed records:")
+            for failed in docx_result.failed_records:
+                st.write(f"- {failed.bol_number}: {failed.error}")
+
+        if docx_result.notices:
+            st.caption("Generation notices:")
+            for notice in docx_result.notices:
+                st.write(f"- {notice.bol_number}: {notice.message}")
+
+        if isinstance(pdf_result, StandardPdfConversionResult) and pdf_result.failed_conversions:
+            st.caption("PDF conversion failures:")
+            for failed_pdf in pdf_result.failed_conversions:
+                st.write(f"- {failed_pdf.bol_number}: {failed_pdf.error}")
