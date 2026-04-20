@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
@@ -11,44 +12,73 @@ from app.models.bol_standard_row import BolStandardRow
 
 STANDARD_SHEET_NAME = "MAIN LOAD SHEET"
 
-REQUIRED_COLUMN_MAP = {
-    "bol_number": ["BOL #"],
-    "ship_date": ["SHIP DATE"],
-    "carrier": ["CARRIER"],
-    "kk_load": ["KK LOAD"],
-    "kk_po": ["KK PO#"],
-    "wm_po": ["WM PO #"],
-    "dc_number": ["DC #"],
-    "dc_name": ["DC NAME"],
-    "dc_street": ["DC STREET"],
-    "dc_city_state_zip": ["DC CITY, STATE, ZIP"],
-    "item_number": ["ITEM #"],
-    "upc": ["UPC"],
-    "item_description": ["ITEM DESCRIPTION", "DESCRIPTION", "ITEM DESC", "DESC"],
-    "quantity": ["QTY"],
-    "weight_each": ["WEIGHT EACH"],
+REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
+    "bol_number": {"primary": "BOL #", "fallback_aliases": []},
+    "ship_date": {"primary": "ship date", "fallback_aliases": ["SHIP DATE"]},
+    "carrier": {"primary": "Carrier", "fallback_aliases": ["CARRIER"]},
+    "kk_load": {"primary": "KK Load", "fallback_aliases": ["KK LOAD"]},
+    "kk_po": {"primary": "KK PO#", "fallback_aliases": ["KK PO #", "KK PO"]},
+    "wm_po": {"primary": "WM PO #", "fallback_aliases": ["WM PO#", "WM PO"]},
+    "dc_number": {"primary": "DC #", "fallback_aliases": ["DC#"]},
+    "dc_name": {"primary": "DC NAME", "fallback_aliases": []},
+    "dc_street": {"primary": "DC STREET", "fallback_aliases": []},
+    "dc_city_state_zip": {"primary": "DC CITY, STATE, ZIP", "fallback_aliases": []},
+    "item_number": {"primary": "ITEM #", "fallback_aliases": ["ITEM#"]},
+    "upc": {"primary": "UPC", "fallback_aliases": []},
+    "item_description": {
+        "primary": "PalletDescription",
+        "fallback_aliases": ["Pallet Description", "PALLETDESCRIPTION"],
+    },
+    "quantity": {"primary": "QTY", "fallback_aliases": []},
+    "weight_each": {"primary": "weight each", "fallback_aliases": ["WEIGHT EACH"]},
 }
 
 
 def _normalize_header(header: str) -> str:
-    cleaned = " ".join(str(header).strip().upper().split())
+    cleaned = str(header).strip()
+    cleaned = re.sub(r"\s*#\s*", "#", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = cleaned.upper()
     return cleaned
 
 
 def _resolve_columns(columns: list[str]) -> dict[str, str]:
-    normalized_columns = {_normalize_header(col): col for col in columns}
+    resolved_columns = [str(col) for col in columns]
+    exact_columns = {col: col for col in resolved_columns}
+    normalized_columns = {_normalize_header(col): col for col in resolved_columns}
+
     resolved: dict[str, str] = {}
     missing: list[str] = []
 
-    for logical_name, aliases in REQUIRED_COLUMN_MAP.items():
+    for logical_name, spec in REQUIRED_COLUMN_SPECS.items():
+        primary = str(spec["primary"])
+        fallback_aliases = [str(alias) for alias in spec["fallback_aliases"]]
         resolved_name: str | None = None
-        for alias in aliases:
-            if _normalize_header(alias) in normalized_columns:
-                resolved_name = normalized_columns[_normalize_header(alias)]
-                break
+
+        # 1) exact match for the real workbook label first.
+        if primary in exact_columns:
+            resolved_name = exact_columns[primary]
+
+        # 2) normalized match for minor formatting/case variations.
+        if resolved_name is None:
+            normalized_primary = _normalize_header(primary)
+            if normalized_primary in normalized_columns:
+                resolved_name = normalized_columns[normalized_primary]
+
+        # 3) fallback aliases only if needed.
+        if resolved_name is None:
+            for alias in fallback_aliases:
+                if alias in exact_columns:
+                    resolved_name = exact_columns[alias]
+                    break
+                normalized_alias = _normalize_header(alias)
+                if normalized_alias in normalized_columns:
+                    resolved_name = normalized_columns[normalized_alias]
+                    break
 
         if resolved_name is None:
-            missing.append(f"{logical_name} ({', '.join(aliases)})")
+            alias_text = f"; fallback aliases: {', '.join(fallback_aliases)}" if fallback_aliases else ""
+            missing.append(f"{logical_name} (expected '{primary}'{alias_text})")
         else:
             resolved[logical_name] = resolved_name
 
@@ -125,4 +155,3 @@ def parse_standard_bol_excel(file: Any) -> list[BolStandardRow]:
         raise ValueError("No non-empty data rows found in 'MAIN LOAD SHEET'.")
 
     return parsed_rows
-
