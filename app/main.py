@@ -76,8 +76,8 @@ def render_mode_selector() -> str | None:
     left_col, middle_col, right_col = st.columns(3)
 
     with left_col:
-        if st.button("Walmart Labels", use_container_width=True):
-            st.session_state["label_mode"] = "walmart"
+        if st.button("EOTF Labels", use_container_width=True):
+            st.session_state["label_mode"] = "eotf"
 
     with middle_col:
         if st.button("Sam's Warehouse Labels", use_container_width=True):
@@ -90,7 +90,7 @@ def render_mode_selector() -> str | None:
     return st.session_state["label_mode"]
 
 
-def render_walmart_mode() -> None:
+def render_eotf_mode() -> None:
     try:
         st.write("Upload Excel workbook to generate EOTF labels.")
 
@@ -98,7 +98,7 @@ def render_walmart_mode() -> None:
             "Upload Excel input",
             type=["xlsx", "xlsm", "xls"],
             help="Required columns: Supplier, Store, PO, Description, SAP",
-            key="walmart_file_uploader",
+            key="eotf_file_uploader",
         )
 
         if uploaded_file is None:
@@ -109,14 +109,14 @@ def render_walmart_mode() -> None:
         page_count = len(labels)
         st.success(f"Parsed {len(labels)} rows. This will generate {page_count} pages.")
 
-        if st.button("Generate Walmart PDF", type="primary", key="generate_walmart_pdf"):
+        if st.button("Generate EOTF PDF", type="primary", key="generate_eotf_pdf"):
             pdf_bytes = generate_label_pdf(labels)
             st.download_button(
-                label="Download Walmart Labels PDF",
+                label="Download EOTF Labels PDF",
                 data=pdf_bytes,
-                file_name="walmart_labels.pdf",
+                file_name="eotf_labels.pdf",
                 mime="application/pdf",
-                key="download_walmart_pdf",
+                key="download_eotf_pdf",
             )
 
     except ValueError as exc:
@@ -243,8 +243,8 @@ def render_label_maker() -> None:
 
     st.markdown("---")
 
-    if st.session_state["label_mode"] == "walmart":
-        render_walmart_mode()
+    if st.session_state["label_mode"] == "eotf":
+        render_eotf_mode()
     elif st.session_state["label_mode"] == "sams":
         render_sams_mode()
     elif st.session_state["label_mode"] == "albertsons":

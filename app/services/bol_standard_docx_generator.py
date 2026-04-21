@@ -233,10 +233,17 @@ def _total_qty_display(total_skids: float) -> str:
     return str(int(total_skids)) if float(total_skids).is_integer() else str(total_skids)
 
 
-def _populate_item_table(table: Table, item_lines: list[BolStandardItemLine], total_skids: float) -> None:
+def _populate_item_table(
+    table: Table,
+    item_lines: list[BolStandardItemLine],
+    total_skids: float,
+    *,
+    compact_standard_item_area: bool = False,
+) -> None:
     header_idx = None
     item_row_indices: list[int] = []
     total_qty_idx = None
+    totals_label_idx = None
 
     for idx, row in enumerate(table.rows):
         row_text = " ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
@@ -259,6 +266,9 @@ def _populate_item_table(table: Table, item_lines: list[BolStandardItemLine], to
 
         if header_idx is not None and idx > header_idx and _tok("TOTAL_QTY") in row_text:
             total_qty_idx = idx
+        if header_idx is not None and idx > header_idx and "TOTALS" in row_text_upper:
+            if totals_label_idx is None:
+                totals_label_idx = idx
 
     if header_idx is None:
         raise ValueError("Could not locate the item-table header in the DOCX template.")
@@ -275,17 +285,28 @@ def _populate_item_table(table: Table, item_lines: list[BolStandardItemLine], to
         else:
             break
 
+    insertion_anchor_idx = total_qty_idx
+    if compact_standard_item_area and totals_label_idx is not None:
+        insertion_anchor_idx = totals_label_idx
+
     table_xml = table._tbl
     template_trs = [deepcopy(table.rows[idx]._tr) for idx in contiguous_item_row_indices]
-    total_qty_tr = table.rows[total_qty_idx]._tr
+    anchor_tr = table.rows[insertion_anchor_idx]._tr
 
-    for idx in sorted(contiguous_item_row_indices, reverse=True):
+    if compact_standard_item_area:
+        remove_start_idx = contiguous_item_row_indices[0]
+        remove_end_idx = insertion_anchor_idx - 1
+        rows_to_remove = list(range(remove_start_idx, remove_end_idx + 1))
+    else:
+        rows_to_remove = contiguous_item_row_indices
+
+    for idx in sorted(rows_to_remove, reverse=True):
         table_xml.remove(table.rows[idx]._tr)
 
     for idx, line in enumerate(item_lines):
         new_tr = deepcopy(template_trs[idx % len(template_trs)])
         _replace_tokens_in_row_element(new_tr, _item_row_replacements(line))
-        total_qty_tr.addprevious(new_tr)
+        anchor_tr.addprevious(new_tr)
 
     totals_replacements = {
         _tok("TOTAL_QTY"): _total_qty_display(total_skids),
@@ -295,7 +316,12 @@ def _populate_item_table(table: Table, item_lines: list[BolStandardItemLine], to
         _replace_tokens_in_row_element(row._tr, totals_replacements)
 
 
-def _apply_template_record_values(doc: Document, record: BolStandardRecord) -> list[str]:
+def _apply_template_record_values(
+    doc: Document,
+    record: BolStandardRecord,
+    *,
+    compact_standard_item_area: bool = False,
+) -> list[str]:
     notices: list[str] = []
     comments_value = record.comments.strip()
     has_comments_placeholder = _document_contains_token(doc, _tok("COMMENTS"))
@@ -332,7 +358,12 @@ def _apply_template_record_values(doc: Document, record: BolStandardRecord) -> l
     last_error: Exception | None = None
     for table in doc.tables:
         try:
-            _populate_item_table(table, record.item_lines, record.total_skids)
+            _populate_item_table(
+                table,
+                record.item_lines,
+                record.total_skids,
+                compact_standard_item_area=compact_standard_item_area,
+            )
             return notices
         except ValueError as exc:
             last_error = exc
@@ -380,7 +411,12 @@ def generate_standard_docx_set(
 
         try:
             doc = Document(str(resolved_template))
-            record_notices = _apply_template_record_values(doc, record)
+            is_standard_template = resolved_template.name == STANDARD_TEMPLATE_PATH.name
+            record_notices = _apply_template_record_values(
+                doc,
+                record,
+                compact_standard_item_area=is_standard_template,
+            )
 
             safe_bol = _sanitize_filename_part(record.bol_number)
             destination = _unique_destination_path(
