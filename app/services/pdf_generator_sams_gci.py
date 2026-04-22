@@ -312,13 +312,15 @@ def _draw_bottom_rows(
     available_height = max(18.0, start_y - BOTTOM_MARGIN - 2.0)
     row_block_height = available_height / row_count
     # Keep repeated rows compact while still fitting high row counts.
-    row_block_height = max(12.0, min(row_block_height, 31.0))
+    row_block_height = max(13.0, min(row_block_height, 27.0))
 
     inner_pad_x = 2.0
-    text_region_width = PRINT_WIDTH * 0.50
-    row_gap = 6.0
-    barcode_region_x = LEFT_MARGIN + text_region_width + row_gap
-    barcode_region_width = PAGE_WIDTH - RIGHT_MARGIN - barcode_region_x - inner_pad_x
+    row_gap = 4.5
+    text_region_width = PRINT_WIDTH * 0.44
+    text_left_x = LEFT_MARGIN + inner_pad_x
+    text_right_x = LEFT_MARGIN + text_region_width - inner_pad_x
+    barcode_left_x = text_right_x + row_gap
+    barcode_right_x = PAGE_WIDTH - RIGHT_MARGIN - inner_pad_x
 
     y = start_y
     for row in bottom_rows:
@@ -328,10 +330,10 @@ def _draw_bottom_rows(
             row,
             row_top=row_top,
             row_height=row_block_height,
-            text_region_width=text_region_width,
-            barcode_region_x=barcode_region_x,
-            barcode_region_width=barcode_region_width,
-            inner_pad_x=inner_pad_x,
+            text_left_x=text_left_x,
+            text_right_x=text_right_x,
+            barcode_left_x=barcode_left_x,
+            barcode_right_x=barcode_right_x,
             barcode_cache=barcode_cache,
             wrap_cache=wrap_cache,
         )
@@ -346,10 +348,10 @@ def _draw_bottom_row_box(
     *,
     row_top: float,
     row_height: float,
-    text_region_width: float,
-    barcode_region_x: float,
-    barcode_region_width: float,
-    inner_pad_x: float,
+    text_left_x: float,
+    text_right_x: float,
+    barcode_left_x: float,
+    barcode_right_x: float,
     barcode_cache: dict[tuple[Any, ...], Any],
     wrap_cache: dict[tuple[Any, ...], list[str]],
 ) -> float:
@@ -361,9 +363,8 @@ def _draw_bottom_row_box(
     content_top = row_top - pad_top
     content_bottom = row_bottom + pad_bottom
 
-    text_x = LEFT_MARGIN + inner_pad_x
-    text_right_x = LEFT_MARGIN + text_region_width - inner_pad_x
-    text_width = text_region_width - (inner_pad_x * 2)
+    text_width = max(20.0, text_right_x - text_left_x)
+    barcode_width = max(20.0, barcode_right_x - barcode_left_x)
 
     item_value = row["item_number"]
     quantity_value = row["quantity"]
@@ -371,23 +372,27 @@ def _draw_bottom_row_box(
     barcode_value = row["barcode_value"]
 
     # Left text block: ITEM/QTY line plus compact description lines.
-    title_y = content_top - 0.4
+    title_y = content_top - 0.3
     c.setFont("Helvetica-Bold", 7.0)
-    c.drawString(text_x, title_y, f"ITEM#: {item_value}")
+    c.drawString(text_left_x, title_y, f"ITEM#: {item_value}")
     c.drawRightString(text_right_x, title_y, f"QTY: {quantity_value}")
 
-    desc_y = title_y - 6.8
-    desc_max_lines = 1 if row_height < 21 else 2
+    desc_y = title_y - 6.6
+    desc_line_height = 6.5
+    # Keep description inside row bounds using available vertical space.
+    desc_max_lines = 1
+    if row_height >= 24:
+        desc_max_lines = 2
     c.setFont("Helvetica", 6.9)
     _draw_wrapped(
         c,
         desc_value,
-        text_x,
+        text_left_x,
         desc_y,
         text_width,
         font_name="Helvetica",
         font_size=6.9,
-        line_height=6.7,
+        line_height=desc_line_height,
         max_lines=desc_max_lines,
         wrap_cache=wrap_cache,
     )
@@ -395,10 +400,13 @@ def _draw_bottom_row_box(
     # Right barcode block: barcode and human-readable text fully inside row container.
     if barcode_value:
         human_text_height = 6.0
-        barcode_gap = 1.4
-        barcode_target_width = max(36.0, barcode_region_width - 2.0)
-        max_barcode_height = max(8.0, content_top - (content_bottom + human_text_height + barcode_gap))
-        barcode_height = max(0.16 * inch, min(max_barcode_height, row_height * 0.62))
+        barcode_gap = 1.1
+        barcode_target_width = max(36.0, barcode_width - 1.0)
+
+        human_text_y = content_bottom + 0.5
+        barcode_bottom = human_text_y + human_text_height + barcode_gap
+        max_barcode_height = max(4.5, content_top - barcode_bottom - 0.3)
+        barcode_height = min(0.30 * inch, max_barcode_height)
 
         row_barcode = _create_fitted_barcode(
             barcode_value,
@@ -408,14 +416,14 @@ def _draw_bottom_row_box(
             min_bar_width=0.42,
             barcode_cache=barcode_cache,
         )
-        row_barcode_x = barcode_region_x + (barcode_region_width - row_barcode.width) / 2
-        row_barcode_bottom = content_bottom + human_text_height + barcode_gap
+        row_barcode_x = barcode_left_x + (barcode_width - row_barcode.width) / 2
+        row_barcode_bottom = barcode_bottom
         renderPDF.draw(row_barcode, c, row_barcode_x, row_barcode_bottom)
 
         c.setFont("Helvetica", 6.3)
         c.drawCentredString(
-            barcode_region_x + (barcode_region_width / 2),
-            content_bottom + 0.6,
+            barcode_left_x + (barcode_width / 2),
+            human_text_y,
             barcode_value,
         )
 
