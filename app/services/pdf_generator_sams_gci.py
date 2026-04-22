@@ -285,11 +285,9 @@ def _draw_top_section(
         top_barcode_x = (PAGE_WIDTH - top_barcode.width) / 2
         top_barcode_bottom = info_y - 39
         renderPDF.draw(top_barcode, c, top_barcode_x, top_barcode_bottom)
-        c.setFont("Helvetica-Bold", 7.8)
-        c.drawCentredString(PAGE_WIDTH / 2, top_barcode_bottom + (0.46 * inch) + 2.5, "HOLGCPLT")
         c.setFont("Helvetica", 8.8)
         c.drawCentredString(PAGE_WIDTH / 2, top_barcode_bottom - 11, barcode_value)
-        return top_barcode_bottom - 14
+        return top_barcode_bottom - 20
 
     return info_y - 6
 
@@ -302,6 +300,9 @@ def _draw_bottom_rows(
     barcode_cache: dict[tuple[Any, ...], Any],
     wrap_cache: dict[tuple[Any, ...], list[str]],
 ) -> None:
+    c.setFont("Helvetica-Bold", 7.8)
+    c.drawCentredString(PAGE_WIDTH / 2, start_y + 4.2, "HOLGCPLT")
+
     c.setLineWidth(0.8)
     c.line(LEFT_MARGIN, start_y, PAGE_WIDTH - RIGHT_MARGIN, start_y)
 

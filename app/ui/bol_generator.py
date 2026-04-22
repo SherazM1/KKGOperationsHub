@@ -22,9 +22,17 @@ from app.services.bol_standard_pdf_converter import (
     convert_standard_docx_set_to_pdf,
 )
 from app.services.bol_standard_parser import parse_standard_bol_excel
+from app.utils.bol_facilities import BOL_FACILITY_LOOKUP, BOL_FACILITY_OPTIONS, BolFacilityRecord
 
 
 def _initialize_bol_state() -> None:
+    default_facility_label = BOL_FACILITY_OPTIONS[0] if BOL_FACILITY_OPTIONS else None
+    default_facility = (
+        BOL_FACILITY_LOOKUP.get(default_facility_label).copy()
+        if default_facility_label in BOL_FACILITY_LOOKUP
+        else None
+    )
+
     if "bol_mode" not in st.session_state:
         st.session_state["bol_mode"] = "Standard"
     if "bol_uploaded_filename" not in st.session_state:
@@ -51,6 +59,10 @@ def _initialize_bol_state() -> None:
         st.session_state["bol_bundle_result"] = None
     if "bol_bundle_error" not in st.session_state:
         st.session_state["bol_bundle_error"] = None
+    if "bol_selected_facility_label" not in st.session_state:
+        st.session_state["bol_selected_facility_label"] = default_facility_label
+    if "bol_selected_facility" not in st.session_state:
+        st.session_state["bol_selected_facility"] = default_facility
 
 
 def _clear_review_state() -> None:
@@ -96,6 +108,16 @@ def _clear_generation_state() -> None:
     st.session_state["bol_bundle_result"] = None
     st.session_state["bol_bundle_error"] = None
     st.session_state["bol_generation_status"] = "Waiting for generation action."
+
+
+def _set_selected_facility(facility_label: str | None) -> None:
+    if facility_label is None or facility_label not in BOL_FACILITY_LOOKUP:
+        st.session_state["bol_selected_facility_label"] = None
+        st.session_state["bol_selected_facility"] = None
+        return
+
+    st.session_state["bol_selected_facility_label"] = facility_label
+    st.session_state["bol_selected_facility"] = BOL_FACILITY_LOOKUP[facility_label].copy()
 
 
 def _resolve_generation_context() -> tuple[str, Path]:
@@ -247,6 +269,7 @@ def render_bol_generator_view() -> None:
         st.session_state["bol_uploaded_filename"] = None
         st.session_state["bol_parsed_rows"] = []
         st.session_state["bol_grouped_records"] = []
+        _set_selected_facility(None)
         _clear_review_state()
         st.session_state["bol_parse_error"] = None
         st.session_state["bol_parse_requested"] = False
@@ -256,9 +279,40 @@ def render_bol_generator_view() -> None:
         if previous_filename != uploaded_file.name:
             st.session_state["bol_parsed_rows"] = []
             st.session_state["bol_grouped_records"] = []
+            default_facility_label = BOL_FACILITY_OPTIONS[0] if BOL_FACILITY_OPTIONS else None
+            _set_selected_facility(default_facility_label)
             _clear_review_state()
             st.session_state["bol_parse_error"] = None
             st.session_state["bol_parse_requested"] = False
+
+    st.markdown("---")
+
+    st.subheader("Facility Selection")
+    st.caption("Choose one ship-from facility for the current uploaded batch.")
+
+    if uploaded_file is None:
+        st.info("Upload an Excel file to select a facility for this batch.")
+    else:
+        current_label = st.session_state.get("bol_selected_facility_label")
+        if current_label not in BOL_FACILITY_LOOKUP:
+            current_label = BOL_FACILITY_OPTIONS[0] if BOL_FACILITY_OPTIONS else None
+
+        selected_label = st.selectbox(
+            "Select ship-from facility (batch-level)",
+            options=list(BOL_FACILITY_OPTIONS),
+            index=BOL_FACILITY_OPTIONS.index(current_label) if current_label else 0,
+            key="bol_batch_facility_selectbox",
+        )
+        _set_selected_facility(selected_label)
+
+        selected_facility: BolFacilityRecord | None = st.session_state["bol_selected_facility"]
+        if selected_facility:
+            st.caption(
+                "Selected facility details: "
+                f"{selected_facility['facility_name']} | "
+                f"{selected_facility['location']} | "
+                f"{selected_facility['address']}"
+            )
 
     st.markdown("---")
 
@@ -318,6 +372,7 @@ def render_bol_generator_view() -> None:
                 "grouped_records": len(grouped_records),
                 "ready_records": ready_count,
                 "records_with_issues": issue_count,
+                "selected_facility": st.session_state["bol_selected_facility"],
             }
         )
     else:
@@ -405,6 +460,7 @@ def render_bol_generator_view() -> None:
             mode, template_path = _resolve_generation_context()
             result = generate_standard_docx_set(
                 grouped_records,
+                selected_facility=st.session_state["bol_selected_facility"],
                 template_path=template_path,
                 file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
             )
@@ -477,6 +533,7 @@ def render_bol_generator_view() -> None:
             mode, template_path = _resolve_generation_context()
             docx_result_all = generate_standard_docx_set(
                 grouped_records,
+                selected_facility=st.session_state["bol_selected_facility"],
                 template_path=template_path,
                 file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
             )
@@ -585,6 +642,7 @@ def render_bol_generator_view() -> None:
                 "docx_generation_notices": len(docx_result.notices),
                 "selected_records_total": selected_records_total,
                 "selected_ready_records": selected_ready_records,
+                "selected_facility": st.session_state["bol_selected_facility"],
             }
         )
 

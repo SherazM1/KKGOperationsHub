@@ -11,6 +11,7 @@ from docx import Document
 from docx.table import Table
 
 from app.models.bol_standard_record import BolStandardItemLine, BolStandardRecord
+from app.utils.bol_facilities import BolFacilityRecord
 
 
 STANDARD_TEMPLATE_PATH = Path("app/templates/standard_bol_template.docx")
@@ -319,6 +320,7 @@ def _populate_item_table(
 def _apply_template_record_values(
     doc: Document,
     record: BolStandardRecord,
+    selected_facility: BolFacilityRecord,
     *,
     compact_standard_item_area: bool = False,
 ) -> list[str]:
@@ -341,9 +343,9 @@ def _apply_template_record_values(
         _tok("Pick_Up_"): "",
         _tok("TRACKER_"): "",
         _tok("COMMENTS"): comments_value if has_comments_placeholder else "",
-        _tok("SHIP_FROM"): record.ship_from.company,
-        _tok("SHIP_FROM_ADDRESS"): record.ship_from.street,
-        _tok("SHIP_FROM_CITY_STATE_ZIP"): record.ship_from.city_state_zip,
+        _tok("SHIP_FROM"): selected_facility["facility_name"],
+        _tok("SHIP_FROM_ADDRESS"): selected_facility["address"],
+        _tok("SHIP_FROM_CITY_STATE_ZIP"): selected_facility["location"],
         _tok("SHIP_TO_NAME"): record.consignee_company,
         _tok("SHIP_TO_ADDRESS"): record.consignee_street,
         _tok("SHIP_TO_CITY_STATE_ZIP"): record.consignee_city_state_zip,
@@ -375,10 +377,16 @@ def _apply_template_record_values(
 
 def generate_standard_docx_set(
     records: list[BolStandardRecord],
+    selected_facility: BolFacilityRecord | None,
     template_path: Path | None = None,
     output_dir: Path | None = None,
     file_name_prefix: str = "standard_bol",
 ) -> StandardDocxGenerationResult:
+    if selected_facility is None:
+        raise ValueError(
+            "No ship-from facility is selected. Select a facility in BOL Generator before DOCX generation."
+        )
+
     resolved_template = template_path or DEFAULT_TEMPLATE_PATH
     if not resolved_template.exists():
         raise FileNotFoundError(f"Template file not found: {resolved_template}")
@@ -415,6 +423,7 @@ def generate_standard_docx_set(
             record_notices = _apply_template_record_values(
                 doc,
                 record,
+                selected_facility,
                 compact_standard_item_area=is_standard_template,
             )
 
