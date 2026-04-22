@@ -166,20 +166,35 @@ def _replace_text_in_document(doc: Document, replacements: dict[str, str]) -> No
                 for cell in row.cells:
                     for paragraph in cell.paragraphs:
                         _replace_text_in_paragraph(paragraph, replacements)
+                    _replace_in_table_collection(cell.tables)
+
+    def _replace_in_element_tree(element) -> None:
+        namespaces = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        for node in element.xpath(".//w:t | .//w:instrText", namespaces=namespaces):
+            text = node.text or ""
+            updated = text
+            for source, target in replacements.items():
+                if source in updated:
+                    updated = updated.replace(source, target)
+            if updated != text:
+                node.text = updated
 
     for paragraph in doc.paragraphs:
         _replace_text_in_paragraph(paragraph, replacements)
 
     _replace_in_table_collection(doc.tables)
+    _replace_in_element_tree(doc.element)
 
     for section in doc.sections:
         for paragraph in section.header.paragraphs:
             _replace_text_in_paragraph(paragraph, replacements)
         _replace_in_table_collection(section.header.tables)
+        _replace_in_element_tree(section.header._element)
 
         for paragraph in section.footer.paragraphs:
             _replace_text_in_paragraph(paragraph, replacements)
         _replace_in_table_collection(section.footer.tables)
+        _replace_in_element_tree(section.footer._element)
 
 
 def _replace_tokens_in_row_element(row_element, replacements: dict[str, str]) -> None:
@@ -229,9 +244,21 @@ def _suppress_duplicate_ship_from_city_state_line(doc: Document, ship_from_locat
     if not location_value:
         return
 
-    for table in doc.tables:
+    def _iter_tables(tables: list[Table]):
+        for table in tables:
+            yield table
+            for row in table.rows:
+                for cell in row.cells:
+                    yield from _iter_tables(cell.tables)
+
+    all_tables: list[Table] = list(_iter_tables(doc.tables))
+    for section in doc.sections:
+        all_tables.extend(list(_iter_tables(section.header.tables)))
+        all_tables.extend(list(_iter_tables(section.footer.tables)))
+
+    for table in all_tables:
         in_ship_from_block = False
-        seen_location_row = False
+        city_state_row_count = 0
 
         for row in table.rows:
             row_cells = row.cells
@@ -252,12 +279,22 @@ def _suppress_duplicate_ship_from_city_state_line(doc: Document, ship_from_locat
                 continue
 
             row_text = " ".join(cell.text.strip() for cell in row_cells)
-            if location_value in row_text:
-                if not seen_location_row:
-                    seen_location_row = True
-                else:
-                    for cell in row_cells:
-                        cell.text = ""
+            first_cell_label = row_cells[0].text.strip().upper().replace(" ", "")
+            is_city_state_row = (
+                "CITY/ST/ZIP" in row_text_upper
+                or "CITY/STATE/ZIP" in row_text_upper
+                or "CITY/ST/ZIP" in first_cell_label
+                or "CITY/STATE/ZIP" in first_cell_label
+            )
+            has_location_value = location_value in row_text
+
+            if not (is_city_state_row or has_location_value):
+                continue
+
+            city_state_row_count += 1
+            if city_state_row_count > 1:
+                for cell in row_cells:
+                    cell.text = ""
 
 
 def _item_row_replacements(line: BolStandardItemLine) -> dict[str, str]:
@@ -497,11 +534,6 @@ def _apply_template_record_values(
 ) -> list[str]:
     notices: list[str] = []
     comments_value = _resolve_comment_for_record(record.comments, batch_comment)
-    has_comments_placeholder = _document_contains_token(doc, _tok("COMMENTS"))
-    if comments_value and not has_comments_placeholder:
-        notices.append(
-            "Template has no <<COMMENTS>> placeholder; comments were not inserted for this record."
-        )
 
     replacements = {
         _tok("BOL"): record.bol_number,
@@ -513,7 +545,7 @@ def _apply_template_record_values(
         _tok("KKG_LOAD_"): record.kk_load_number,
         _tok("Pick_Up_"): "",
         _tok("TRACKER_"): "",
-        _tok("COMMENTS"): comments_value if has_comments_placeholder else "",
+        _tok("COMMENTS"): comments_value,
         _tok("SHIP_FROM"): selected_facility["facility_name"],
         _tok("SHIP_FROM_ADDRESS"): selected_facility["address"],
         _tok("SHIP_FROM_CITY_STATE_ZIP"): selected_facility["location"],
@@ -532,6 +564,9 @@ def _apply_template_record_values(
             "<<COMMENTS>>": comments_value,
             "<< COMMENTS >>": comments_value,
             "\u00ab COMMENTS \u00bb": comments_value,
+            "\u00a0\u00abCOMMENTS\u00bb": f"\u00a0{comments_value}" if comments_value else "",
+            " MERGEFIELD COMMENTS ": "",
+            "MERGEFIELD COMMENTS": "",
         },
     )
     _suppress_duplicate_ship_from_city_state_line(doc, selected_facility["location"])
