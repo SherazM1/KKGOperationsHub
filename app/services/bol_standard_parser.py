@@ -16,7 +16,10 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
     "bol_number": {"primary": "BOL #", "fallback_aliases": []},
     "ship_date": {"primary": "ship date", "fallback_aliases": ["SHIP DATE"]},
     "carrier": {"primary": "Carrier", "fallback_aliases": ["CARRIER"]},
-    "kk_load": {"primary": "KK Load", "fallback_aliases": ["KK LOAD"]},
+    "kk_load": {
+        "primary": "load#",
+        "fallback_aliases": ["Load#", "LOAD#", "KK Load", "KK LOAD"],
+    },
     "kk_po": {"primary": "KK PO#", "fallback_aliases": ["KK PO #", "KK PO"]},
     "wm_po": {"primary": "WM PO #", "fallback_aliases": ["WM PO#", "WM PO"]},
     "dc_number": {"primary": "DC #", "fallback_aliases": ["DC#"]},

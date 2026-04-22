@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from tempfile import mkdtemp
 
@@ -234,6 +235,40 @@ def _total_qty_display(total_skids: float) -> str:
     return str(int(total_skids)) if float(total_skids).is_integer() else str(total_skids)
 
 
+def _format_ship_date_for_template(raw_ship_date: str) -> str:
+    value = (raw_ship_date or "").strip()
+    if not value:
+        return ""
+
+    normalized = value.replace("T", " ")
+    for sep in (" ", "."):
+        if sep in normalized:
+            date_candidate = normalized.split(sep, 1)[0].strip()
+            if date_candidate and any(char.isdigit() for char in date_candidate):
+                normalized = date_candidate
+                break
+
+    parse_formats = (
+        "%Y-%m-%d",
+        "%m/%d/%Y",
+        "%m/%d/%y",
+        "%m-%d-%Y",
+        "%m-%d-%y",
+    )
+    for parse_format in parse_formats:
+        try:
+            parsed = datetime.strptime(normalized, parse_format)
+            return parsed.strftime("%m/%d/%Y")
+        except ValueError:
+            continue
+
+    try:
+        parsed_iso = datetime.fromisoformat(value.replace("Z", ""))
+        return parsed_iso.strftime("%m/%d/%Y")
+    except ValueError:
+        return normalized
+
+
 def _populate_item_table(
     table: Table,
     item_lines: list[BolStandardItemLine],
@@ -317,15 +352,24 @@ def _populate_item_table(
         _replace_tokens_in_row_element(row._tr, totals_replacements)
 
 
+def _resolve_comment_for_record(record_comment: str, batch_comment: str | None) -> str:
+    record_value = (record_comment or "").strip()
+    if record_value:
+        return record_value
+
+    return (batch_comment or "").strip()
+
+
 def _apply_template_record_values(
     doc: Document,
     record: BolStandardRecord,
     selected_facility: BolFacilityRecord,
+    batch_comment: str | None,
     *,
     compact_standard_item_area: bool = False,
 ) -> list[str]:
     notices: list[str] = []
-    comments_value = record.comments.strip()
+    comments_value = _resolve_comment_for_record(record.comments, batch_comment)
     has_comments_placeholder = _document_contains_token(doc, _tok("COMMENTS"))
     if comments_value and not has_comments_placeholder:
         notices.append(
@@ -334,9 +378,9 @@ def _apply_template_record_values(
 
     replacements = {
         _tok("BOL"): record.bol_number,
-        _tok("SHIP_DATE"): record.ship_date,
+        _tok("SHIP_DATE"): _format_ship_date_for_template(record.ship_date),
         _tok("CARRIER"): record.carrier,
-        _tok("Carrier_Pro_"): "",
+        _tok("Carrier_Pro_"): record.kk_load_number,
         _tok("HOST_PO"): record.po_number,
         _tok("KKG_PO"): record.kk_po_number,
         _tok("KKG_LOAD_"): record.kk_load_number,
@@ -355,6 +399,14 @@ def _apply_template_record_values(
         _tok("BILL_TO_CITY_SATE_ZIP"): record.bill_to.city_state_zip,
     }
     _replace_text_in_document(doc, replacements)
+    _replace_text_in_document(
+        doc,
+        {
+            "<<COMMENTS>>": comments_value,
+            "<< COMMENTS >>": comments_value,
+            "\u00ab COMMENTS \u00bb": comments_value,
+        },
+    )
     _override_consignee_street(doc, record.consignee_street)
 
     last_error: Exception | None = None
@@ -378,6 +430,7 @@ def _apply_template_record_values(
 def generate_standard_docx_set(
     records: list[BolStandardRecord],
     selected_facility: BolFacilityRecord | None,
+    batch_comment: str | None = None,
     template_path: Path | None = None,
     output_dir: Path | None = None,
     file_name_prefix: str = "standard_bol",
@@ -424,6 +477,7 @@ def generate_standard_docx_set(
                 doc,
                 record,
                 selected_facility,
+                batch_comment,
                 compact_standard_item_area=is_standard_template,
             )
 
@@ -456,3 +510,4 @@ def generate_standard_docx_set(
         failed_records=failed,
         notices=notices,
     )
+

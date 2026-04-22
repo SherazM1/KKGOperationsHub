@@ -63,6 +63,8 @@ def _initialize_bol_state() -> None:
         st.session_state["bol_selected_facility_label"] = default_facility_label
     if "bol_selected_facility" not in st.session_state:
         st.session_state["bol_selected_facility"] = default_facility
+    if "bol_batch_comment" not in st.session_state:
+        st.session_state["bol_batch_comment"] = ""
 
 
 def _clear_review_state() -> None:
@@ -269,6 +271,7 @@ def render_bol_generator_view() -> None:
         st.session_state["bol_uploaded_filename"] = None
         st.session_state["bol_parsed_rows"] = []
         st.session_state["bol_grouped_records"] = []
+        st.session_state["bol_batch_comment"] = ""
         _set_selected_facility(None)
         _clear_review_state()
         st.session_state["bol_parse_error"] = None
@@ -279,6 +282,7 @@ def render_bol_generator_view() -> None:
         if previous_filename != uploaded_file.name:
             st.session_state["bol_parsed_rows"] = []
             st.session_state["bol_grouped_records"] = []
+            st.session_state["bol_batch_comment"] = ""
             default_facility_label = BOL_FACILITY_OPTIONS[0] if BOL_FACILITY_OPTIONS else None
             _set_selected_facility(default_facility_label)
             _clear_review_state()
@@ -313,6 +317,17 @@ def render_bol_generator_view() -> None:
                 f"{selected_facility['location']} | "
                 f"{selected_facility['address']}"
             )
+
+    st.markdown("---")
+
+    st.subheader("Batch Comment")
+    st.caption("Optional comment applied to this batch when a record does not have its own comment.")
+    st.session_state["bol_batch_comment"] = st.text_area(
+        "Batch-level comment (optional)",
+        value=st.session_state.get("bol_batch_comment", ""),
+        key="bol_batch_comment_textarea",
+        placeholder="Optional comment for the entire generated set.",
+    )
 
     st.markdown("---")
 
@@ -461,6 +476,7 @@ def render_bol_generator_view() -> None:
             result = generate_standard_docx_set(
                 grouped_records,
                 selected_facility=st.session_state["bol_selected_facility"],
+                batch_comment=st.session_state.get("bol_batch_comment", ""),
                 template_path=template_path,
                 file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
             )
@@ -534,6 +550,7 @@ def render_bol_generator_view() -> None:
             docx_result_all = generate_standard_docx_set(
                 grouped_records,
                 selected_facility=st.session_state["bol_selected_facility"],
+                batch_comment=st.session_state.get("bol_batch_comment", ""),
                 template_path=template_path,
                 file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
             )
