@@ -558,7 +558,7 @@ def _postprocess_comments_in_saved_docx(destination: Path, resolved_comment: str
         "\u00ab COMMENTS \u00bb",
     )
     for token in comment_tokens:
-        updated_xml = updated_xml.replace(token, safe_comment)
+        updated_xml = updated_xml.replace(token, "")
 
     if resolved_comment:
         updated_xml = updated_xml.replace("Comments:</w:t>", f"Comments: {safe_comment}</w:t>", 1)
@@ -595,11 +595,6 @@ def _apply_template_record_values(
 ) -> list[str]:
     notices: list[str] = []
     comments_value = _resolve_comment_for_record(record.comments, batch_comment)
-    has_comments_placeholder = (
-        _document_contains_token(doc, _tok("COMMENTS"))
-        or _document_contains_token(doc, "<<COMMENTS>>")
-        or _document_contains_token(doc, "MERGEFIELD COMMENTS")
-    )
 
     replacements = {
         _tok("BOL"): record.bol_number,
@@ -611,7 +606,8 @@ def _apply_template_record_values(
         _tok("KKG_LOAD_"): record.kk_load_number,
         _tok("Pick_Up_"): "",
         _tok("TRACKER_"): "",
-        _tok("COMMENTS"): comments_value,
+        # Suppress competing mergefield comment box; visible "Comments:" label is authoritative.
+        _tok("COMMENTS"): "",
         _tok("SHIP_FROM"): selected_facility["facility_name"],
         _tok("SHIP_FROM_ADDRESS"): selected_facility["address"],
         _tok("SHIP_FROM_CITY_STATE_ZIP"): "",
@@ -631,16 +627,16 @@ def _apply_template_record_values(
     _replace_text_in_document(
         doc,
         {
-            "<<COMMENTS>>": comments_value,
-            "<< COMMENTS >>": comments_value,
-            "\u00ab COMMENTS \u00bb": comments_value,
-            "\u00a0\u00abCOMMENTS\u00bb": f"\u00a0{comments_value}" if comments_value else "",
+            "<<COMMENTS>>": "",
+            "<< COMMENTS >>": "",
+            "\u00ab COMMENTS \u00bb": "",
+            "\u00a0\u00abCOMMENTS\u00bb": "",
             " MERGEFIELD COMMENTS ": "",
             "MERGEFIELD COMMENTS": "",
         },
         include_xml_tree=compact_standard_item_area,
     )
-    if comments_value and not has_comments_placeholder:
+    if comments_value:
         _replace_text_in_document(
             doc,
             {
