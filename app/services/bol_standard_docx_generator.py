@@ -540,11 +540,11 @@ def _resolve_comment_for_record(record_comment: str, batch_comment: str | None) 
     return (batch_comment or "").strip()
 
 
-def _postprocess_comments_in_saved_docx(destination: Path, resolved_comment: str) -> None:
+def _postprocess_comments_in_saved_docx(destination: Path, resolved_comment: str) -> bool:
     xml_path = "word/document.xml"
     with zipfile.ZipFile(destination, "r") as archive:
         if xml_path not in archive.namelist():
-            return
+            return False
         file_payloads = {name: archive.read(name) for name in archive.namelist()}
 
     xml_text = file_payloads[xml_path].decode("utf-8", errors="ignore")
@@ -560,20 +560,29 @@ def _postprocess_comments_in_saved_docx(destination: Path, resolved_comment: str
     for token in comment_tokens:
         updated_xml = updated_xml.replace(token, safe_comment)
 
-    if resolved_comment and safe_comment not in updated_xml:
+    if resolved_comment:
         updated_xml = updated_xml.replace("Comments:</w:t>", f"Comments: {safe_comment}</w:t>", 1)
         updated_xml = updated_xml.replace("COMMENTS:</w:t>", f"COMMENTS: {safe_comment}</w:t>", 1)
 
     updated_xml = updated_xml.replace(" MERGEFIELD COMMENTS ", "")
     updated_xml = updated_xml.replace("MERGEFIELD COMMENTS", "")
 
+    comment_label_populated = bool(
+        resolved_comment
+        and (
+            f"Comments: {safe_comment}</w:t>" in updated_xml
+            or f"COMMENTS: {safe_comment}</w:t>" in updated_xml
+        )
+    )
+
     if updated_xml == xml_text:
-        return
+        return comment_label_populated
 
     file_payloads[xml_path] = updated_xml.encode("utf-8")
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, payload in file_payloads.items():
             archive.writestr(name, payload)
+    return comment_label_populated
 
 
 def _apply_template_record_values(
@@ -722,7 +731,19 @@ def generate_standard_docx_set(
             )
             filename = destination.name
             doc.save(str(destination))
-            _postprocess_comments_in_saved_docx(destination, resolved_comment)
+            comment_label_populated = _postprocess_comments_in_saved_docx(
+                destination, resolved_comment
+            )
+            if resolved_comment and not comment_label_populated:
+                notices.append(
+                    DocxGenerationNotice(
+                        bol_number=bol_label,
+                        message=(
+                            "Debug: resolved comment was non-empty but could not be confirmed "
+                            "at the visible Comments label in word/document.xml."
+                        ),
+                    )
+                )
 
             generated.append(
                 GeneratedDocxFile(
@@ -746,4 +767,3 @@ def generate_standard_docx_set(
         failed_records=failed,
         notices=notices,
     )
-
