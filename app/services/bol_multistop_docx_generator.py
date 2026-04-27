@@ -17,12 +17,16 @@ from docx.shared import Pt, Twips
 from docx.table import Table
 
 from app.models.bol_multistop_record import BolMultistopRecord
+from app.models.bol_standard_record import BolStandardItemLine, BolStandardRecord
 from app.services.bol_standard_docx_generator import (
     DocxGenerationNotice,
     FailedDocxRecord,
     GeneratedDocxFile,
+    STANDARD_TEMPLATE_PATH,
     SkippedDocxRecord,
     StandardDocxGenerationResult,
+    _apply_template_record_values as _apply_standard_template_record_values,
+    _postprocess_comments_in_saved_docx as _postprocess_standard_comments_in_saved_docx,
 )
 from app.utils.bol_facilities import BolFacilityRecord
 
@@ -237,36 +241,6 @@ def _tighten_multistop_template_rows(doc: Document) -> None:
                 _compact_row_text(row, 7.0)
 
 
-def _clear_row_text(row, max_cell_index: int | None = None) -> None:
-    seen_cells = set()
-    for index, cell in enumerate(row.cells):
-        if max_cell_index is not None and index > max_cell_index:
-            continue
-        cell_id = id(cell._tc)
-        if cell_id in seen_cells:
-            continue
-        seen_cells.add(cell_id)
-        cell.text = ""
-
-
-def _suppress_individual_stop_unused_rows(doc: Document) -> None:
-    for table in doc.tables:
-        rows = list(table.rows)
-        for index in (16, 17, 18, 19):
-            if index >= len(rows):
-                continue
-            _clear_row_text(rows[index], max_cell_index=7)
-            if index in {18, 19}:
-                _set_row_height(rows[index], 1)
-                _compact_row_text(rows[index], 1.0)
-
-        for index in (25, 26):
-            if index < len(rows):
-                _clear_row_text(rows[index])
-                _set_row_height(rows[index], 1)
-                _compact_row_text(rows[index], 1.0)
-
-
 def _resolve_comment_for_record(record_comment: str, batch_comment: str | None) -> str:
     record_value = (record_comment or "").strip()
     if record_value:
@@ -380,45 +354,44 @@ def _template_replacements(record: BolMultistopRecord) -> dict[str, str]:
     return replacements
 
 
-def _individual_stop_replacements(
+def _build_individual_stop_standard_record(
     record: BolMultistopRecord,
     stop_index: int,
-) -> dict[str, str]:
+) -> BolStandardRecord:
     stop = record.stops[stop_index]
-    replacements = _template_replacements(record)
-
-    replacements.update(
-        {
-            _tok("DELIVERY_1_DC"): stop.delivery_dc,
-            _tok("DELIVERY_1_ADDRESS"): stop.delivery_address,
-            _tok("DELIVERY_2_DC"): "",
-            _tok("DELIVERY_2_ADDRESS"): "",
-            _tok("DELIVERY_3_DC"): "",
-            _tok("DELIVERY_3_ADDRESS"): "",
-            _tok("DC_1"): stop.dc_number,
-            _tok("CASE_1"): stop.cases,
-            _tok("PO_1"): stop.target_po_number,
-            _tok("Pallet_Description_1"): stop.pallet_description,
-            _tok("PLT_1"): stop.total_pallets,
-            _tok("WEIGHT_1"): stop.weight,
-            _tok("DC_2"): "",
-            _tok("CASE_2"): "",
-            _tok("PO_2"): "",
-            _tok("Pallet_Description_2"): "",
-            _tok("PLT_2"): "",
-            _tok("WEIGHT_2"): "",
-            _tok("DC_3"): "",
-            _tok("CASE_3"): "",
-            _tok("PO_3"): "",
-            _tok("Pallet_Description_3"): "",
-            _tok("PLT_3"): "",
-            _tok("WEIGHT_3"): "",
-            _tok("Total_Case"): _format_number(_parse_number(stop.cases)),
-            _tok("Total_Pallet"): _format_number(_parse_number(stop.total_pallets)),
-            _tok("Total_Ship_Weight"): _format_number(_parse_number(stop.weight)),
-        }
+    return BolStandardRecord(
+        bol_number=record.bol_number,
+        ship_date=record.ship_date,
+        carrier=record.carrier,
+        kk_load_number=record.kk_load_number,
+        kk_po_number=record.kk_po_number,
+        po_number=stop.target_po_number,
+        dc_number=stop.dc_number,
+        consignee_company=stop.delivery_dc,
+        consignee_street=stop.delivery_address,
+        consignee_city_state_zip=stop.delivery_city_state_zip,
+        ship_from=record.ship_from,
+        bill_to=record.bill_to,
+        seal_number_blank="",
+        comments=record.comments,
+        item_lines=[
+            BolStandardItemLine(
+                source_row_number=stop.source_row_number,
+                pallet_qty=stop.cases,
+                type="PLT",
+                po_number=stop.target_po_number,
+                item_description=stop.pallet_description,
+                item_number="",
+                upc="",
+                skids=stop.total_pallets,
+                weight_each=stop.weight,
+            )
+        ],
+        total_skids=_parse_number(stop.cases),
+        is_ready=True,
+        status="Ready",
+        selected_for_generation=True,
     )
-    return replacements
 
 
 def _save_multistop_docx(
@@ -438,8 +411,6 @@ def _save_multistop_docx(
     doc = Document(str(resolved_template))
     _tighten_multistop_template_rows(doc)
     _replace_text_in_document(doc, replacements, include_xml_tree=True)
-    if document_type == "stop":
-        _suppress_individual_stop_unused_rows(doc)
     ship_from_populated = _populate_ship_from_block(doc, selected_facility)
     if not ship_from_populated:
         notices.append(
@@ -476,11 +447,68 @@ def _save_multistop_docx(
     )
 
 
+def _save_individual_stop_docx(
+    *,
+    record: BolMultistopRecord,
+    bol_label: str,
+    selected_facility: BolFacilityRecord,
+    batch_comment: str | None,
+    resolved_template: Path,
+    output_root: Path,
+    base_name: str,
+    stop_index: int,
+    notices: list[DocxGenerationNotice],
+) -> MultistopGeneratedDocxFile:
+    stop = record.stops[stop_index]
+    stop_record = _build_individual_stop_standard_record(record, stop_index)
+    doc = Document(str(resolved_template))
+    is_standard_template = resolved_template.name == STANDARD_TEMPLATE_PATH.name
+    resolved_comment = _resolve_comment_for_record(record.comments, batch_comment)
+    record_notice_messages = _apply_standard_template_record_values(
+        doc,
+        stop_record,
+        selected_facility,
+        batch_comment,
+        compact_standard_item_area=is_standard_template,
+    )
+    for message in record_notice_messages:
+        notices.append(DocxGenerationNotice(bol_number=bol_label, message=message))
+
+    destination = _unique_destination_path(output_root, base_name, ".docx")
+    filename = destination.name
+    doc.save(str(destination))
+
+    comment_label_populated = _postprocess_standard_comments_in_saved_docx(
+        destination,
+        resolved_comment,
+    )
+    if resolved_comment and not comment_label_populated:
+        notices.append(
+            DocxGenerationNotice(
+                bol_number=bol_label,
+                message=(
+                    "Resolved comment was non-empty but could not be confirmed "
+                    "at the visible Comments label in word/document.xml."
+                ),
+            )
+        )
+
+    return MultistopGeneratedDocxFile(
+        bol_number=bol_label,
+        file_name=filename,
+        file_path=str(destination.resolve()),
+        document_type="stop",
+        load_number=record.load_number,
+        stop_number=stop.stop_number,
+    )
+
+
 def generate_multistop_docx_set(
     records: list[BolMultistopRecord],
     selected_facility: BolFacilityRecord | None,
     batch_comment: str | None = None,
     template_path: Path | None = None,
+    individual_stop_template_path: Path | None = None,
     output_dir: Path | None = None,
     file_name_prefix: str = "multistop_bol",
 ) -> StandardDocxGenerationResult:
@@ -492,6 +520,12 @@ def generate_multistop_docx_set(
     resolved_template = template_path or MULTISTOP_TEMPLATE_PATH
     if not resolved_template.exists():
         raise FileNotFoundError(f"Template file not found: {resolved_template}")
+
+    resolved_individual_stop_template = individual_stop_template_path or STANDARD_TEMPLATE_PATH
+    if not resolved_individual_stop_template.exists():
+        raise FileNotFoundError(
+            f"Individual stop template file not found: {resolved_individual_stop_template}"
+        )
 
     output_root = output_dir or Path(mkdtemp(prefix="kkg_multistop_bol_docx_"))
     output_root.mkdir(parents=True, exist_ok=True)
@@ -553,17 +587,15 @@ def generate_multistop_docx_set(
             for stop_index, stop in enumerate(record.stops):
                 stop_base_name = f"stop_{stop.stop_number}_bol_{safe_bol}_{safe_load}"
                 generated.append(
-                    _save_multistop_docx(
+                    _save_individual_stop_docx(
                         record=record,
                         bol_label=bol_label,
                         selected_facility=selected_facility,
                         batch_comment=batch_comment,
-                        resolved_template=resolved_template,
+                        resolved_template=resolved_individual_stop_template,
                         output_root=output_root,
                         base_name=stop_base_name,
-                        replacements=_individual_stop_replacements(record, stop_index),
-                        document_type="stop",
-                        stop_number=stop.stop_number,
+                        stop_index=stop_index,
                         notices=notices,
                     )
                 )

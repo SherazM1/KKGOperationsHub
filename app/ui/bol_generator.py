@@ -78,6 +78,8 @@ def _initialize_bol_state() -> None:
         st.session_state["bol_batch_comment"] = ""
     if "bol_batch_comment_textarea" not in st.session_state:
         st.session_state["bol_batch_comment_textarea"] = ""
+    if "bol_multistop_individual_template_mode" not in st.session_state:
+        st.session_state["bol_multistop_individual_template_mode"] = "Standard"
 
 
 def _clear_review_state() -> None:
@@ -588,15 +590,41 @@ def render_bol_generator_view() -> None:
     generate_docx_disabled = (not docx_generation_mode_supported) or not any(
         record.selected_for_generation and record.is_ready for record in grouped_records
     )
+
+    if st.session_state["bol_mode"] == "Multistop":
+        individual_template_options = ["Standard", "No Recourse"]
+        current_individual_template = st.session_state.get(
+            "bol_multistop_individual_template_mode",
+            "Standard",
+        )
+        if current_individual_template not in individual_template_options:
+            current_individual_template = "Standard"
+            st.session_state["bol_multistop_individual_template_mode"] = current_individual_template
+
+        st.selectbox(
+            "Choose individual BOL template",
+            options=individual_template_options,
+            index=individual_template_options.index(current_individual_template),
+            key="bol_multistop_individual_template_mode",
+            on_change=_clear_generation_state,
+        )
+
     if st.button("Generate DOCX Set", disabled=generate_docx_disabled, use_container_width=True):
         try:
             mode = st.session_state["bol_mode"]
             if mode == "Multistop":
+                individual_template_mode = st.session_state.get(
+                    "bol_multistop_individual_template_mode",
+                    "Standard",
+                )
                 result = generate_multistop_docx_set(
                     grouped_records,
                     selected_facility=st.session_state["bol_selected_facility"],
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
                     template_path=MULTISTOP_TEMPLATE_PATH,
+                    individual_stop_template_path=resolve_template_path_for_mode(
+                        individual_template_mode
+                    ),
                     file_name_prefix="multistop_bol",
                 )
             else:
@@ -814,8 +842,14 @@ def render_bol_generator_view() -> None:
     if isinstance(docx_result, StandardDocxGenerationResult):
         selected_mode = st.session_state["bol_mode"]
         selected_template: str | None = None
+        selected_individual_template: str | None = None
         if selected_mode == "Multistop":
             selected_template = str(MULTISTOP_TEMPLATE_PATH)
+            selected_individual_template = str(
+                resolve_template_path_for_mode(
+                    st.session_state.get("bol_multistop_individual_template_mode", "Standard")
+                )
+            )
         else:
             try:
                 selected_template = str(resolve_template_path_for_mode(selected_mode))
@@ -826,6 +860,7 @@ def render_bol_generator_view() -> None:
             {
                 "mode": selected_mode,
                 "template_path": selected_template,
+                "multistop_individual_template_path": selected_individual_template,
                 "output_directory": docx_result.output_dir,
                 "docx_generated": docx_result.generated_count,
                 "records_skipped": docx_result.skipped_count,
