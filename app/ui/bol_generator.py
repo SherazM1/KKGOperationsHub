@@ -18,7 +18,7 @@ from app.services.bol_multistop_mapper import map_multistop_rows_to_records
 from app.services.bol_multistop_parser import parse_multistop_bol_excel
 from app.services.bol_file_bundle_service import (
     StandardBundleResult,
-    create_multistop_docx_bundle,
+    create_multistop_bundles,
     create_standard_bundles,
 )
 from app.services.bol_standard_docx_generator import (
@@ -104,8 +104,13 @@ def _refresh_bundles() -> StandardBundleResult | None:
 
     try:
         if mode == "Multistop":
-            bundle_result = create_multistop_docx_bundle(
+            bundle_result = create_multistop_bundles(
                 generated_docx_files=docx_result.generated_files,
+                converted_pdf_files=(
+                    pdf_result.converted_files
+                    if isinstance(pdf_result, StandardPdfConversionResult)
+                    else []
+                ),
                 bundle_name_prefix="multistop_bol",
             )
         else:
@@ -124,6 +129,14 @@ def _refresh_bundles() -> StandardBundleResult | None:
                 "DOCX bundle creation failed: generated DOCX files were not found on disk."
             )
         elif (
+            isinstance(pdf_result, StandardPdfConversionResult)
+            and pdf_result.converted_count > 0
+            and bundle_result.pdf_bundle is None
+        ):
+            st.session_state["bol_bundle_error"] = (
+                "PDF bundle creation failed: converted PDF files were not found on disk."
+            )
+        elif (
             mode == "Multistop"
             and bundle_result.docx_bundle is not None
             and bundle_result.docx_bundle.missing_count > 0
@@ -131,6 +144,15 @@ def _refresh_bundles() -> StandardBundleResult | None:
             st.session_state["bol_bundle_error"] = (
                 "Multistop DOCX bundle was created with "
                 f"{bundle_result.docx_bundle.missing_count} missing generated source file(s)."
+            )
+        elif (
+            mode == "Multistop"
+            and bundle_result.pdf_bundle is not None
+            and bundle_result.pdf_bundle.missing_count > 0
+        ):
+            st.session_state["bol_bundle_error"] = (
+                "Multistop PDF bundle was created with "
+                f"{bundle_result.pdf_bundle.missing_count} missing converted source file(s)."
             )
         else:
             st.session_state["bol_bundle_error"] = None
@@ -584,8 +606,16 @@ def render_bol_generator_view() -> None:
         "No Recourse",
         "Multistop",
     )
-    pdf_generation_mode_supported = st.session_state["bol_mode"] in ("Standard", "No Recourse")
-    generate_all_mode_supported = st.session_state["bol_mode"] in ("Standard", "No Recourse")
+    pdf_generation_mode_supported = st.session_state["bol_mode"] in (
+        "Standard",
+        "No Recourse",
+        "Multistop",
+    )
+    generate_all_mode_supported = st.session_state["bol_mode"] in (
+        "Standard",
+        "No Recourse",
+        "Multistop",
+    )
 
     generate_docx_disabled = (not docx_generation_mode_supported) or not any(
         record.selected_for_generation and record.is_ready for record in grouped_records
@@ -714,18 +744,37 @@ def render_bol_generator_view() -> None:
             st.session_state["bol_pdf_result"] = None
             _refresh_bundles()
             st.session_state["bol_generation_status"] = f"{mode} PDF generation failed: {exc}"
+    if pdf_generation_mode_supported and generate_pdf_disabled:
+        st.caption("Generate DOCX Set first to enable PDF conversion.")
 
     generate_all_disabled = (not generate_all_mode_supported) or generate_docx_disabled
     if st.button("Generate All", disabled=generate_all_disabled, use_container_width=True):
         try:
-            mode, template_path = _resolve_generation_context()
-            docx_result_all = generate_standard_docx_set(
-                grouped_records,
-                selected_facility=st.session_state["bol_selected_facility"],
-                batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
-                template_path=template_path,
-                file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
-            )
+            mode = st.session_state["bol_mode"]
+            if mode == "Multistop":
+                individual_template_mode = st.session_state.get(
+                    "bol_multistop_individual_template_mode",
+                    "Standard",
+                )
+                docx_result_all = generate_multistop_docx_set(
+                    grouped_records,
+                    selected_facility=st.session_state["bol_selected_facility"],
+                    batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
+                    template_path=MULTISTOP_TEMPLATE_PATH,
+                    individual_stop_template_path=resolve_template_path_for_mode(
+                        individual_template_mode
+                    ),
+                    file_name_prefix="multistop_bol",
+                )
+            else:
+                _, template_path = _resolve_generation_context()
+                docx_result_all = generate_standard_docx_set(
+                    grouped_records,
+                    selected_facility=st.session_state["bol_selected_facility"],
+                    batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
+                    template_path=template_path,
+                    file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
+                )
             st.session_state["bol_docx_result"] = docx_result_all
 
             pdf_result_all = convert_standard_docx_set_to_pdf(docx_result_all.generated_files)
@@ -749,12 +798,7 @@ def render_bol_generator_view() -> None:
             st.session_state["bol_generation_status"] = f"{mode} Generate All failed: {exc}"
 
     if pdf_generation_mode_supported:
-        st.caption("DOCX and PDF generation are enabled for Standard and No Recourse modes.")
-    else:
-        st.caption(
-            "Multistop supports DOCX generation and DOCX bundle download only in this phase. "
-            "PDF conversion remains unavailable."
-        )
+        st.caption("DOCX and PDF generation are enabled for Standard, No Recourse, and Multistop modes.")
 
     st.markdown("---")
 
@@ -791,7 +835,9 @@ def render_bol_generator_view() -> None:
         st.session_state["bol_bundle_error"] = " | ".join(bundle_read_errors)
 
     if st.session_state["bol_mode"] == "Multistop":
-        st.caption("Multistop: DOCX bundle download is available after DOCX generation. PDF downloads are disabled.")
+        st.caption(
+            "Multistop downloads use grouped load/BOL folders for DOCX, PDF, and combined bundles."
+        )
 
     st.download_button(
         "Download DOCX Bundle",
@@ -814,7 +860,7 @@ def render_bol_generator_view() -> None:
             else f"{st.session_state['bol_mode'].lower().replace(' ', '_')}_bol_pdf_bundle.zip"
         ),
         mime="application/zip",
-        disabled=(st.session_state["bol_mode"] == "Multistop") or (pdf_bundle_bytes is None),
+        disabled=pdf_bundle_bytes is None,
         use_container_width=True,
     )
     st.download_button(
@@ -826,7 +872,7 @@ def render_bol_generator_view() -> None:
             else f"{st.session_state['bol_mode'].lower().replace(' ', '_')}_bol_all_files_bundle.zip"
         ),
         mime="application/zip",
-        disabled=(st.session_state["bol_mode"] == "Multistop") or (all_bundle_bytes is None),
+        disabled=all_bundle_bytes is None,
         use_container_width=True,
     )
 
@@ -903,6 +949,7 @@ def render_bol_generator_view() -> None:
                     "pdf_generated": pdf_result.converted_count,
                     "pdf_conversion_failures": pdf_result.failed_count,
                     "pdf_converter": pdf_result.converter_name,
+                    "pdf_converter_path": pdf_result.converter_path,
                     "pdf_conversion_available": pdf_result.conversion_available,
                     "pdf_unavailable_reason": pdf_result.unavailable_reason,
                 }
@@ -938,6 +985,15 @@ def render_bol_generator_view() -> None:
                         "docx_bundle_missing_source_count": bundle_result.docx_bundle.missing_count,
                     }
                 )
+            if selected_mode == "Multistop" and bundle_result.pdf_bundle:
+                bundle_counts.update(
+                    {
+                        "pdf_bundle_group_count": bundle_result.pdf_bundle.group_count,
+                        "pdf_bundle_combined_count": bundle_result.pdf_bundle.combined_count,
+                        "pdf_bundle_stop_count": bundle_result.pdf_bundle.stop_count,
+                        "pdf_bundle_missing_source_count": bundle_result.pdf_bundle.missing_count,
+                    }
+                )
             st.write(bundle_counts)
 
         if docx_result.generated_files:
@@ -963,4 +1019,4 @@ def render_bol_generator_view() -> None:
         if isinstance(pdf_result, StandardPdfConversionResult) and pdf_result.failed_conversions:
             st.caption("PDF conversion failures:")
             for failed_pdf in pdf_result.failed_conversions:
-                st.write(f"- {failed_pdf.bol_number}: {failed_pdf.error}")
+                st.write(f"- {failed_pdf.bol_number}: {failed_pdf.error} ({failed_pdf.source_docx})")
