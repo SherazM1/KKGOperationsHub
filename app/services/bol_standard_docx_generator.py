@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from tempfile import mkdtemp
 from xml.sax.saxutils import escape
+import re
 import zipfile
 
 from docx import Document
@@ -548,31 +549,9 @@ def _postprocess_comments_in_saved_docx(destination: Path, resolved_comment: str
         file_payloads = {name: archive.read(name) for name in archive.namelist()}
 
     xml_text = file_payloads[xml_path].decode("utf-8", errors="ignore")
-    updated_xml = xml_text
-    safe_comment = escape(resolved_comment)
-
-    comment_tokens = (
-        _tok("COMMENTS"),
-        "<<COMMENTS>>",
-        "<< COMMENTS >>",
-        "\u00ab COMMENTS \u00bb",
-    )
-    for token in comment_tokens:
-        updated_xml = updated_xml.replace(token, "")
-
-    if resolved_comment:
-        updated_xml = updated_xml.replace("Comments:</w:t>", f"Comments: {safe_comment}</w:t>", 1)
-        updated_xml = updated_xml.replace("COMMENTS:</w:t>", f"COMMENTS: {safe_comment}</w:t>", 1)
-
-    updated_xml = updated_xml.replace(" MERGEFIELD COMMENTS ", "")
-    updated_xml = updated_xml.replace("MERGEFIELD COMMENTS", "")
-
-    comment_label_populated = bool(
-        resolved_comment
-        and (
-            f"Comments: {safe_comment}</w:t>" in updated_xml
-            or f"COMMENTS: {safe_comment}</w:t>" in updated_xml
-        )
+    updated_xml, comment_label_populated = _postprocess_comments_in_document_xml(
+        xml_text,
+        resolved_comment,
     )
 
     if updated_xml == xml_text:
@@ -585,6 +564,85 @@ def _postprocess_comments_in_saved_docx(destination: Path, resolved_comment: str
     return comment_label_populated
 
 
+def _strip_comment_mergefield_shapes(xml_text: str) -> str:
+    updated = xml_text
+    previous = None
+    while previous != updated:
+        previous = updated
+        updated = re.sub(
+            r"<mc:AlternateContent\b(?:(?!</mc:AlternateContent>).)*?"
+            r"MERGEFIELD\s+COMMENTS"
+            r"(?:(?!</mc:AlternateContent>).)*?</mc:AlternateContent>",
+            "",
+            updated,
+            flags=re.DOTALL,
+        )
+        updated = re.sub(
+            r"<w:p\b(?:(?!</w:p>).)*?"
+            r"MERGEFIELD\s+COMMENTS"
+            r"(?:(?!</w:p>).)*?</w:p>",
+            "",
+            updated,
+            flags=re.DOTALL,
+        )
+    return updated
+
+
+def _clear_comment_placeholders(xml_text: str) -> str:
+    placeholder_patterns = (
+        r"\s*MERGEFIELD\s+COMMENTS\s*",
+        re.escape(_tok("COMMENTS")),
+        re.escape("\u00ab COMMENTS \u00bb"),
+        re.escape("\u00a0\u00abCOMMENTS\u00bb"),
+        r"&lt;&lt;\s*COMMENTS\s*&gt;&gt;",
+        r"<<\s*COMMENTS\s*>>",
+    )
+    updated = xml_text
+    for pattern in placeholder_patterns:
+        updated = re.sub(pattern, "", updated, flags=re.IGNORECASE)
+    return updated
+
+
+def _clear_existing_comment_label_values(xml_text: str) -> str:
+    label_pattern = re.compile(
+        r"(<w:t(?:\s+[^>]*)?>)(COMMENTS?:)(?:\s*[^<]*)(</w:t>)",
+        flags=re.IGNORECASE,
+    )
+    return label_pattern.sub(lambda match: f"{match.group(1)}{match.group(2)}{match.group(3)}", xml_text)
+
+
+def _populate_first_comment_label(xml_text: str, resolved_comment: str) -> tuple[str, bool]:
+    if not resolved_comment:
+        return xml_text, False
+
+    safe_comment = escape(resolved_comment)
+    replacement_done = False
+    label_pattern = re.compile(
+        r"(<w:t(?:\s+[^>]*)?>)(COMMENTS?:)(?:\s*[^<]*)(</w:t>)",
+        flags=re.IGNORECASE,
+    )
+
+    def _replace_label(match: re.Match[str]) -> str:
+        nonlocal replacement_done
+        if replacement_done:
+            return f"{match.group(1)}{match.group(2)}{match.group(3)}"
+        replacement_done = True
+        return f"{match.group(1)}{match.group(2)} {safe_comment}{match.group(3)}"
+
+    return label_pattern.sub(_replace_label, xml_text), replacement_done
+
+
+def _postprocess_comments_in_document_xml(
+    xml_text: str,
+    resolved_comment: str,
+) -> tuple[str, bool]:
+    updated_xml = _strip_comment_mergefield_shapes(xml_text)
+    updated_xml = _clear_comment_placeholders(updated_xml)
+    updated_xml = _clear_existing_comment_label_values(updated_xml)
+    updated_xml, populated = _populate_first_comment_label(updated_xml, resolved_comment.strip())
+    return updated_xml, populated
+
+
 def _apply_template_record_values(
     doc: Document,
     record: BolStandardRecord,
@@ -594,8 +652,6 @@ def _apply_template_record_values(
     compact_standard_item_area: bool = False,
 ) -> list[str]:
     notices: list[str] = []
-    comments_value = _resolve_comment_for_record(record.comments, batch_comment)
-
     replacements = {
         _tok("BOL"): record.bol_number,
         _tok("SHIP_DATE"): _format_ship_date_for_template(record.ship_date),
@@ -636,15 +692,6 @@ def _apply_template_record_values(
         },
         include_xml_tree=compact_standard_item_area,
     )
-    if comments_value:
-        _replace_text_in_document(
-            doc,
-            {
-                "Comments:": f"Comments: {comments_value}",
-                "COMMENTS:": f"COMMENTS: {comments_value}",
-            },
-            include_xml_tree=compact_standard_item_area,
-        )
     _suppress_duplicate_ship_from_city_state_line(doc, selected_facility["location"])
     _override_consignee_street(doc, record.consignee_street)
 

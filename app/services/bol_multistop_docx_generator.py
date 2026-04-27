@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tempfile import mkdtemp
-from xml.sax.saxutils import escape
-import zipfile
 
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE
@@ -558,40 +556,6 @@ def _resolve_comment_for_record(record_comment: str, batch_comment: str | None) 
     return (batch_comment or "").strip()
 
 
-def _postprocess_comments_in_saved_docx(destination: Path, resolved_comment: str) -> bool:
-    xml_path = "word/document.xml"
-    with zipfile.ZipFile(destination, "r") as archive:
-        if xml_path not in archive.namelist():
-            return False
-        file_payloads = {name: archive.read(name) for name in archive.namelist()}
-
-    xml_text = file_payloads[xml_path].decode("utf-8", errors="ignore")
-    updated_xml = xml_text
-    safe_comment = escape(resolved_comment)
-
-    if resolved_comment:
-        updated_xml = updated_xml.replace("Comments:</w:t>", f"Comments: {safe_comment}</w:t>", 1)
-        updated_xml = updated_xml.replace("COMMENTS:</w:t>", f"COMMENTS: {safe_comment}</w:t>", 1)
-
-    comment_label_populated = bool(
-        resolved_comment
-        and (
-            f"Comments: {safe_comment}</w:t>" in updated_xml
-            or f"COMMENTS: {safe_comment}</w:t>" in updated_xml
-        )
-    )
-
-    if updated_xml == xml_text:
-        return comment_label_populated
-
-    file_payloads[xml_path] = updated_xml.encode("utf-8")
-    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name, payload in file_payloads.items():
-            archive.writestr(name, payload)
-
-    return comment_label_populated
-
-
 def _populate_ship_from_block(doc: Document, selected_facility: BolFacilityRecord) -> bool:
     name_value = selected_facility["facility_name"]
     street_value = selected_facility["address"]
@@ -738,7 +702,10 @@ def _save_multistop_docx(
     doc.save(str(destination))
 
     resolved_comment = _resolve_comment_for_record(record.comments, batch_comment)
-    comment_label_populated = _postprocess_comments_in_saved_docx(destination, resolved_comment)
+    comment_label_populated = _postprocess_standard_comments_in_saved_docx(
+        destination,
+        resolved_comment,
+    )
     if resolved_comment and not comment_label_populated:
         notices.append(
             DocxGenerationNotice(
