@@ -11,9 +11,7 @@ from app.services.bol_standard_docx_generator import GeneratedDocxFile
 from app.services.bol_standard_pdf_converter import ConvertedPdfFile
 
 
-DOCX_BUNDLE_FILENAME = "standard_bol_docx_bundle.zip"
-PDF_BUNDLE_FILENAME = "standard_bol_pdf_bundle.zip"
-ALL_FILES_BUNDLE_FILENAME = "standard_bol_all_files_bundle.zip"
+DEFAULT_BUNDLE_NAME_PREFIX = "standard_bol"
 
 
 @dataclass(slots=True)
@@ -64,6 +62,7 @@ def create_standard_bundles(
     generated_docx_files: list[GeneratedDocxFile],
     converted_pdf_files: list[ConvertedPdfFile],
     output_dir: Path | None = None,
+    bundle_name_prefix: str = DEFAULT_BUNDLE_NAME_PREFIX,
 ) -> StandardBundleResult:
     output_root = output_dir or Path(mkdtemp(prefix="kkg_standard_bol_bundles_"))
     output_root.mkdir(parents=True, exist_ok=True)
@@ -79,20 +78,27 @@ def create_standard_bundles(
         if Path(file.file_path).exists()
     ]
 
+    prefix = (bundle_name_prefix or DEFAULT_BUNDLE_NAME_PREFIX).strip()
+    if not prefix:
+        prefix = DEFAULT_BUNDLE_NAME_PREFIX
+    docx_bundle_filename = f"{prefix}_docx_bundle.zip"
+    pdf_bundle_filename = f"{prefix}_pdf_bundle.zip"
+    all_files_bundle_filename = f"{prefix}_all_files_bundle.zip"
+
     docx_bundle = (
-        _build_zip(output_root / DOCX_BUNDLE_FILENAME, docx_entries)
+        _build_zip(output_root / docx_bundle_filename, docx_entries)
         if docx_entries
         else None
     )
     pdf_bundle = (
-        _build_zip(output_root / PDF_BUNDLE_FILENAME, pdf_entries)
+        _build_zip(output_root / pdf_bundle_filename, pdf_entries)
         if pdf_entries
         else None
     )
 
     all_entries = docx_entries + pdf_entries
     all_bundle = (
-        _build_zip(output_root / ALL_FILES_BUNDLE_FILENAME, all_entries)
+        _build_zip(output_root / all_files_bundle_filename, all_entries)
         if all_entries
         else None
     )

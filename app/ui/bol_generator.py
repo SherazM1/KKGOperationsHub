@@ -89,11 +89,17 @@ def _clear_review_state() -> None:
 def _refresh_bundles() -> StandardBundleResult | None:
     docx_result = st.session_state["bol_docx_result"]
     pdf_result = st.session_state["bol_pdf_result"]
+    mode = st.session_state.get("bol_mode", "Standard")
 
     if not isinstance(docx_result, StandardDocxGenerationResult):
         st.session_state["bol_bundle_result"] = None
         st.session_state["bol_bundle_error"] = None
         return None
+
+    if mode == "Multistop":
+        bundle_name_prefix = "multistop_bol"
+    else:
+        bundle_name_prefix = resolve_output_filename_prefix_for_mode(mode)
 
     try:
         bundle_result = create_standard_bundles(
@@ -103,9 +109,15 @@ def _refresh_bundles() -> StandardBundleResult | None:
                 if isinstance(pdf_result, StandardPdfConversionResult)
                 else []
             ),
+            bundle_name_prefix=bundle_name_prefix,
         )
         st.session_state["bol_bundle_result"] = bundle_result
-        st.session_state["bol_bundle_error"] = None
+        if docx_result.generated_count > 0 and bundle_result.docx_bundle is None:
+            st.session_state["bol_bundle_error"] = (
+                "DOCX bundle creation failed: generated DOCX files were not found on disk."
+            )
+        else:
+            st.session_state["bol_bundle_error"] = None
         return bundle_result
     except Exception as exc:
         st.session_state["bol_bundle_result"] = None
@@ -584,9 +596,8 @@ def render_bol_generator_view() -> None:
                 )
             st.session_state["bol_docx_result"] = result
             st.session_state["bol_pdf_result"] = None
+            _refresh_bundles()
             if mode == "Multistop":
-                st.session_state["bol_bundle_result"] = None
-                st.session_state["bol_bundle_error"] = None
                 skip_breakdown = _multistop_skip_breakdown(result)
                 st.session_state["bol_generation_status"] = (
                     f"{mode} DOCX generation complete. Generated {result.generated_count}, "
@@ -597,7 +608,6 @@ def render_bol_generator_view() -> None:
                     f"failed {result.failed_count}."
                 )
             else:
-                _refresh_bundles()
                 st.session_state["bol_generation_status"] = (
                     f"{mode} DOCX generation complete. Generated {result.generated_count}, "
                     f"skipped {result.skipped_count}, failed {result.failed_count}."
@@ -700,7 +710,8 @@ def render_bol_generator_view() -> None:
         st.caption("DOCX and PDF generation are enabled for Standard and No Recourse modes.")
     else:
         st.caption(
-            "Multistop supports DOCX generation only in this phase. PDF conversion and bundles remain unavailable."
+            "Multistop supports DOCX generation and DOCX bundle download only in this phase. "
+            "PDF conversion remains unavailable."
         )
 
     st.markdown("---")
@@ -719,8 +730,26 @@ def render_bol_generator_view() -> None:
         if bundle_result.all_files_bundle:
             all_bundle_bytes = _read_file_bytes(bundle_result.all_files_bundle.file_path)
 
+    bundle_read_errors: list[str] = []
+    if isinstance(bundle_result, StandardBundleResult):
+        if bundle_result.docx_bundle and docx_bundle_bytes is None:
+            bundle_read_errors.append(
+                f"DOCX bundle file is missing on disk: {bundle_result.docx_bundle.file_path}"
+            )
+        if bundle_result.pdf_bundle and pdf_bundle_bytes is None:
+            bundle_read_errors.append(
+                f"PDF bundle file is missing on disk: {bundle_result.pdf_bundle.file_path}"
+            )
+        if bundle_result.all_files_bundle and all_bundle_bytes is None:
+            bundle_read_errors.append(
+                f"Combined bundle file is missing on disk: {bundle_result.all_files_bundle.file_path}"
+            )
+
+    if bundle_read_errors:
+        st.session_state["bol_bundle_error"] = " | ".join(bundle_read_errors)
+
     if st.session_state["bol_mode"] == "Multistop":
-        st.caption("Bundle downloads are not implemented for Multistop in this phase.")
+        st.caption("Multistop: DOCX bundle download is available after DOCX generation. PDF downloads are disabled.")
 
     st.download_button(
         "Download DOCX Bundle",
@@ -743,7 +772,7 @@ def render_bol_generator_view() -> None:
             else f"{st.session_state['bol_mode'].lower().replace(' ', '_')}_bol_pdf_bundle.zip"
         ),
         mime="application/zip",
-        disabled=pdf_bundle_bytes is None,
+        disabled=(st.session_state["bol_mode"] == "Multistop") or (pdf_bundle_bytes is None),
         use_container_width=True,
     )
     st.download_button(
@@ -755,7 +784,7 @@ def render_bol_generator_view() -> None:
             else f"{st.session_state['bol_mode'].lower().replace(' ', '_')}_bol_all_files_bundle.zip"
         ),
         mime="application/zip",
-        disabled=all_bundle_bytes is None,
+        disabled=(st.session_state["bol_mode"] == "Multistop") or (all_bundle_bytes is None),
         use_container_width=True,
     )
 

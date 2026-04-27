@@ -184,7 +184,7 @@ def _optional_grouped_field_warnings(group_rows: list[BolMultistopRow]) -> list[
     ]
     for field_name, value in optional_fields:
         if not (value or "").strip():
-            warnings.append(f"Optional grouped field is blank: {field_name}.")
+            warnings.append(f"Optional field missing: {field_name}")
     return warnings
 
 
