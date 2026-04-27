@@ -16,7 +16,11 @@ from app.services.bol_multistop_docx_generator import (
 )
 from app.services.bol_multistop_mapper import map_multistop_rows_to_records
 from app.services.bol_multistop_parser import parse_multistop_bol_excel
-from app.services.bol_file_bundle_service import StandardBundleResult, create_standard_bundles
+from app.services.bol_file_bundle_service import (
+    StandardBundleResult,
+    create_multistop_docx_bundle,
+    create_standard_bundles,
+)
 from app.services.bol_standard_docx_generator import (
     StandardDocxGenerationResult,
     generate_standard_docx_set,
@@ -96,25 +100,35 @@ def _refresh_bundles() -> StandardBundleResult | None:
         st.session_state["bol_bundle_error"] = None
         return None
 
-    if mode == "Multistop":
-        bundle_name_prefix = "multistop_bol"
-    else:
-        bundle_name_prefix = resolve_output_filename_prefix_for_mode(mode)
-
     try:
-        bundle_result = create_standard_bundles(
-            generated_docx_files=docx_result.generated_files,
-            converted_pdf_files=(
-                pdf_result.converted_files
-                if isinstance(pdf_result, StandardPdfConversionResult)
-                else []
-            ),
-            bundle_name_prefix=bundle_name_prefix,
-        )
+        if mode == "Multistop":
+            bundle_result = create_multistop_docx_bundle(
+                generated_docx_files=docx_result.generated_files,
+                bundle_name_prefix="multistop_bol",
+            )
+        else:
+            bundle_result = create_standard_bundles(
+                generated_docx_files=docx_result.generated_files,
+                converted_pdf_files=(
+                    pdf_result.converted_files
+                    if isinstance(pdf_result, StandardPdfConversionResult)
+                    else []
+                ),
+                bundle_name_prefix=resolve_output_filename_prefix_for_mode(mode),
+            )
         st.session_state["bol_bundle_result"] = bundle_result
         if docx_result.generated_count > 0 and bundle_result.docx_bundle is None:
             st.session_state["bol_bundle_error"] = (
                 "DOCX bundle creation failed: generated DOCX files were not found on disk."
+            )
+        elif (
+            mode == "Multistop"
+            and bundle_result.docx_bundle is not None
+            and bundle_result.docx_bundle.missing_count > 0
+        ):
+            st.session_state["bol_bundle_error"] = (
+                "Multistop DOCX bundle was created with "
+                f"{bundle_result.docx_bundle.missing_count} missing generated source file(s)."
             )
         else:
             st.session_state["bol_bundle_error"] = None
@@ -825,8 +839,22 @@ def render_bol_generator_view() -> None:
 
         if selected_mode == "Multistop":
             skip_breakdown = _multistop_skip_breakdown(docx_result)
+            multistop_docx_files = docx_result.generated_files
+            combined_docs_generated = sum(
+                1
+                for generated in multistop_docx_files
+                if getattr(generated, "document_type", "") == "combined"
+            )
+            stop_docs_generated = sum(
+                1
+                for generated in multistop_docx_files
+                if getattr(generated, "document_type", "") == "stop"
+            )
             st.write(
                 {
+                    "grouped_records_generated": combined_docs_generated,
+                    "combined_docs_generated": combined_docs_generated,
+                    "stop_docs_generated": stop_docs_generated,
                     "validation_skipped": skip_breakdown["validation_skipped"],
                     "excluded_in_review": skip_breakdown["excluded_in_review"],
                     "other_skipped": skip_breakdown["other_skipped"],
@@ -855,19 +883,27 @@ def render_bol_generator_view() -> None:
             )
 
         if isinstance(bundle_result, StandardBundleResult):
-            st.write(
-                {
-                    "docx_bundle_file_count": (
-                        bundle_result.docx_bundle.file_count if bundle_result.docx_bundle else 0
-                    ),
-                    "pdf_bundle_file_count": (
-                        bundle_result.pdf_bundle.file_count if bundle_result.pdf_bundle else 0
-                    ),
-                    "combined_bundle_file_count": (
-                        bundle_result.all_files_bundle.file_count if bundle_result.all_files_bundle else 0
-                    ),
-                }
-            )
+            bundle_counts = {
+                "docx_bundle_file_count": (
+                    bundle_result.docx_bundle.file_count if bundle_result.docx_bundle else 0
+                ),
+                "pdf_bundle_file_count": (
+                    bundle_result.pdf_bundle.file_count if bundle_result.pdf_bundle else 0
+                ),
+                "combined_bundle_file_count": (
+                    bundle_result.all_files_bundle.file_count if bundle_result.all_files_bundle else 0
+                ),
+            }
+            if selected_mode == "Multistop" and bundle_result.docx_bundle:
+                bundle_counts.update(
+                    {
+                        "docx_bundle_group_count": bundle_result.docx_bundle.group_count,
+                        "docx_bundle_combined_count": bundle_result.docx_bundle.combined_count,
+                        "docx_bundle_stop_count": bundle_result.docx_bundle.stop_count,
+                        "docx_bundle_missing_source_count": bundle_result.docx_bundle.missing_count,
+                    }
+                )
+            st.write(bundle_counts)
 
         if docx_result.generated_files:
             st.caption("Generated DOCX files:")
