@@ -10,7 +10,7 @@ from xml.sax.saxutils import escape
 import zipfile
 
 from docx import Document
-from docx.enum.table import WD_ROW_HEIGHT_RULE
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -204,24 +204,25 @@ def _set_row_height(row, twips: int, *, exact: bool = True) -> None:
     row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY if exact else WD_ROW_HEIGHT_RULE.AT_LEAST
 
 
-def _compact_row_text(row, font_points: float = 7.5) -> None:
+def _compact_row_text(row, font_points: float = 8.5) -> None:
     for cell in row.cells:
-        cell.vertical_alignment = None
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
         for paragraph in cell.paragraphs:
             paragraph.paragraph_format.space_before = Pt(0)
             paragraph.paragraph_format.space_after = Pt(0)
-            paragraph.paragraph_format.line_spacing = 0.86
+            paragraph.paragraph_format.line_spacing = 0.95
             for run in paragraph.runs:
                 run.font.size = Pt(font_points)
 
 
-def _set_cell_text(cell, value: str, *, font_points: float = 7.0, align_center: bool = True) -> None:
+def _set_cell_text(cell, value: str, *, font_points: float = 8.5, align_center: bool = True) -> None:
     cell.text = value
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
     for paragraph in cell.paragraphs:
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER if align_center else WD_ALIGN_PARAGRAPH.LEFT
         paragraph.paragraph_format.space_before = Pt(0)
         paragraph.paragraph_format.space_after = Pt(0)
-        paragraph.paragraph_format.line_spacing = 0.86
+        paragraph.paragraph_format.line_spacing = 0.95
         for run in paragraph.runs:
             run.font.size = Pt(font_points)
 
@@ -231,7 +232,7 @@ def _set_unique_cell_text(
     cell_index: int,
     value: str,
     *,
-    font_points: float = 7.0,
+    font_points: float = 8.5,
     align_center: bool = True,
 ) -> None:
     if cell_index >= len(row.cells):
@@ -248,6 +249,102 @@ def _clear_row_text(row) -> None:
             continue
         seen_cells.add(cell_id)
         cell.text = ""
+
+
+def _row_unique_cells(row) -> list[tuple[int, object]]:
+    unique_cells: list[tuple[int, object]] = []
+    seen_cells = set()
+    for index, cell in enumerate(row.cells):
+        cell_id = id(cell._tc)
+        if cell_id in seen_cells:
+            continue
+        seen_cells.add(cell_id)
+        unique_cells.append((index, cell))
+    return unique_cells
+
+
+def _cell_header_text(header_row, cell_index: int) -> str:
+    if cell_index >= len(header_row.cells):
+        return ""
+    return header_row.cells[cell_index].text.strip().upper()
+
+
+def _is_bol_item_detail_header(row) -> bool:
+    row_text_upper = " ".join(cell.text.strip() for cell in row.cells).upper()
+    return (
+        "ITEM DESCRIPTION" in row_text_upper
+        and "PO #" in row_text_upper
+        and "WEIGHT" in row_text_upper
+        and (
+            "QTY" in row_text_upper
+            or "PALLET QTY" in row_text_upper
+            or "CASE" in row_text_upper
+        )
+    )
+
+
+def _row_has_visible_text(row) -> bool:
+    return any(cell.text.strip() for _, cell in _row_unique_cells(row))
+
+
+def _is_item_description_cell(header_row, cell_index: int) -> bool:
+    return "ITEM DESCRIPTION" in _cell_header_text(header_row, cell_index)
+
+
+def _format_item_detail_row(
+    row,
+    header_row,
+    *,
+    font_points: float,
+    bold: bool = False,
+) -> None:
+    for cell_index, cell in _row_unique_cells(row):
+        is_description = _is_item_description_cell(header_row, cell_index)
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        for paragraph in cell.paragraphs:
+            paragraph.alignment = (
+                WD_ALIGN_PARAGRAPH.LEFT if is_description and not bold else WD_ALIGN_PARAGRAPH.CENTER
+            )
+            paragraph.paragraph_format.space_before = Pt(0)
+            paragraph.paragraph_format.space_after = Pt(0)
+            paragraph.paragraph_format.line_spacing = 0.95
+            for run in paragraph.runs:
+                run.font.size = Pt(font_points)
+                run.bold = bold
+
+
+def format_bol_item_detail_table(table: Table) -> None:
+    header_idx = None
+    for index, row in enumerate(table.rows):
+        if _is_bol_item_detail_header(row):
+            header_idx = index
+            break
+
+    if header_idx is None:
+        return
+
+    table.autofit = False
+    header_row = table.rows[header_idx]
+    _set_row_height(header_row, 300, exact=False)
+    _format_item_detail_row(header_row, header_row, font_points=9.0, bold=True)
+
+    for row in table.rows[header_idx + 1 :]:
+        row_text_upper = " ".join(cell.text.strip() for cell in row.cells).upper()
+        if not _row_has_visible_text(row):
+            continue
+        if "SHIPPER SIGNATURE" in row_text_upper:
+            break
+
+        is_totals_row = "TOTALS" in row_text_upper
+        _set_row_height(row, 430 if is_totals_row else 520, exact=False)
+        _format_item_detail_row(
+            row,
+            header_row,
+            font_points=8.5,
+            bold=False,
+        )
+        if is_totals_row:
+            break
 
 
 def _tighten_multistop_template_rows(doc: Document) -> None:
@@ -268,14 +365,14 @@ def _tighten_multistop_template_rows(doc: Document) -> None:
                 )
             ):
                 _set_row_height(row, 365)
-                _compact_row_text(row, 7.0)
+                _compact_row_text(row, 8.0)
             elif any(token in row_text for token in ("DC_1", "DC_2", "DC_3")):
-                _set_row_height(row, 330)
-                _compact_row_text(row, 7.0)
+                _set_row_height(row, 520, exact=False)
+                _compact_row_text(row, 8.5)
 
             if 27 <= index <= 32 and not row_text.strip():
                 _set_row_height(row, 115)
-                _compact_row_text(row, 7.0)
+                _compact_row_text(row, 8.0)
 
 
 def _clean_standard_individual_stop_item_area(doc: Document, stop) -> None:
@@ -309,28 +406,29 @@ def _clean_standard_individual_stop_item_area(doc: Document, stop) -> None:
             return
 
         item_row = table.rows[item_idx]
-        _set_row_height(item_row, 500)
-        _compact_row_text(item_row, 7.0)
-        _set_unique_cell_text(item_row, 0, stop.cases, font_points=7.0)
-        _set_unique_cell_text(item_row, 1, "PLT", font_points=7.0)
-        _set_unique_cell_text(item_row, 3, stop.target_po_number, font_points=6.2)
+        _set_row_height(item_row, 520, exact=False)
+        _compact_row_text(item_row, 8.5)
+        _set_unique_cell_text(item_row, 0, stop.cases, font_points=8.5)
+        _set_unique_cell_text(item_row, 1, "PLT", font_points=8.5)
+        _set_unique_cell_text(item_row, 3, stop.target_po_number, font_points=8.0)
         _set_unique_cell_text(
             item_row,
             5,
             stop.pallet_description,
-            font_points=6.6,
+            font_points=8.5,
             align_center=False,
         )
-        _set_unique_cell_text(item_row, 11, stop.total_pallets, font_points=7.0)
-        _set_unique_cell_text(item_row, 14, stop.weight, font_points=7.0)
+        _set_unique_cell_text(item_row, 11, stop.total_pallets, font_points=8.5)
+        _set_unique_cell_text(item_row, 14, stop.weight, font_points=8.5)
 
         totals_row = table.rows[totals_idx]
-        _set_row_height(totals_row, 360)
-        _compact_row_text(totals_row, 7.0)
-        _set_unique_cell_text(totals_row, 0, stop.cases, font_points=7.0)
-        _set_unique_cell_text(totals_row, 5, "TOTALS", font_points=7.0)
-        _set_unique_cell_text(totals_row, 11, stop.total_pallets, font_points=7.0)
-        _set_unique_cell_text(totals_row, 14, stop.weight, font_points=7.0)
+        _set_row_height(totals_row, 430, exact=False)
+        _compact_row_text(totals_row, 8.5)
+        _set_unique_cell_text(totals_row, 0, stop.cases, font_points=8.5)
+        _set_unique_cell_text(totals_row, 5, "TOTALS", font_points=8.5)
+        _set_unique_cell_text(totals_row, 11, stop.total_pallets, font_points=8.5)
+        _set_unique_cell_text(totals_row, 14, stop.weight, font_points=8.5)
+        format_bol_item_detail_table(table)
         return
 
 
@@ -368,20 +466,20 @@ def _clean_no_recourse_individual_stop_item_area(doc: Document, stop) -> None:
             return
 
         item_row = table.rows[item_idx]
-        _set_row_height(item_row, 500)
-        _compact_row_text(item_row, 7.0)
-        _set_unique_cell_text(item_row, 0, stop.cases, font_points=7.0)
-        _set_unique_cell_text(item_row, 1, "PLT", font_points=7.0)
-        _set_unique_cell_text(item_row, 3, stop.target_po_number, font_points=6.2)
+        _set_row_height(item_row, 520, exact=False)
+        _compact_row_text(item_row, 8.5)
+        _set_unique_cell_text(item_row, 0, stop.cases, font_points=8.5)
+        _set_unique_cell_text(item_row, 1, "PLT", font_points=8.5)
+        _set_unique_cell_text(item_row, 3, stop.target_po_number, font_points=8.0)
         _set_unique_cell_text(
             item_row,
             5,
             stop.pallet_description,
-            font_points=6.6,
+            font_points=8.5,
             align_center=False,
         )
-        _set_unique_cell_text(item_row, 11, stop.total_pallets, font_points=7.0)
-        _set_unique_cell_text(item_row, 14, stop.weight, font_points=7.0)
+        _set_unique_cell_text(item_row, 11, stop.total_pallets, font_points=8.5)
+        _set_unique_cell_text(item_row, 14, stop.weight, font_points=8.5)
 
         stop_unused_at = signature_idx if signature_idx is not None else totals_idx
         for idx in range(item_idx + 1, stop_unused_at):
@@ -393,17 +491,63 @@ def _clean_no_recourse_individual_stop_item_area(doc: Document, stop) -> None:
             _compact_row_text(row, 1.0)
 
         totals_row = table.rows[totals_idx]
-        _set_row_height(totals_row, 360)
-        _compact_row_text(totals_row, 7.0)
-        _set_unique_cell_text(totals_row, 0, stop.cases, font_points=7.0)
-        _set_unique_cell_text(totals_row, 5, "TOTALS", font_points=7.0)
-        _set_unique_cell_text(totals_row, 11, stop.total_pallets, font_points=7.0)
-        _set_unique_cell_text(totals_row, 14, stop.weight, font_points=7.0)
+        _set_row_height(totals_row, 430, exact=False)
+        _compact_row_text(totals_row, 8.5)
+        _set_unique_cell_text(totals_row, 0, stop.cases, font_points=8.5)
+        _set_unique_cell_text(totals_row, 5, "TOTALS", font_points=8.5)
+        _set_unique_cell_text(totals_row, 11, stop.total_pallets, font_points=8.5)
+        _set_unique_cell_text(totals_row, 14, stop.weight, font_points=8.5)
 
         if signature_idx is not None:
             signature_row = table.rows[signature_idx]
             for cell_index in (11, 14):
-                _set_unique_cell_text(signature_row, cell_index, "", font_points=7.0)
+                _set_unique_cell_text(signature_row, cell_index, "", font_points=8.5)
+        format_bol_item_detail_table(table)
+        return
+
+
+def _clean_combined_multistop_item_area(doc: Document, record: BolMultistopRecord) -> None:
+    for table in doc.tables:
+        header_idx = None
+        for idx, row in enumerate(table.rows):
+            row_text_upper = " ".join(cell.text.strip() for cell in row.cells).upper()
+            if (
+                "DC" in row_text_upper
+                and "CASE" in row_text_upper
+                and "PO #" in row_text_upper
+                and "ITEM DESCRIPTION" in row_text_upper
+                and "PALLET" in row_text_upper
+                and "WEIGHT" in row_text_upper
+            ):
+                header_idx = idx
+                break
+
+        if header_idx is None:
+            continue
+
+        totals_idx = None
+        for idx in range(header_idx + 1, len(table.rows)):
+            row_text_upper = " ".join(cell.text.strip() for cell in table.rows[idx].cells).upper()
+            if "TOTALS" in row_text_upper:
+                totals_idx = idx
+                break
+
+        if totals_idx is None:
+            return
+
+        totals_row = table.rows[totals_idx]
+        _set_row_height(totals_row, 430, exact=False)
+        _compact_row_text(totals_row, 8.5)
+        _set_unique_cell_text(totals_row, 1, _format_number(record.total_case), font_points=8.5)
+        _set_unique_cell_text(totals_row, 6, "TOTALS", font_points=8.5)
+        _set_unique_cell_text(totals_row, 12, _format_number(record.total_pallet), font_points=8.5)
+        _set_unique_cell_text(
+            totals_row,
+            15,
+            _format_number(record.total_ship_weight),
+            font_points=8.5,
+        )
+        format_bol_item_detail_table(table)
         return
 
 
@@ -577,6 +721,9 @@ def _save_multistop_docx(
     doc = Document(str(resolved_template))
     _tighten_multistop_template_rows(doc)
     _replace_text_in_document(doc, replacements, include_xml_tree=True)
+    _clean_combined_multistop_item_area(doc, record)
+    for table in doc.tables:
+        format_bol_item_detail_table(table)
     ship_from_populated = _populate_ship_from_block(doc, selected_facility)
     if not ship_from_populated:
         notices.append(
