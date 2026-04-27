@@ -146,6 +146,7 @@ def create_multistop_bundles(
     converted_pdf_files: list[ConvertedPdfFile] | None = None,
     output_dir: Path | None = None,
     bundle_name_prefix: str = "multistop_bol",
+    include_all_files_bundle: bool = True,
 ) -> StandardBundleResult:
     output_root = output_dir or Path(mkdtemp(prefix="kkg_multistop_bol_bundles_"))
     output_root.mkdir(parents=True, exist_ok=True)
@@ -189,7 +190,7 @@ def create_multistop_bundles(
             [*generated_docx_files, *converted_pdf_files],
             None,
         )
-        if existing_docx_files or existing_pdf_files
+        if include_all_files_bundle and (existing_docx_files or existing_pdf_files)
         else None
     )
 
@@ -211,6 +212,7 @@ def create_multistop_docx_bundle(
         converted_pdf_files=[],
         output_dir=output_dir,
         bundle_name_prefix=bundle_name_prefix,
+        include_all_files_bundle=True,
     )
 
 
@@ -219,6 +221,7 @@ def create_standard_bundles(
     converted_pdf_files: list[ConvertedPdfFile],
     output_dir: Path | None = None,
     bundle_name_prefix: str = DEFAULT_BUNDLE_NAME_PREFIX,
+    include_all_files_bundle: bool = True,
 ) -> StandardBundleResult:
     output_root = output_dir or Path(mkdtemp(prefix="kkg_standard_bol_bundles_"))
     output_root.mkdir(parents=True, exist_ok=True)
@@ -255,7 +258,7 @@ def create_standard_bundles(
     all_entries = docx_entries + pdf_entries
     all_bundle = (
         _build_zip(output_root / all_files_bundle_filename, all_entries)
-        if all_entries
+        if include_all_files_bundle and all_entries
         else None
     )
 

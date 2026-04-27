@@ -7,6 +7,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import mkdtemp
+from typing import Callable
 from urllib.parse import quote
 
 from app.services.bol_standard_docx_generator import GeneratedDocxFile
@@ -143,6 +144,7 @@ def _run_conversion(converter_path: str, source_docx: Path, destination_pdf: Pat
 def convert_standard_docx_set_to_pdf(
     generated_docx_files: list[GeneratedDocxFile],
     output_dir: Path | None = None,
+    progress_callback: Callable[[int, int, GeneratedDocxFile], None] | None = None,
 ) -> StandardPdfConversionResult:
     output_root = output_dir or Path(mkdtemp(prefix="kkg_standard_bol_pdf_"))
     output_root.mkdir(parents=True, exist_ok=True)
@@ -165,7 +167,11 @@ def convert_standard_docx_set_to_pdf(
     converted_files: list[ConvertedPdfFile] = []
     failed_conversions: list[FailedPdfConversion] = []
 
-    for docx_file in generated_docx_files:
+    total_files = len(generated_docx_files)
+    for index, docx_file in enumerate(generated_docx_files, start=1):
+        if progress_callback is not None:
+            progress_callback(index, total_files, docx_file)
+
         source_docx = Path(docx_file.file_path)
         destination_pdf = output_root / f"{source_docx.stem}.pdf"
 

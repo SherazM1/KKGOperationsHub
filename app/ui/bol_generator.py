@@ -66,10 +66,14 @@ def _initialize_bol_state() -> None:
         st.session_state["bol_docx_result"] = None
     if "bol_pdf_result" not in st.session_state:
         st.session_state["bol_pdf_result"] = None
+    if "bol_pdf_source_signature" not in st.session_state:
+        st.session_state["bol_pdf_source_signature"] = None
     if "bol_bundle_result" not in st.session_state:
         st.session_state["bol_bundle_result"] = None
     if "bol_bundle_error" not in st.session_state:
         st.session_state["bol_bundle_error"] = None
+    if "bol_all_files_bundle_requested" not in st.session_state:
+        st.session_state["bol_all_files_bundle_requested"] = False
     if "bol_selected_facility_label" not in st.session_state:
         st.session_state["bol_selected_facility_label"] = default_facility_label
     if "bol_selected_facility" not in st.session_state:
@@ -87,8 +91,10 @@ def _clear_review_state() -> None:
     st.session_state["bol_record_selection"] = {}
     st.session_state["bol_docx_result"] = None
     st.session_state["bol_pdf_result"] = None
+    st.session_state["bol_pdf_source_signature"] = None
     st.session_state["bol_bundle_result"] = None
     st.session_state["bol_bundle_error"] = None
+    st.session_state["bol_all_files_bundle_requested"] = False
     st.session_state["bol_generation_status"] = "Waiting for generation action."
 
 
@@ -96,6 +102,7 @@ def _refresh_bundles() -> StandardBundleResult | None:
     docx_result = st.session_state["bol_docx_result"]
     pdf_result = st.session_state["bol_pdf_result"]
     mode = st.session_state.get("bol_mode", "Standard")
+    include_all_files_bundle = bool(st.session_state.get("bol_all_files_bundle_requested", False))
 
     if not isinstance(docx_result, StandardDocxGenerationResult):
         st.session_state["bol_bundle_result"] = None
@@ -112,6 +119,7 @@ def _refresh_bundles() -> StandardBundleResult | None:
                     else []
                 ),
                 bundle_name_prefix="multistop_bol",
+                include_all_files_bundle=include_all_files_bundle,
             )
         else:
             bundle_result = create_standard_bundles(
@@ -122,6 +130,7 @@ def _refresh_bundles() -> StandardBundleResult | None:
                     else []
                 ),
                 bundle_name_prefix=resolve_output_filename_prefix_for_mode(mode),
+                include_all_files_bundle=include_all_files_bundle,
             )
         st.session_state["bol_bundle_result"] = bundle_result
         if docx_result.generated_count > 0 and bundle_result.docx_bundle is None:
@@ -166,8 +175,10 @@ def _refresh_bundles() -> StandardBundleResult | None:
 def _clear_generation_state() -> None:
     st.session_state["bol_docx_result"] = None
     st.session_state["bol_pdf_result"] = None
+    st.session_state["bol_pdf_source_signature"] = None
     st.session_state["bol_bundle_result"] = None
     st.session_state["bol_bundle_error"] = None
+    st.session_state["bol_all_files_bundle_requested"] = False
     st.session_state["bol_generation_status"] = "Waiting for generation action."
 
 
@@ -192,6 +203,46 @@ def _read_file_bytes(path: str) -> bytes | None:
     if not file_path.exists():
         return None
     return file_path.read_bytes()
+
+
+def _docx_result_signature(docx_result: StandardDocxGenerationResult) -> tuple[tuple[Any, ...], ...]:
+    signature_parts: list[tuple[Any, ...]] = []
+    for generated_file in docx_result.generated_files:
+        file_path = Path(generated_file.file_path)
+        try:
+            stat_result = file_path.stat()
+            modified_ns: int | None = stat_result.st_mtime_ns
+            file_size: int | None = stat_result.st_size
+        except OSError:
+            modified_ns = None
+            file_size = None
+
+        signature_parts.append(
+            (
+                generated_file.bol_number,
+                generated_file.file_name,
+                str(file_path.resolve()) if file_path.exists() else str(file_path),
+                modified_ns,
+                file_size,
+                getattr(generated_file, "document_type", ""),
+                getattr(generated_file, "load_number", ""),
+                getattr(generated_file, "stop_number", None),
+            )
+        )
+    return tuple(signature_parts)
+
+
+def _pdf_result_matches_docx_result(docx_result: StandardDocxGenerationResult) -> bool:
+    pdf_result = st.session_state.get("bol_pdf_result")
+    if not isinstance(pdf_result, StandardPdfConversionResult):
+        return False
+    if not pdf_result.conversion_available or pdf_result.converted_count == 0:
+        return False
+    if pdf_result.failed_count > 0:
+        return False
+    if st.session_state.get("bol_pdf_source_signature") != _docx_result_signature(docx_result):
+        return False
+    return all(Path(pdf_file.file_path).exists() for pdf_file in pdf_result.converted_files)
 
 
 def _format_total_skids(value: float) -> int | float:
@@ -668,6 +719,8 @@ def render_bol_generator_view() -> None:
                 )
             st.session_state["bol_docx_result"] = result
             st.session_state["bol_pdf_result"] = None
+            st.session_state["bol_pdf_source_signature"] = None
+            st.session_state["bol_all_files_bundle_requested"] = False
             _refresh_bundles()
             if mode == "Multistop":
                 skip_breakdown = _multistop_skip_breakdown(result)
@@ -688,8 +741,10 @@ def render_bol_generator_view() -> None:
             mode = st.session_state["bol_mode"]
             st.session_state["bol_docx_result"] = None
             st.session_state["bol_pdf_result"] = None
+            st.session_state["bol_pdf_source_signature"] = None
             st.session_state["bol_bundle_result"] = None
             st.session_state["bol_bundle_error"] = None
+            st.session_state["bol_all_files_bundle_requested"] = False
             st.session_state["bol_generation_status"] = (
                 f"{mode} DOCX generation failed: selected template file was not found ({exc})."
             )
@@ -697,15 +752,19 @@ def render_bol_generator_view() -> None:
             mode = st.session_state["bol_mode"]
             st.session_state["bol_docx_result"] = None
             st.session_state["bol_pdf_result"] = None
+            st.session_state["bol_pdf_source_signature"] = None
             st.session_state["bol_bundle_result"] = None
             st.session_state["bol_bundle_error"] = None
+            st.session_state["bol_all_files_bundle_requested"] = False
             st.session_state["bol_generation_status"] = f"{mode} DOCX generation failed: {exc}"
         except Exception as exc:
             mode = st.session_state["bol_mode"]
             st.session_state["bol_docx_result"] = None
             st.session_state["bol_pdf_result"] = None
+            st.session_state["bol_pdf_source_signature"] = None
             st.session_state["bol_bundle_result"] = None
             st.session_state["bol_bundle_error"] = None
+            st.session_state["bol_all_files_bundle_requested"] = False
             st.session_state["bol_generation_status"] = (
                 f"Unexpected {mode} DOCX generation error: {exc}"
             )
@@ -725,23 +784,54 @@ def render_bol_generator_view() -> None:
             if not isinstance(docx_result, StandardDocxGenerationResult):
                 raise ValueError("Generate DOCX Set first.")
 
-            pdf_result = convert_standard_docx_set_to_pdf(docx_result.generated_files)
-            st.session_state["bol_pdf_result"] = pdf_result
-            _refresh_bundles()
-
-            if not pdf_result.conversion_available:
+            if _pdf_result_matches_docx_result(docx_result):
+                pdf_result = st.session_state["bol_pdf_result"]
+                _refresh_bundles()
                 st.session_state["bol_generation_status"] = (
-                    f"{mode} PDF conversion unavailable. "
-                    f"{pdf_result.unavailable_reason}"
+                    f"{mode} PDF conversion skipped. Existing PDFs already match "
+                    "the current DOCX set."
                 )
+                st.toast("Existing PDFs already match the current DOCX set.")
             else:
-                st.session_state["bol_generation_status"] = (
-                    f"{mode} PDF conversion complete. Converted {pdf_result.converted_count}, "
-                    f"failed {pdf_result.failed_count}."
+                progress_bar = st.progress(0)
+                progress_status = st.empty()
+
+                def _update_pdf_progress(
+                    current_index: int,
+                    total_files: int,
+                    generated_file: Any,
+                ) -> None:
+                    progress_status.write(
+                        f"Converting PDF {current_index} of {total_files}: "
+                        f"{generated_file.file_name}"
+                    )
+                    progress_bar.progress(current_index / total_files if total_files else 0)
+
+                pdf_result = convert_standard_docx_set_to_pdf(
+                    docx_result.generated_files,
+                    progress_callback=_update_pdf_progress,
                 )
+                st.session_state["bol_pdf_result"] = pdf_result
+                st.session_state["bol_pdf_source_signature"] = _docx_result_signature(docx_result)
+                st.session_state["bol_all_files_bundle_requested"] = False
+                _refresh_bundles()
+                progress_bar.empty()
+                progress_status.empty()
+
+                if not pdf_result.conversion_available:
+                    st.session_state["bol_generation_status"] = (
+                        f"{mode} PDF conversion unavailable. "
+                        f"{pdf_result.unavailable_reason}"
+                    )
+                else:
+                    st.session_state["bol_generation_status"] = (
+                        f"{mode} PDF conversion complete. Converted {pdf_result.converted_count}, "
+                        f"failed {pdf_result.failed_count}."
+                    )
         except Exception as exc:
             mode = st.session_state["bol_mode"]
             st.session_state["bol_pdf_result"] = None
+            st.session_state["bol_pdf_source_signature"] = None
             _refresh_bundles()
             st.session_state["bol_generation_status"] = f"{mode} PDF generation failed: {exc}"
     if pdf_generation_mode_supported and generate_pdf_disabled:
@@ -776,10 +866,33 @@ def render_bol_generator_view() -> None:
                     file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
                 )
             st.session_state["bol_docx_result"] = docx_result_all
+            st.session_state["bol_pdf_result"] = None
+            st.session_state["bol_pdf_source_signature"] = None
+            st.session_state["bol_all_files_bundle_requested"] = False
 
-            pdf_result_all = convert_standard_docx_set_to_pdf(docx_result_all.generated_files)
+            progress_bar = st.progress(0)
+            progress_status = st.empty()
+
+            def _update_generate_all_pdf_progress(
+                current_index: int,
+                total_files: int,
+                generated_file: Any,
+            ) -> None:
+                progress_status.write(
+                    f"Converting PDF {current_index} of {total_files}: "
+                    f"{generated_file.file_name}"
+                )
+                progress_bar.progress(current_index / total_files if total_files else 0)
+
+            pdf_result_all = convert_standard_docx_set_to_pdf(
+                docx_result_all.generated_files,
+                progress_callback=_update_generate_all_pdf_progress,
+            )
             st.session_state["bol_pdf_result"] = pdf_result_all
+            st.session_state["bol_pdf_source_signature"] = _docx_result_signature(docx_result_all)
             _refresh_bundles()
+            progress_bar.empty()
+            progress_status.empty()
 
             if not pdf_result_all.conversion_available:
                 st.session_state["bol_generation_status"] = (
@@ -838,6 +951,27 @@ def render_bol_generator_view() -> None:
         st.caption(
             "Multistop downloads use grouped load/BOL folders for DOCX, PDF, and combined bundles."
         )
+
+    all_bundle_can_be_prepared = isinstance(bundle_result, StandardBundleResult) and (
+        bundle_result.docx_bundle is not None or bundle_result.pdf_bundle is not None
+    )
+    if not st.session_state.get("bol_all_files_bundle_requested", False):
+        st.caption("Download All Files is prepared only on request to keep DOCX/PDF generation responsive.")
+        if st.button(
+            "Prepare All Files Bundle",
+            disabled=not all_bundle_can_be_prepared,
+            use_container_width=True,
+        ):
+            st.session_state["bol_all_files_bundle_requested"] = True
+            bundle_result = _refresh_bundles()
+            all_bundle_bytes = None
+            if isinstance(bundle_result, StandardBundleResult):
+                if bundle_result.docx_bundle:
+                    docx_bundle_bytes = _read_file_bytes(bundle_result.docx_bundle.file_path)
+                if bundle_result.pdf_bundle:
+                    pdf_bundle_bytes = _read_file_bytes(bundle_result.pdf_bundle.file_path)
+                if bundle_result.all_files_bundle:
+                    all_bundle_bytes = _read_file_bytes(bundle_result.all_files_bundle.file_path)
 
     st.download_button(
         "Download DOCX Bundle",
