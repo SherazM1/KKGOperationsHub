@@ -508,7 +508,7 @@ def render_bol_generator_view() -> None:
 
     st.subheader("Batch Comment")
     st.caption("Optional comment for entire BOL program.")
-    batch_comment_input = st.text_area(
+    batch_comment_input = st.text_input(
         "Batch-level comment (optional)",
         key="bol_batch_comment_textarea",
         placeholder="Optional comment for the entire generated set.",
@@ -519,7 +519,7 @@ def render_bol_generator_view() -> None:
 
     st.subheader("Parse")
     parse_disabled = st.session_state["bol_uploaded_filename"] is None
-    if st.button("Parse Excel", type="primary", disabled=parse_disabled):
+    if st.button("Parse Excel", disabled=parse_disabled):
         st.session_state["bol_parse_requested"] = True
         st.session_state["bol_parse_error"] = None
         _clear_generation_state()
