@@ -35,9 +35,10 @@ def _draw_label_page(
     manual_item_number: str = "",
     manual_qty: str = "",
     manual_po_type: str = "",
+    qty_mode: str = "manual",
 ) -> None:
     item_number = manual_item_number.strip() or label.item_number
-    quantity = manual_qty.strip() or label.quantity
+    quantity = label.quantity if qty_mode == "auto" else manual_qty.strip()
     po_type = manual_po_type.strip() or label.carton_number
 
     c.setFillColorRGB(0, 0, 0)
@@ -125,6 +126,7 @@ def generate_albertsons_pdf(
     manual_item_number: str = "",
     manual_qty: str = "",
     manual_po_type: str = "",
+    qty_mode: str = "manual",
 ) -> bytes:
     if not labels:
         raise ValueError("No labels provided for PDF generation.")
@@ -133,8 +135,16 @@ def generate_albertsons_pdf(
     c = canvas.Canvas(buffer, pagesize=letter)
 
     for label in labels:
-        _draw_label_page(c, label, manual_item_number, manual_qty, manual_po_type)
-        c.showPage()
+        for _ in range(2):
+            _draw_label_page(
+                c,
+                label,
+                manual_item_number,
+                manual_qty,
+                manual_po_type,
+                qty_mode,
+            )
+            c.showPage()
 
     c.save()
     buffer.seek(0)

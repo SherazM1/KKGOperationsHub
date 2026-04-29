@@ -10,15 +10,15 @@ from app.models.albertsons_label import AlbertsonsLabel
 
 
 COLUMN_MAP = {
-    "ship_to_name": "Buying Party Name",
-    "ship_to_address": "Buying Party Address 1",
-    "ship_to_city": "Buying Party City",
-    "ship_to_state": "Buying Party State",
-    "ship_to_zip": "Buying Party Zip",
-    "po_number": "Purchase Order Number",
-    "item_number": "Item #",
-    "description": "Description",
-    "quantity": "Qty",
+    "ship_to_name": ["Buying Party Name"],
+    "ship_to_address": ["Buying Party Address 1"],
+    "ship_to_city": ["Buying Party City"],
+    "ship_to_state": ["Buying Party State"],
+    "ship_to_zip": ["Buying Party Zip"],
+    "po_number": ["Purchase Order Number"],
+    "item_number": ["Item #"],
+    "description": ["Description"],
+    "quantity": ["Quantity", "Qty", "QTY", "Qty."],
 }
 
 REQUIRED_LOGICAL_COLUMNS = {
@@ -33,20 +33,26 @@ REQUIRED_LOGICAL_COLUMNS = {
 
 
 def _normalize_header(header: str) -> str:
-    return header.strip().lower()
+    return "".join(char for char in header.strip().lower() if char.isalnum())
 
 
-def _resolve_columns(columns: list[str]) -> dict[str, str]:
+def _resolve_columns(columns: list[str], require_quantity: bool = False) -> dict[str, str]:
     normalized_to_actual = {_normalize_header(col): col for col in columns}
     resolved: dict[str, str] = {}
     missing: list[str] = []
 
-    for logical_name, expected_header in COLUMN_MAP.items():
-        normalized_expected = _normalize_header(expected_header)
-        if normalized_expected in normalized_to_actual:
-            resolved[logical_name] = normalized_to_actual[normalized_expected]
-        elif logical_name in REQUIRED_LOGICAL_COLUMNS:
-            missing.append(expected_header)
+    for logical_name, expected_headers in COLUMN_MAP.items():
+        for expected_header in expected_headers:
+            normalized_expected = _normalize_header(expected_header)
+            if normalized_expected in normalized_to_actual:
+                resolved[logical_name] = normalized_to_actual[normalized_expected]
+                break
+        else:
+            if logical_name in REQUIRED_LOGICAL_COLUMNS:
+                missing.append(expected_headers[0])
+
+    if require_quantity and "quantity" not in resolved:
+        missing.append("Quantity/Qty (required for Auto Qty from Excel)")
 
     if missing:
         raise ValueError("Missing required columns: " + ", ".join(missing))
@@ -60,13 +66,13 @@ def _coerce_to_string(value: Any) -> str:
     return str(value).strip()
 
 
-def read_excel_albertsons(file: Any) -> list[AlbertsonsLabel]:
+def read_excel_albertsons(file: Any, require_quantity: bool = False) -> list[AlbertsonsLabel]:
     df = pd.read_excel(file, dtype=str)
 
     if df.empty:
         raise ValueError("Excel file contains no rows.")
 
-    column_map = _resolve_columns(df.columns.tolist())
+    column_map = _resolve_columns(df.columns.tolist(), require_quantity=require_quantity)
     labels: list[AlbertsonsLabel] = []
 
     for index, row in df.iterrows():

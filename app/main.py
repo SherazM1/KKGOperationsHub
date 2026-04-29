@@ -270,17 +270,34 @@ def render_albertsons_mode() -> None:
             st.info("Upload an Excel file to begin.")
             return
 
-        labels = read_excel_albertsons(uploaded_file)
+        qty_mode_label = st.radio(
+            "Qty mode",
+            options=["Manual Qty", "Auto Qty from Excel"],
+            horizontal=True,
+            key="albertsons_qty_mode",
+            help=(
+                "Manual Qty applies one entered Qty to all Albertsons labels. "
+                "Auto Qty from Excel uses the Quantity/Qty column from each row."
+            ),
+        )
+        qty_mode = "auto" if qty_mode_label == "Auto Qty from Excel" else "manual"
+
+        labels = read_excel_albertsons(uploaded_file, require_quantity=qty_mode == "auto")
         st.success(f"Parsed {len(labels)} label rows.")
 
         manual_item_number = st.text_input(
             "Item #",
             key="albertsons_manual_item_number",
         )
-        manual_qty = st.text_input(
-            "Qty",
-            key="albertsons_manual_qty",
-        )
+        if qty_mode == "manual":
+            st.caption("Manual Qty applies one entered Qty to every generated Albertsons label.")
+            manual_qty = st.text_input(
+                "Qty",
+                key="albertsons_manual_qty",
+            )
+        else:
+            st.caption("Auto Qty uses the Quantity/Qty column from each Excel row.")
+            manual_qty = ""
         manual_po_type = st.text_input(
             "PO Type",
             key="albertsons_manual_po_type",
@@ -292,6 +309,7 @@ def render_albertsons_mode() -> None:
                 manual_item_number=manual_item_number,
                 manual_qty=manual_qty,
                 manual_po_type=manual_po_type,
+                qty_mode=qty_mode,
             )
             st.download_button(
                 label="Download Albertsons Labels",
