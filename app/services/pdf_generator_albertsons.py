@@ -14,13 +14,14 @@ from app.utils.formatting import sanitize_text
 PAGE_WIDTH, PAGE_HEIGHT = letter
 LEFT_MARGIN = 48
 RIGHT_MARGIN = 48
-ORDER_LABEL_FONT_SIZE = 16
-ORDER_VALUE_FONT_SIZE = 13
-ORDER_DESC_VALUE_FONT_SIZE = 12
+ORDER_LABEL_FONT_SIZE = 20
+ORDER_VALUE_FONT_SIZE = 18
+ORDER_DESC_VALUE_FONT_SIZE = 16
 ORDER_LABEL_X = LEFT_MARGIN
-ORDER_PO_VALUE_X = LEFT_MARGIN + 185
-ORDER_ITEM_VALUE_X = LEFT_MARGIN + 185
-ORDER_DESC_VALUE_X = LEFT_MARGIN + 90
+ORDER_PO_VALUE_X = LEFT_MARGIN + 205
+ORDER_ITEM_VALUE_X = LEFT_MARGIN + 82
+ORDER_DESC_VALUE_X = LEFT_MARGIN + 72
+ORDER_ROW_GAP = 34
 
 
 def _draw_divider(c: canvas.Canvas, y: float) -> None:
@@ -77,26 +78,34 @@ def _draw_label_page(
     divider_one_y = ship_block_top - 76
     _draw_divider(c, divider_one_y)
 
-    order_top_y = divider_one_y - 28
+    order_top_y = divider_one_y - 36
     c.setFont("Helvetica-Bold", ORDER_LABEL_FONT_SIZE)
     c.drawString(ORDER_LABEL_X, order_top_y, "PURCHASE ORDER#")
     c.setFont("Helvetica", ORDER_VALUE_FONT_SIZE)
     c.drawString(ORDER_PO_VALUE_X, order_top_y, sanitize_text(label.po_number))
 
     c.setFont("Helvetica-Bold", ORDER_LABEL_FONT_SIZE)
-    c.drawString(ORDER_LABEL_X, order_top_y - 22, "ITEM#")
+    c.drawString(ORDER_LABEL_X, order_top_y - ORDER_ROW_GAP, "ITEM#")
     c.setFont("Helvetica", ORDER_VALUE_FONT_SIZE)
-    c.drawString(ORDER_ITEM_VALUE_X, order_top_y - 22, sanitize_text(item_number))
+    c.drawString(ORDER_ITEM_VALUE_X, order_top_y - ORDER_ROW_GAP, sanitize_text(item_number))
 
     c.setFont("Helvetica-Bold", ORDER_LABEL_FONT_SIZE)
-    c.drawString(ORDER_LABEL_X, order_top_y - 44, "DESC")
+    c.drawString(ORDER_LABEL_X, order_top_y - (ORDER_ROW_GAP * 2), "DESC")
     c.setFont("Helvetica", ORDER_DESC_VALUE_FONT_SIZE)
-    c.drawString(ORDER_DESC_VALUE_X, order_top_y - 44, sanitize_text(label.description))
+    c.drawString(
+        ORDER_DESC_VALUE_X,
+        order_top_y - (ORDER_ROW_GAP * 2),
+        sanitize_text(label.description),
+    )
 
-    c.setFont("Helvetica-Bold", 15)
-    c.drawRightString(PAGE_WIDTH - RIGHT_MARGIN, order_top_y - 22, f"Qty {sanitize_text(quantity)}")
+    c.setFont("Helvetica-Bold", 18)
+    c.drawRightString(
+        PAGE_WIDTH - RIGHT_MARGIN,
+        order_top_y - ORDER_ROW_GAP,
+        f"Qty {sanitize_text(quantity)}",
+    )
 
-    divider_two_y = order_top_y - 64
+    divider_two_y = order_top_y - 98
     _draw_divider(c, divider_two_y)
 
     center_y = divider_two_y - 56

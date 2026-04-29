@@ -37,6 +37,46 @@ def _apply_theme_styles() -> None:
             padding: 1rem 1rem 0.35rem 1rem;
             margin-top: 0.5rem;
         }
+        div.stButton > button,
+        div.stDownloadButton > button,
+        button[data-testid="baseButton-primary"],
+        button[data-testid="baseButton-secondary"] {
+            background: #ffffff !important;
+            color: #1f2937 !important;
+            border: 1px solid #cbd5e1 !important;
+            box-shadow: none !important;
+        }
+        div.stButton > button:hover,
+        div.stDownloadButton > button:hover,
+        button[data-testid="baseButton-primary"]:hover,
+        button[data-testid="baseButton-secondary"]:hover {
+            background: #f3f4f6 !important;
+            color: #111827 !important;
+            border-color: #94a3b8 !important;
+        }
+        div.stButton > button:focus,
+        div.stDownloadButton > button:focus,
+        button[data-testid="baseButton-primary"]:focus,
+        button[data-testid="baseButton-secondary"]:focus {
+            box-shadow: 0 0 0 0.15rem rgba(148, 163, 184, 0.35) !important;
+            outline: none !important;
+        }
+        div.stButton > button:active,
+        div.stDownloadButton > button:active,
+        button[data-testid="baseButton-primary"]:active,
+        button[data-testid="baseButton-secondary"]:active {
+            background: #e5e7eb !important;
+            color: #111827 !important;
+            border-color: #64748b !important;
+        }
+        div.stButton > button:disabled,
+        div.stDownloadButton > button:disabled,
+        button[data-testid="baseButton-primary"]:disabled,
+        button[data-testid="baseButton-secondary"]:disabled {
+            background: #f8fafc !important;
+            color: #94a3b8 !important;
+            border-color: #e2e8f0 !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -336,6 +376,7 @@ def render_bol_generator() -> None:
 def main() -> None:
     """Run the Streamlit user interface."""
     st.set_page_config(page_title="Kendal King Operations Hub", layout="centered")
+    _apply_theme_styles()
 
     if "page" not in st.session_state:
         st.session_state["page"] = "home"
