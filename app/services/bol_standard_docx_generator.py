@@ -328,6 +328,21 @@ def _format_number(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else f"{value:.2f}".rstrip("0").rstrip(".")
 
 
+def _item_line_has_data(line: BolStandardItemLine) -> bool:
+    return any(
+        value.strip()
+        for value in (
+            line.pallet_qty,
+            line.po_number,
+            line.item_description,
+            line.item_number,
+            line.upc,
+            line.skids,
+            line.weight_each,
+        )
+    )
+
+
 def _format_ship_date_for_template(raw_ship_date: str) -> str:
     value = (raw_ship_date or "").strip()
     if not value:
@@ -368,7 +383,14 @@ def _populate_item_table(
     total_qty: float,
     *,
     compact_standard_item_area: bool = False,
+    filter_blank_item_lines: bool = False,
 ) -> None:
+    rendered_item_lines = (
+        [line for line in item_lines if _item_line_has_data(line)]
+        if filter_blank_item_lines
+        else item_lines
+    )
+
     header_idx = None
     item_row_indices: list[int] = []
     total_qty_idx = None
@@ -430,7 +452,7 @@ def _populate_item_table(
         for idx in sorted(rows_to_remove, reverse=True):
             table_xml.remove(table.rows[idx]._tr)
 
-        for idx, line in enumerate(item_lines):
+        for idx, line in enumerate(rendered_item_lines):
             new_tr = deepcopy(template_trs[idx % len(template_trs)])
             _replace_tokens_in_row_element(new_tr, _item_row_replacements(line))
             anchor_tr.addprevious(new_tr)
@@ -438,15 +460,17 @@ def _populate_item_table(
         empty_item_replacements = {token: "" for token in ITEM_PLACEHOLDER_TOKENS}
         for template_idx, row_idx in enumerate(contiguous_item_row_indices):
             row_tr = table.rows[row_idx]._tr
-            if template_idx < len(item_lines):
+            if template_idx < len(rendered_item_lines):
                 _replace_tokens_in_row_element(
-                    row_tr, _item_row_replacements(item_lines[template_idx])
+                    row_tr, _item_row_replacements(rendered_item_lines[template_idx])
                 )
             else:
                 _replace_tokens_in_row_element(row_tr, empty_item_replacements)
 
-        if len(item_lines) > len(contiguous_item_row_indices):
-            for idx, line in enumerate(item_lines[len(contiguous_item_row_indices):], start=0):
+        if len(rendered_item_lines) > len(contiguous_item_row_indices):
+            for idx, line in enumerate(
+                rendered_item_lines[len(contiguous_item_row_indices):], start=0
+            ):
                 new_tr = deepcopy(template_trs[idx % len(template_trs)])
                 _replace_tokens_in_row_element(new_tr, _item_row_replacements(line))
                 anchor_tr.addprevious(new_tr)
@@ -471,8 +495,8 @@ def _populate_item_table(
         raise ValueError("Could not locate the TOTALS row in the DOCX template.")
 
     if compact_standard_item_area:
-        item_start_idx = totals_anchor_idx - len(item_lines)
-        for line_offset, line in enumerate(item_lines):
+        item_start_idx = totals_anchor_idx - len(rendered_item_lines)
+        for line_offset, line in enumerate(rendered_item_lines):
             row_idx = item_start_idx + line_offset
             if row_idx <= header_idx or row_idx >= len(table.rows):
                 continue
@@ -491,9 +515,16 @@ def _populate_item_table(
                 if col_idx < len(row_cells):
                     row_cells[col_idx].text = line.weight_each
 
+    total_pallet_qty_value = 0.0
     total_skids_value = 0.0
     total_weight_value = 0.0
-    for line in item_lines:
+    has_pallet_qty_value = False
+    for line in rendered_item_lines:
+        numeric_pallet_qty = _parse_numeric(line.pallet_qty)
+        if numeric_pallet_qty is not None:
+            total_pallet_qty_value += numeric_pallet_qty
+            has_pallet_qty_value = True
+
         numeric_skids = _parse_numeric(line.skids)
         if numeric_skids is not None:
             total_skids_value += numeric_skids
@@ -502,7 +533,11 @@ def _populate_item_table(
         if numeric_weight is not None:
             total_weight_value += numeric_weight
 
-    total_qty_display = _total_qty_display(total_qty)
+    total_qty_display = (
+        _format_number(total_pallet_qty_value)
+        if filter_blank_item_lines and has_pallet_qty_value
+        else _total_qty_display(total_qty)
+    )
     total_skids_display = _format_number(total_skids_value)
     total_weight_display = _format_number(total_weight_value)
 
@@ -663,6 +698,7 @@ def _apply_template_record_values(
     batch_comment: str | None,
     *,
     compact_standard_item_area: bool = False,
+    filter_blank_item_lines: bool = False,
 ) -> list[str]:
     notices: list[str] = []
     replacements = {
@@ -716,6 +752,7 @@ def _apply_template_record_values(
                 record.item_lines,
                 record.total_skids,
                 compact_standard_item_area=compact_standard_item_area,
+                filter_blank_item_lines=filter_blank_item_lines,
             )
             return notices
         except ValueError as exc:
@@ -772,13 +809,15 @@ def generate_standard_docx_set(
         try:
             doc = Document(str(resolved_template))
             is_standard_template = resolved_template.name == STANDARD_TEMPLATE_PATH.name
+            is_no_recourse_template = resolved_template.name == NO_RECOURSE_TEMPLATE_PATH.name
             resolved_comment = _resolve_comment_for_record(record.comments, batch_comment)
             record_notices = _apply_template_record_values(
                 doc,
                 record,
                 selected_facility,
                 batch_comment,
-                compact_standard_item_area=is_standard_template,
+                compact_standard_item_area=is_standard_template or is_no_recourse_template,
+                filter_blank_item_lines=is_no_recourse_template,
             )
 
             safe_bol = _sanitize_filename_part(record.bol_number)
