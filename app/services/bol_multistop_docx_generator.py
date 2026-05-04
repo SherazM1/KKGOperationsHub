@@ -263,6 +263,44 @@ def _set_unique_cell_text(
     _set_cell_text(cell, value, font_points=font_points, align_center=align_center)
 
 
+def _set_reference_field_cell_text(
+    cell,
+    value: str,
+    *,
+    font_points: float = 9.0,
+    align_center: bool = False,
+) -> None:
+    cell.text = value
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    for paragraph in cell.paragraphs:
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER if align_center else None
+        paragraph.paragraph_format.space_before = Pt(0)
+        paragraph.paragraph_format.space_after = Pt(0)
+        paragraph.paragraph_format.line_spacing = 1.0
+        for run in paragraph.runs:
+            run.font.name = "Arial"
+            run.font.size = Pt(font_points)
+            run.bold = False
+
+
+def _set_unique_reference_field_text(
+    row,
+    cell_index: int,
+    value: str,
+    *,
+    font_points: float = 9.0,
+    align_center: bool = False,
+) -> None:
+    if cell_index >= len(row.cells):
+        return
+    _set_reference_field_cell_text(
+        row.cells[cell_index],
+        value,
+        font_points=font_points,
+        align_center=align_center,
+    )
+
+
 def _clear_row_text(row) -> None:
     seen_cells = set()
     for cell in row.cells:
@@ -664,11 +702,11 @@ def _populate_combined_bill_to_block(doc: Document, record: BolMultistopRecord) 
             target_row_idx = bill_to_row_idx + offset
             if target_row_idx >= len(table.rows):
                 break
-            _set_unique_cell_text(
+            _set_unique_reference_field_text(
                 table.rows[target_row_idx],
                 bill_to_cell_idx,
                 line,
-                font_points=8.5,
+                font_points=9.0,
                 align_center=False,
             )
         return True
@@ -686,8 +724,14 @@ def _fit_combined_bol_number(doc: Document, bol_number: str) -> bool:
                 if cell.text.strip() != bol_number:
                     continue
 
-                font_points = 8.0 if len(bol_number.strip()) <= 16 else 7.0
-                _set_unique_cell_text(
+                bol_length = len(bol_number.strip())
+                font_points = 9.0
+                if bol_length > 22:
+                    font_points = 8.0
+                elif bol_length > 16:
+                    font_points = 8.5
+
+                _set_unique_reference_field_text(
                     row,
                     cell_idx,
                     bol_number,
