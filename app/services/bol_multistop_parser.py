@@ -48,6 +48,10 @@ REQUIRED_COLUMN_SPECS: dict[str, str] = {
     "weight": "Weight",
 }
 
+OPTIONAL_COLUMN_SPECS: dict[str, tuple[str, ...]] = {
+    "item_number": ("ITEM #", "Item #", "ITEM#", "Item#", "Item Number", "ITEM NUMBER"),
+}
+
 
 def _normalize_header(header: str) -> str:
     cleaned = str(header).strip()
@@ -173,6 +177,33 @@ def _resolve_columns(columns: list[str], worksheet_name: str) -> dict[str, str]:
     return resolved
 
 
+def _resolve_optional_columns(columns: list[str]) -> dict[str, str]:
+    resolved_columns = [str(col) for col in columns]
+    exact_columns = {col: col for col in resolved_columns}
+    lowered_exact_columns = {col.lower(): col for col in resolved_columns}
+    normalized_columns = {_normalize_header_for_fallback(col): col for col in resolved_columns}
+    compact_columns = {_normalize_header_compact(col): col for col in resolved_columns}
+
+    resolved: dict[str, str] = {}
+    for logical_name, candidate_names in OPTIONAL_COLUMN_SPECS.items():
+        for candidate_name in candidate_names:
+            resolved_name = exact_columns.get(candidate_name)
+            if resolved_name is None:
+                resolved_name = lowered_exact_columns.get(candidate_name.lower())
+            if resolved_name is None:
+                resolved_name = normalized_columns.get(
+                    _normalize_header_for_fallback(candidate_name)
+                )
+            if resolved_name is None:
+                resolved_name = compact_columns.get(_normalize_header_compact(candidate_name))
+
+            if resolved_name is not None:
+                resolved[logical_name] = resolved_name
+                break
+
+    return resolved
+
+
 def _coerce_to_string(value: Any) -> str:
     if pd.isna(value):
         return ""
@@ -207,7 +238,9 @@ def parse_multistop_bol_excel(file: Any) -> list[BolMultistopRow]:
     if df.empty:
         raise ValueError(f"Worksheet '{resolved_sheet_name}' contains no rows.")
 
-    column_map = _resolve_columns(df.columns.tolist(), worksheet_name=resolved_sheet_name)
+    columns = df.columns.tolist()
+    column_map = _resolve_columns(columns, worksheet_name=resolved_sheet_name)
+    optional_column_map = _resolve_optional_columns(columns)
 
     parsed_rows: list[BolMultistopRow] = []
     for index, row in df.iterrows():
@@ -215,6 +248,10 @@ def parse_multistop_bol_excel(file: Any) -> list[BolMultistopRow]:
         row_values = {
             key: _coerce_to_string(row[source_column])
             for key, source_column in column_map.items()
+        }
+        optional_row_values = {
+            key: _coerce_to_string(row[source_column])
+            for key, source_column in optional_column_map.items()
         }
 
         if not any(row_values.values()):
@@ -240,6 +277,7 @@ def parse_multistop_bol_excel(file: Any) -> list[BolMultistopRow]:
                 dc_zip=row_values["dc_zip"],
                 dc_number=row_values["dc_number"],
                 target_po_number=row_values["target_po_number"],
+                item_number=optional_row_values.get("item_number", ""),
                 upc=row_values["upc"],
                 pallet_description=row_values["pallet_description"],
                 cases=row_values["cases"],

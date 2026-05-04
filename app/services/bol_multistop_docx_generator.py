@@ -225,6 +225,30 @@ def _set_cell_text(cell, value: str, *, font_points: float = 8.5, align_center: 
             run.font.size = Pt(font_points)
 
 
+def _format_multistop_item_description(
+    description: str,
+    item_number: str,
+    upc: str,
+) -> str:
+    description_value = (description or "").strip()
+    detail_parts: list[str] = []
+    item_number_value = (item_number or "").strip()
+    upc_value = (upc or "").strip()
+
+    if item_number_value:
+        detail_parts.append(f"Item #: {item_number_value}")
+    if upc_value:
+        detail_parts.append(f"UPC #: {upc_value}")
+
+    if not detail_parts:
+        return description_value
+
+    detail_line = "    ".join(detail_parts)
+    if description_value:
+        return f"{description_value}\n{detail_line}"
+    return detail_line
+
+
 def _set_unique_cell_text(
     row,
     cell_index: int,
@@ -412,7 +436,11 @@ def _clean_standard_individual_stop_item_area(doc: Document, stop) -> None:
         _set_unique_cell_text(
             item_row,
             5,
-            stop.pallet_description,
+            _format_multistop_item_description(
+                stop.pallet_description,
+                stop.item_number,
+                stop.upc,
+            ),
             font_points=8.5,
             align_center=False,
         )
@@ -472,7 +500,11 @@ def _clean_no_recourse_individual_stop_item_area(doc: Document, stop) -> None:
         _set_unique_cell_text(
             item_row,
             5,
-            stop.pallet_description,
+            _format_multistop_item_description(
+                stop.pallet_description,
+                stop.item_number,
+                stop.upc,
+            ),
             font_points=8.5,
             align_center=False,
         )
@@ -533,6 +565,22 @@ def _clean_combined_multistop_item_area(doc: Document, record: BolMultistopRecor
         if totals_idx is None:
             return
 
+        for stop_offset, stop in enumerate(record.stops):
+            row_idx = header_idx + 1 + stop_offset
+            if row_idx >= totals_idx:
+                break
+            _set_unique_cell_text(
+                table.rows[row_idx],
+                6,
+                _format_multistop_item_description(
+                    stop.pallet_description,
+                    stop.item_number,
+                    stop.upc,
+                ),
+                font_points=8.5,
+                align_center=False,
+            )
+
         totals_row = table.rows[totals_idx]
         _set_row_height(totals_row, 430, exact=False)
         _compact_row_text(totals_row, 8.5)
@@ -589,6 +637,68 @@ def _populate_ship_from_block(doc: Document, selected_facility: BolFacilityRecor
     return False
 
 
+def _populate_combined_bill_to_block(doc: Document, record: BolMultistopRecord) -> bool:
+    bill_to_lines = [
+        record.bill_to.company,
+        record.bill_to.street,
+        record.bill_to.city_state_zip,
+        f"Attn: {record.bill_to.attn}".rstrip(),
+    ]
+
+    for table in doc.tables:
+        bill_to_row_idx = None
+        bill_to_cell_idx = None
+        for row_idx, row in enumerate(table.rows):
+            for cell_idx, cell in _row_unique_cells(row):
+                if "BILL TO:" in cell.text.upper():
+                    bill_to_row_idx = row_idx
+                    bill_to_cell_idx = cell_idx
+                    break
+            if bill_to_row_idx is not None:
+                break
+
+        if bill_to_row_idx is None or bill_to_cell_idx is None:
+            continue
+
+        for offset, line in enumerate(bill_to_lines, start=1):
+            target_row_idx = bill_to_row_idx + offset
+            if target_row_idx >= len(table.rows):
+                break
+            _set_unique_cell_text(
+                table.rows[target_row_idx],
+                bill_to_cell_idx,
+                line,
+                font_points=8.5,
+                align_center=False,
+            )
+        return True
+
+    return False
+
+
+def _fit_combined_bol_number(doc: Document, bol_number: str) -> bool:
+    if not (bol_number or "").strip():
+        return False
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell_idx, cell in _row_unique_cells(row):
+                if cell.text.strip() != bol_number:
+                    continue
+
+                font_points = 8.0 if len(bol_number.strip()) <= 16 else 7.0
+                _set_unique_cell_text(
+                    row,
+                    cell_idx,
+                    bol_number,
+                    font_points=font_points,
+                    align_center=True,
+                )
+                return True
+
+    return False
+
+
 def _template_replacements(record: BolMultistopRecord) -> dict[str, str]:
     replacements = {
         _tok("BOL_"): record.bol_number,
@@ -606,19 +716,43 @@ def _template_replacements(record: BolMultistopRecord) -> dict[str, str]:
         _tok("DC_1"): record.dc_1,
         _tok("CASE_1"): record.case_1,
         _tok("PO_1"): record.po_1,
-        _tok("Pallet_Description_1"): record.pallet_description_1,
+        _tok("Pallet_Description_1"): (
+            _format_multistop_item_description(
+                record.stops[0].pallet_description,
+                record.stops[0].item_number,
+                record.stops[0].upc,
+            )
+            if len(record.stops) > 0
+            else ""
+        ),
         _tok("PLT_1"): record.plt_1,
         _tok("WEIGHT_1"): record.weight_1,
         _tok("DC_2"): record.dc_2,
         _tok("CASE_2"): record.case_2,
         _tok("PO_2"): record.po_2,
-        _tok("Pallet_Description_2"): record.pallet_description_2,
+        _tok("Pallet_Description_2"): (
+            _format_multistop_item_description(
+                record.stops[1].pallet_description,
+                record.stops[1].item_number,
+                record.stops[1].upc,
+            )
+            if len(record.stops) > 1
+            else ""
+        ),
         _tok("PLT_2"): record.plt_2,
         _tok("WEIGHT_2"): record.weight_2,
         _tok("DC_3"): record.dc_3,
         _tok("CASE_3"): record.case_3,
         _tok("PO_3"): record.po_3,
-        _tok("Pallet_Description_3"): record.pallet_description_3,
+        _tok("Pallet_Description_3"): (
+            _format_multistop_item_description(
+                record.stops[2].pallet_description,
+                record.stops[2].item_number,
+                record.stops[2].upc,
+            )
+            if len(record.stops) > 2
+            else ""
+        ),
         _tok("PLT_3"): record.plt_3,
         _tok("WEIGHT_3"): record.weight_3,
         _tok("Total_Case"): _format_number(record.total_case),
@@ -654,9 +788,13 @@ def _build_individual_stop_standard_record(
                 pallet_qty=stop.cases,
                 type="PLT",
                 po_number=stop.target_po_number,
-                item_description=stop.pallet_description,
-                item_number="",
-                upc="",
+                item_description=_format_multistop_item_description(
+                    stop.pallet_description,
+                    stop.item_number,
+                    stop.upc,
+                ),
+                item_number=stop.item_number,
+                upc=stop.upc,
                 skids=stop.total_pallets,
                 weight_each=stop.weight,
             )
@@ -685,6 +823,7 @@ def _save_multistop_docx(
     doc = Document(str(resolved_template))
     _tighten_multistop_template_rows(doc)
     _replace_text_in_document(doc, replacements, include_xml_tree=True)
+    _fit_combined_bol_number(doc, record.bol_number)
     _clean_combined_multistop_item_area(doc, record)
     for table in doc.tables:
         format_bol_item_detail_table(table)
@@ -694,6 +833,14 @@ def _save_multistop_docx(
             DocxGenerationNotice(
                 bol_number=bol_label,
                 message="Could not confirm ship-from block location in template.",
+            )
+        )
+    bill_to_populated = _populate_combined_bill_to_block(doc, record)
+    if not bill_to_populated:
+        notices.append(
+            DocxGenerationNotice(
+                bol_number=bol_label,
+                message="Could not confirm combined Bill To block location in template.",
             )
         )
 

@@ -27,6 +27,7 @@ class BolMultistopRow:
     dc_zip: str
     dc_number: str
     target_po_number: str
+    item_number: str
     upc: str
     pallet_description: str
     cases: str

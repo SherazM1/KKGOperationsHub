@@ -128,6 +128,8 @@ def _build_stop(row: BolMultistopRow, stop_number: int) -> BolMultistopStop:
         cases=row.cases,
         target_po_number=row.target_po_number,
         pallet_description=row.pallet_description,
+        item_number=row.item_number,
+        upc=row.upc,
         total_pallets=row.total_pallets,
         weight=row.weight,
     )
@@ -168,7 +170,7 @@ def _build_item_lines(stops: list[BolMultistopStop], rows_by_stop: dict[int, Bol
                 type="PLT",
                 po_number=stop.target_po_number,
                 item_description=stop.pallet_description,
-                item_number=source_row.upc,
+                item_number=source_row.item_number,
                 upc=source_row.upc,
                 skids=stop.total_pallets,
                 weight_each=source_row.weight_each or stop.weight,

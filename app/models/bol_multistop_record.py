@@ -20,6 +20,8 @@ class BolMultistopStop:
     cases: str
     target_po_number: str
     pallet_description: str
+    item_number: str
+    upc: str
     total_pallets: str
     weight: str
 
