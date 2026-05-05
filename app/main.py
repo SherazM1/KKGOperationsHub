@@ -374,6 +374,9 @@ def render_home() -> None:
     if st.button("BOL Generator", use_container_width=True):
         st.session_state["page"] = "bol_generator"
 
+    if st.button("SKID Tags (Coming Soon)", disabled=True, use_container_width=True):
+        st.session_state["page"] = "skid_tags"
+
     st.markdown("---")
 
     st.subheader("Coming Soon")
