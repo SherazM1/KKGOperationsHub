@@ -15,15 +15,16 @@ from app.utils.formatting import sanitize_text
 
 PAGE_WIDTH = 4 * inch
 PAGE_HEIGHT = 6 * inch
-LEFT_MARGIN = 14
-RIGHT_MARGIN = 14
+LEFT_MARGIN = 11.735
+RIGHT_MARGIN = 14.135
 CENTER_X = PAGE_WIDTH / 2
 PRINT_WIDTH = PAGE_WIDTH - LEFT_MARGIN - RIGHT_MARGIN
+LABEL_RIGHT_X = 273.865
 
 
 def _draw_line(c: canvas.Canvas, y: float, line_width: float = 1.0) -> None:
     c.setLineWidth(line_width)
-    c.line(LEFT_MARGIN, y, PAGE_WIDTH - RIGHT_MARGIN, y)
+    c.line(LEFT_MARGIN, y, LABEL_RIGHT_X, y)
 
 
 def _draw_underlined_string(
@@ -129,6 +130,30 @@ def _draw_fitted_string(
     c.drawString(x, y, clean)
 
 
+def _draw_centered_fitted_string(
+    c: canvas.Canvas,
+    center_x: float,
+    y: float,
+    text: str,
+    max_width: float,
+    *,
+    font_name: str = "Helvetica",
+    font_size: float = 12,
+    min_font_size: float = 6,
+) -> None:
+    clean = sanitize_text(text)
+    current_size = font_size
+    while (
+        current_size > min_font_size
+        and c.stringWidth(clean, font_name, current_size) > max_width
+    ):
+        current_size -= 0.5
+
+    c.setFont(font_name, current_size)
+    width = c.stringWidth(clean, font_name, current_size)
+    c.drawString(center_x - (width / 2), y, clean)
+
+
 def _create_fitted_barcode(
     data: str,
     *,
@@ -172,28 +197,27 @@ def _draw_label_page(
     c.setFillColorRGB(0, 0, 0)
     c.setStrokeColorRGB(0, 0, 0)
 
-    top_y = PAGE_HEIGHT - 19
-    c.setFont("Helvetica-Bold", 10)
-    c.drawString(LEFT_MARGIN, top_y, "SHIP FROM: KENDAL KING")
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(12.358, 408.10, "SHIP FROM: KENDAL KING")
 
-    client_x = PAGE_WIDTH - RIGHT_MARGIN - 78
-    _draw_underlined_string(c, client_x, top_y, "CLIENT", font_size=10)
+    _draw_underlined_string(c, 163.27, 408.10, "CLIENT", font_size=12, underline_gap=1.35)
     _draw_fitted_string(
         c,
-        client_x,
-        top_y - 15,
+        163.07,
+        393.00,
         label.client,
-        PAGE_WIDTH - RIGHT_MARGIN - client_x,
-        font_size=8.5,
+        107.5,
+        font_size=12,
         min_font_size=6,
     )
 
-    c.setFont("Helvetica", 8.8)
-    c.drawString(LEFT_MARGIN, top_y - 19, f"C/O: {sanitize_text(ship_from['care_of'])}")
-    c.drawString(LEFT_MARGIN, top_y - 33, sanitize_text(ship_from["address"]))
+    c.setFont("Helvetica", 12)
+    c.drawString(12.358, 390.09, "C/O:")
+    _draw_fitted_string(c, 37.553, 390.00, ship_from["care_of"], 121.24, font_size=12)
+    _draw_fitted_string(c, 12.454, 371.97, ship_from["address"], 146.34, font_size=12)
     c.drawString(
-        LEFT_MARGIN,
-        top_y - 47,
+        12.454,
+        353.97,
         (
             f"{sanitize_text(ship_from['city'])}, "
             f"{sanitize_text(ship_from['state'])} "
@@ -201,109 +225,107 @@ def _draw_label_page(
         ),
     )
 
-    _draw_line(c, top_y - 62, 0.9)
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(15.951, 325.16, "BRAND")
+    _draw_fitted_string(c, 70.0, 325.16, label.brand, 196.0, font_size=12, min_font_size=6)
 
-    field_y = top_y - 83
-    _draw_label_value(c, "BRAND", label.brand, LEFT_MARGIN, field_y, LEFT_MARGIN + 48, 102)
-
-    desc_y = field_y - 27
-    c.setFont("Helvetica-Bold", 9.5)
-    c.drawString(LEFT_MARGIN, desc_y, "DESC")
-    _draw_wrapped_text(
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(15.951, 301.13, "DESC")
+    _draw_fitted_string(
         c,
+        59.372,
+        302.93,
         label.description,
-        LEFT_MARGIN + 42,
-        desc_y,
-        PRINT_WIDTH - 42,
-        font_size=8.5,
-        line_height=9.8,
-        max_lines=2,
+        206.69,
+        font_size=12,
+        min_font_size=6,
     )
 
-    qty_y = desc_y - 43
-    _draw_label_value(
-        c,
-        "ORDER QTY",
-        label.ordered_quantity,
-        LEFT_MARGIN,
-        qty_y,
-        LEFT_MARGIN + 64,
-        54,
-    )
-    _draw_label_value(
-        c,
-        "UOM",
-        label.unit_of_measure,
-        LEFT_MARGIN + 154,
-        qty_y,
-        LEFT_MARGIN + 185,
-        72,
-    )
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(14.945, 279.02, "ORDER QTY")
+    _draw_fitted_string(c, 87.273, 278.92, label.ordered_quantity, 31.76, font_size=12, min_font_size=6)
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(124.97, 279.02, "UOM")
+    _draw_fitted_string(c, 155.60, 278.92, label.unit_of_measure, 106.87, font_size=12, min_font_size=6)
 
-    _draw_line(c, qty_y - 16, 0.9)
-
-    po_top_y = qty_y - 36
-    c.setFont("Helvetica-Bold", 10)
-    c.drawString(LEFT_MARGIN, po_top_y, "PO NAME")
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(12.646, 249.01, "PO NAME")
     _draw_wrapped_text(
         c,
         label.po_name,
-        LEFT_MARGIN,
-        po_top_y - 14,
-        122,
-        font_size=8.3,
-        line_height=9.5,
+        12.454,
+        230.89,
+        114.05,
+        font_size=12,
+        line_height=14.65,
         max_lines=2,
     )
 
-    po_number_center_x = LEFT_MARGIN + 197
+    po_number_center_x = 205.575
     po_number_label = "PO NUMBER"
-    po_number_width = c.stringWidth(po_number_label, "Helvetica-Bold", 10)
-    _draw_underlined_string(
-        c,
-        po_number_center_x - (po_number_width / 2),
-        po_top_y,
-        po_number_label,
-        font_size=10,
-    )
+    _draw_underlined_string(c, 174.33, 249.01, po_number_label, font_size=12, underline_gap=1.37)
 
     po_barcode = _create_fitted_barcode(
         label.po_number,
-        target_width=116,
-        bar_height=34,
-        max_bar_width=0.86,
-        min_bar_width=0.44,
+        target_width=118.33,
+        bar_height=49.87,
+        max_bar_width=0.94,
+        min_bar_width=0.40,
     )
     po_barcode_x = po_number_center_x - (po_barcode.width / 2)
-    po_barcode_y = po_top_y - 50
+    po_barcode_y = 193.37
     renderPDF.draw(po_barcode, c, po_barcode_x, po_barcode_y)
 
-    c.setFont("Helvetica", 7.8)
-    po_text = sanitize_text(label.po_number)
-    po_text_width = c.stringWidth(po_text, "Helvetica", 7.8)
-    c.drawString(po_number_center_x - (po_text_width / 2), po_barcode_y - 10, po_text)
+    c.setFillColorRGB(1, 1, 1)
+    c.rect(144.63, 190.03, 121.74, 17.212, stroke=0, fill=1)
+    c.setFillColorRGB(0, 0, 0)
+    _draw_centered_fitted_string(
+        c,
+        po_number_center_x,
+        194.88,
+        label.po_number,
+        82,
+        font_name="Helvetica-Bold",
+        font_size=12,
+        min_font_size=6,
+    )
 
-    upc_divider_y = 133
-    _draw_line(c, upc_divider_y, 0.9)
+    _draw_centered_underlined_string(
+        c,
+        CENTER_X,
+        173.97,
+        "UPC",
+        font_size=12,
+        underline_gap=1.37,
+    )
 
-    upc_label_y = upc_divider_y - 21
-    _draw_centered_underlined_string(c, CENTER_X, upc_label_y, "UPC", font_size=11)
+    c.setLineWidth(0.7)
+    c.line(11.855, 165.16, 268.905, 165.16)
 
     upc_barcode = _create_fitted_barcode(
         label.upc,
-        target_width=PRINT_WIDTH * 0.96,
-        bar_height=55,
-        max_bar_width=1.28,
-        min_bar_width=0.58,
+        target_width=253.51,
+        bar_height=106.97,
+        max_bar_width=2.12,
+        min_bar_width=0.60,
     )
-    upc_barcode_x = (PAGE_WIDTH - upc_barcode.width) / 2
-    upc_barcode_y = 44
+    upc_barcode_x = 15.927 + ((253.51 - upc_barcode.width) / 2)
+    upc_barcode_y = 55.33
     renderPDF.draw(upc_barcode, c, upc_barcode_x, upc_barcode_y)
 
-    c.setFont("Helvetica", 9)
-    upc_text = sanitize_text(label.upc)
-    upc_text_width = c.stringWidth(upc_text, "Helvetica", 9)
-    c.drawString(CENTER_X - (upc_text_width / 2), upc_barcode_y - 13, upc_text)
+    c.setFillColorRGB(1, 1, 1)
+    c.rect(11.951, 51.95, 261.58, 17.212, stroke=0, fill=1)
+    c.setFillColorRGB(0, 0, 0)
+    _draw_centered_fitted_string(
+        c,
+        CENTER_X,
+        56.80,
+        label.upc,
+        100,
+        font_name="Helvetica-Bold",
+        font_size=12,
+        min_font_size=6,
+    )
 
 
 def generate_andersons_pdf(
