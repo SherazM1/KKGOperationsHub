@@ -256,7 +256,7 @@ def _draw_top_section(
         f"QTY: {sanitize_text(top_label.quantity)}",
     )
 
-    desc_y = info_y - 2
+    desc_y = info_y - 14
     c.setFont("Helvetica", 7.8)
     desc_end_y = _draw_wrapped(
         c,
@@ -267,7 +267,7 @@ def _draw_top_section(
         font_name="Helvetica",
         font_size=7.8,
         line_height=8.6,
-        max_lines=2,
+        max_lines=1,
         wrap_cache=wrap_cache,
     )
 
@@ -282,7 +282,7 @@ def _draw_top_section(
             barcode_cache=barcode_cache,
         )
         top_barcode_x = (PAGE_WIDTH - top_barcode.width) / 2
-        top_barcode_bottom = min(desc_end_y - 38, info_y - 31)
+        top_barcode_bottom = min(desc_end_y - 30, info_y - 49)
         renderPDF.draw(top_barcode, c, top_barcode_x, top_barcode_bottom)
         c.setFont("Helvetica", 8.8)
         c.drawCentredString(PAGE_WIDTH / 2, top_barcode_bottom - 11, barcode_value)
