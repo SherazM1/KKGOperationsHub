@@ -197,24 +197,24 @@ def _draw_label_page(
     c.setFillColorRGB(0, 0, 0)
     c.setStrokeColorRGB(0, 0, 0)
 
-    c.setFont("Helvetica-Bold", 12)
+    c.setFont("Helvetica-Bold", 11)
     c.drawString(12.358, 408.10, "SHIP FROM: KENDAL KING")
 
-    _draw_underlined_string(c, 163.27, 408.10, "CLIENT", font_size=12, underline_gap=1.35)
+    _draw_underlined_string(c, 180.00, 408.10, "CLIENT", font_size=12, underline_gap=1.35)
     _draw_fitted_string(
         c,
-        163.07,
+        180.00,
         393.00,
         label.client,
-        107.5,
+        93.5,
         font_size=12,
         min_font_size=6,
     )
 
     c.setFont("Helvetica", 12)
     c.drawString(12.358, 390.09, "C/O:")
-    _draw_fitted_string(c, 37.553, 390.00, ship_from["care_of"], 121.24, font_size=12)
-    _draw_fitted_string(c, 12.454, 371.97, ship_from["address"], 146.34, font_size=12)
+    _draw_fitted_string(c, 37.553, 390.00, ship_from["care_of"], 127.00, font_size=12)
+    _draw_fitted_string(c, 12.454, 371.97, ship_from["address"], 151.00, font_size=12)
     c.drawString(
         12.454,
         353.97,
