@@ -23,6 +23,7 @@ from app.services.pdf_generator_sams import generate_sams_pdf
 from app.services.pdf_generator_sams_gci import generate_sams_gci_pdf
 from app.services.pdf_generator_skid_tags import generate_skid_tags_pdf
 from app.ui.bol_generator import render_bol_generator_view
+from app.ui.truck_inventory import render_truck_inventory_view
 
 
 def _apply_theme_styles() -> None:
@@ -440,7 +441,7 @@ def render_home() -> None:
     if st.button("SKID Tags", use_container_width=True):
         st.session_state["page"] = "skid_tags"
 
-    if st.button("Truck Inventory (Coming Soon)", disabled=True, use_container_width=True):
+    if st.button("Truck Inventory", use_container_width=True):
         st.session_state["page"] = "inventory"
 
 
@@ -571,6 +572,10 @@ def main() -> None:
         render_bol_generator()
     elif st.session_state["page"] == "skid_tags":
         render_skid_tags()
+    elif st.session_state["page"] == "inventory":
+        _apply_theme_styles()
+        render_hub_header()
+        render_truck_inventory_view()
 
 
 if __name__ == "__main__":
