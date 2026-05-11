@@ -11,62 +11,101 @@ class TruckPreset:
 
     name: str
     pallet_capacity: float  # Legacy display value retained for compatibility.
-    length_ft: int
-    width_ft: int
-    height_ft: int
+    length_in: float
+    width_in: float
+    height_in: float
     max_weight_lbs: float
+    operational_weight_threshold_lbs: float
     description: str
 
     @property
-    def length_in(self) -> float:
-        return self.length_ft * 12.0
+    def length_ft(self) -> float:
+        return self.length_in / 12.0
 
     @property
-    def width_in(self) -> float:
-        return self.width_ft * 12.0
+    def width_ft(self) -> float:
+        return self.width_in / 12.0
 
     @property
-    def height_in(self) -> float:
-        return self.height_ft * 12.0
+    def height_ft(self) -> float:
+        return self.height_in / 12.0
 
 
 # Standard truck presets
 TRUCK_PRESETS = {
-    "53ft_dry_van": TruckPreset(
-        name="53 ft Dry Van",
+    "dry_van": TruckPreset(
+        name="Dry Van",
         pallet_capacity=26.0,
-        length_ft=53,
-        width_ft=8,
-        height_ft=9,
+        length_in=636.0,
+        width_in=96.0,
+        height_in=102.0,
         max_weight_lbs=45000.0,
-        description="Standard 53ft dry trailer",
+        operational_weight_threshold_lbs=45000.0,
+        description="Dry van trailer",
     ),
-    "48ft_trailer": TruckPreset(
-        name="48 ft Trailer",
-        pallet_capacity=24.0,
-        length_ft=48,
-        width_ft=8,
-        height_ft=9,
-        max_weight_lbs=45000.0,
-        description="48ft dry trailer",
+    "reefer": TruckPreset(
+        name="Reefer",
+        pallet_capacity=22.0,
+        length_in=515.75,
+        width_in=90.0,
+        height_in=96.0,
+        max_weight_lbs=43000.0,
+        operational_weight_threshold_lbs=43000.0,
+        description="Refrigerated trailer",
     ),
-    "half_truck": TruckPreset(
-        name="Half Truck",
+    "box_truck_26ft": TruckPreset(
+        name="Standard 26 Foot Box Truck",
         pallet_capacity=13.0,
-        length_ft=26,
-        width_ft=8,
-        height_ft=9,
-        max_weight_lbs=22500.0,
-        description="Half truck",
+        length_in=312.0,
+        width_in=96.0,
+        height_in=84.0,
+        max_weight_lbs=8700.0,
+        operational_weight_threshold_lbs=8700.0,
+        description="Standard 26 foot box truck",
     ),
-    "quarter_truck": TruckPreset(
-        name="Quarter Truck",
-        pallet_capacity=6.0,
-        length_ft=13,
-        width_ft=8,
-        height_ft=9,
-        max_weight_lbs=11250.0,
-        description="Quarter truck",
+}
+
+
+@dataclass(frozen=True)
+class ItemPreset:
+    """Physical defaults for common item types."""
+
+    name: str
+    length: float
+    width: float
+    height: float
+    weight: float
+    is_stackable: bool
+    stack_qty: int
+
+
+ITEM_PRESETS = {
+    "pure": ItemPreset(
+        name="PURE",
+        length=40.0,
+        width=48.0,
+        height=15.5,
+        weight=110.0,
+        is_stackable=False,
+        stack_qty=1,
+    ),
+    "cdw": ItemPreset(
+        name="CDW",
+        length=20.0,
+        width=48.0,
+        height=52.7,
+        weight=350.0,
+        is_stackable=False,
+        stack_qty=1,
+    ),
+    "custom": ItemPreset(
+        name="Custom",
+        length=0.0,
+        width=0.0,
+        height=0.0,
+        weight=0.0,
+        is_stackable=False,
+        stack_qty=1,
     ),
 }
 
@@ -86,8 +125,8 @@ LOAD_GROUP_COLORS = [
 
 
 def get_preset(preset_key: str) -> TruckPreset:
-    """Get a truck preset by key, default to 53ft dry van."""
-    return TRUCK_PRESETS.get(preset_key, TRUCK_PRESETS["53ft_dry_van"])
+    """Get a truck preset by key, default to Dry Van."""
+    return TRUCK_PRESETS.get(preset_key, TRUCK_PRESETS["dry_van"])
 
 
 def get_load_group_color(load_group: str, group_index: int) -> str:

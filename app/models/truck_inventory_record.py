@@ -39,6 +39,8 @@ class TruckInventoryRecord:
     item_width: float | None = None
     item_height: float | None = None
     item_weight: float | None = None
+    is_stackable: bool = False
+    stack_qty: int = 1
     truck_type: str | None = None
     truck_length: float | None = None
     truck_width: float | None = None
@@ -84,6 +86,8 @@ class TruckInventoryRecord:
             "item_width": self.item_width,
             "item_height": self.item_height,
             "item_weight": self.item_weight,
+            "is_stackable": self.is_stackable,
+            "stack_qty": self.stack_qty,
             "truck_type": self.truck_type,
             "truck_length": self.truck_length,
             "truck_width": self.truck_width,

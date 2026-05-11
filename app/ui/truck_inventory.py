@@ -6,11 +6,14 @@ import pandas as pd
 import streamlit as st
 
 from app.services.truck_inventory_export import (
-    export_load_summary_csv,
-    export_normalized_data_csv,
-    export_required_columns_csv,
-    export_truck_assignments_csv,
-    export_truck_boxes_csv,
+    export_required_columns_excel,
+)
+from app.services.truck_inventory_item_setup import (
+    apply_item_setup,
+    build_default_item_setup,
+    merge_item_setup,
+    preset_to_setup_values,
+    validate_item_setup,
 )
 from app.services.truck_inventory_load_summary import get_load_summary
 from app.services.truck_inventory_normalizer import normalize_rows
@@ -18,7 +21,7 @@ from app.services.truck_inventory_parser import parse_combined_load_sheet, parse
 from app.services.truck_inventory_truck_assigner import assign_to_trucks, get_truck_summary_stats
 from app.services.truck_inventory_validator import get_validation_summary, validate_records
 from app.services.truck_inventory_visualizer import render_truck_visualization
-from app.utils.truck_presets import TRUCK_PRESETS
+from app.utils.truck_presets import ITEM_PRESETS, TRUCK_PRESETS
 
 
 def _initialize_truck_state() -> None:
@@ -30,8 +33,11 @@ def _initialize_truck_state() -> None:
         "truck_raw_records": [],
         "truck_normalized_records": [],
         "truck_validated_records": [],
+        "truck_item_setup": [],
         "truck_trucks": [],
         "truck_load_summary": {},
+        "truck_last_validation_summary": "",
+        "truck_build_message": "",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -39,7 +45,7 @@ def _initialize_truck_state() -> None:
 
 
 def render_inputs_tab() -> None:
-    """Render file upload and planning configuration controls."""
+    """Render file upload and parsing controls."""
     st.subheader("File Uploads")
 
     col1, col2 = st.columns(2)
@@ -78,46 +84,28 @@ def render_inputs_tab() -> None:
         st.session_state.truck_combined_file = combined_file
 
     st.divider()
-    st.subheader("Configuration")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        grouping_rule = st.selectbox(
-            "Group By",
-            options=["kkg_load_number", "po_number", "none"],
-            format_func=lambda x: {
-                "kkg_load_number": "KKG Load #",
-                "po_number": "Retailer PO #",
-                "none": "Each Item Row",
-            }.get(x, x),
-            key="truck_grouping_rule",
-        )
+    has_upload = any([
+        st.session_state.truck_pure_file,
+        st.session_state.truck_cdw_file,
+        st.session_state.truck_combined_file,
+    ])
+    if not has_upload:
+        st.info("Upload at least one Excel file to start the Truck Inventory workflow.")
 
-    with col2:
-        st.info("MVP placement uses one visual box per item unit and one layer high.")
+    if st.button("Parse Uploaded Data", use_container_width=True, key="truck_process_btn", disabled=not has_upload):
+        with st.spinner("Parsing input..."):
+            _process_truck_files()
 
-    truck_preset = st.selectbox(
-        "Truck Preset",
-        options=list(TRUCK_PRESETS.keys()),
-        format_func=lambda x: TRUCK_PRESETS[x].name,
-        key="truck_preset",
-    )
-    preset = TRUCK_PRESETS[truck_preset]
-    st.caption(
-        f"Preset capacity: {preset.length_ft} ft x {preset.width_ft} ft x "
-        f"{preset.height_ft} ft, {preset.max_weight_lbs:,.0f} lb max. "
-        "Source truck dimensions override this when provided."
-    )
+    if st.session_state.truck_last_validation_summary:
+        st.info(st.session_state.truck_last_validation_summary)
 
-    st.divider()
-
-    if st.button("Process Files", use_container_width=True, key="truck_process_btn"):
-        with st.spinner("Processing files..."):
-            _process_truck_files(grouping_rule, truck_preset)
+    if st.session_state.truck_normalized_records:
+        st.success("Input parsed. Review rows, complete Item Setup, then build the truck plan.")
 
 
-def _process_truck_files(grouping_rule: str, truck_preset: str) -> None:
-    """Parse, normalize, validate, assign, and summarize uploaded files."""
+def _process_truck_files() -> None:
+    """Parse uploaded files and prepare item setup rows keyed by Item #."""
     records = []
 
     if st.session_state.truck_pure_file:
@@ -155,25 +143,25 @@ def _process_truck_files(grouping_rule: str, truck_preset: str) -> None:
         st.error("No data could be loaded from uploaded files.")
         return
 
-    st.session_state.truck_raw_records = records
     validated, val_result = validate_records(records)
-    trucks = assign_to_trucks(validated, preset_key=truck_preset, grouping_rule=grouping_rule)
-
+    st.session_state.truck_raw_records = records
     st.session_state.truck_validated_records = validated
     st.session_state.truck_normalized_records = validated
-    st.session_state.truck_trucks = trucks
+    st.session_state.truck_item_setup = merge_item_setup(st.session_state.truck_item_setup, validated)
+    if not st.session_state.truck_item_setup:
+        st.session_state.truck_item_setup = build_default_item_setup(validated)
+    st.session_state.truck_trucks = []
     st.session_state.truck_load_summary = get_load_summary(validated)
-
-    st.info(f"Validation: {get_validation_summary(val_result)}")
-    st.success("Processing complete. Review results in the other tabs.")
+    st.session_state.truck_last_validation_summary = f"Validation: {get_validation_summary(val_result)}"
+    st.session_state.truck_build_message = ""
 
 
 def render_normalized_data_tab() -> None:
-    """Render normalized rows and validation status."""
+    """Render parsed business rows and normalized preview."""
     st.subheader("Normalized Data Preview")
 
     if not st.session_state.truck_normalized_records:
-        st.info("No data loaded. Upload and process files in the Inputs tab first.")
+        st.info("Step 1 is not complete. Upload and parse Excel input in the Inputs tab first.")
         return
 
     records = st.session_state.truck_normalized_records
@@ -189,14 +177,17 @@ def render_normalized_data_tab() -> None:
     with col4:
         st.metric("Total Qty", f"{df['qty'].sum():.0f}")
 
-    st.dataframe(df, use_container_width=True, height=400)
-
-    st.download_button(
-        label="Download Normalized Data (CSV)",
-        data=export_normalized_data_csv(records),
-        file_name="truck_inventory_normalized.csv",
-        mime="text/csv",
-    )
+    preview_columns = [
+        "kkg_load_number",
+        "retailer_po_number",
+        "item_number",
+        "qty",
+        "source_type",
+        "validation_status",
+        "validation_notes",
+    ]
+    available_columns = [column for column in preview_columns if column in df.columns]
+    st.dataframe(df[available_columns], use_container_width=True, height=400)
 
 
 def render_load_summary_tab() -> None:
@@ -204,7 +195,7 @@ def render_load_summary_tab() -> None:
     st.subheader("Load Summary by KKG Load #")
 
     if not st.session_state.truck_load_summary:
-        st.info("No load summary available. Process files first.")
+        st.info("Load summary will appear after Excel input is parsed.")
         return
 
     summary = st.session_state.truck_load_summary
@@ -222,27 +213,154 @@ def render_load_summary_tab() -> None:
     ]
     st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
-    st.divider()
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Total KKG Loads", len(summary))
-    with col2:
-        st.metric("Total Qty", f"{sum(s['total_qty'] for s in summary.values()):.0f}")
-
-    st.download_button(
-        label="Download Load Summary (CSV)",
-        data=export_load_summary_csv(summary),
-        file_name="truck_inventory_load_summary.csv",
-        mime="text/csv",
-    )
-
 
 def render_truck_builder_tab() -> None:
-    """Render item-based truck plans and assignment details."""
-    st.subheader("Truck Builder & Assignments")
+    """Render item setup, truck selection, and build/evaluate controls."""
+    st.subheader("Truck Builder")
 
+    if not st.session_state.truck_normalized_records:
+        st.info("Upload and parse Excel input before completing Item Setup and building a truck plan.")
+        return
+
+    _render_item_setup_section()
+    st.divider()
+    _render_truck_selection_and_evaluate()
+    st.divider()
+    _render_truck_results()
+
+
+def _render_item_setup_section() -> None:
+    st.markdown("**Item Setup**")
+    st.caption("Item setup is keyed by Item #. Presets can fill defaults, and every value remains editable.")
+
+    preset_names = [preset.name for preset in ITEM_PRESETS.values()]
+    setup_df = pd.DataFrame(st.session_state.truck_item_setup)
+    previous_setup = [dict(row) for row in st.session_state.truck_item_setup]
+    edited_df = st.data_editor(
+        setup_df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        column_config={
+            "Item #": st.column_config.TextColumn("Item #", disabled=True),
+            "Preset": st.column_config.SelectboxColumn("Preset", options=preset_names),
+            "Length": st.column_config.NumberColumn("Length", min_value=0.0, step=0.1),
+            "Width": st.column_config.NumberColumn("Width", min_value=0.0, step=0.1),
+            "Height": st.column_config.NumberColumn("Height", min_value=0.0, step=0.1),
+            "Weight": st.column_config.NumberColumn("Weight", min_value=0.0, step=0.1),
+            "Is Stackable?": st.column_config.SelectboxColumn("Is Stackable?", options=["No", "Yes"]),
+            "Stack Qty": st.column_config.NumberColumn("Stack Qty", min_value=1, step=1),
+            "Color": st.column_config.TextColumn("Color"),
+        },
+        key="truck_item_setup_editor",
+    )
+    edited_setup = edited_df.to_dict(orient="records")
+    if edited_setup != previous_setup:
+        st.session_state.truck_item_setup = edited_setup
+        st.session_state.truck_trucks = []
+        st.session_state.truck_build_message = "Item Setup changed. Rebuild the truck plan to refresh fit results."
+    else:
+        st.session_state.truck_item_setup = edited_setup
+
+    setup_issues = validate_item_setup(
+        st.session_state.truck_normalized_records,
+        st.session_state.truck_item_setup,
+    )
+    if setup_issues:
+        st.warning("Complete Item Setup before building the truck plan.")
+        st.markdown("\n".join(f"- {issue}" for issue in setup_issues))
+    else:
+        st.success("Item Setup is complete.")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Apply Selected Presets", use_container_width=True):
+            st.session_state.truck_item_setup = _apply_selected_item_presets(st.session_state.truck_item_setup)
+            st.rerun()
+    with col2:
+        st.caption("Use hex colors such as #4ECDC4, or keep the auto-assigned values.")
+
+
+def _apply_selected_item_presets(setup_rows: list[dict]) -> list[dict]:
+    updated_rows = []
+    for row in setup_rows:
+        updated = dict(row)
+        preset_values = preset_to_setup_values(str(updated.get("Preset", "")))
+        if preset_values:
+            updated.update(preset_values)
+        updated_rows.append(updated)
+    return updated_rows
+
+
+def _render_truck_selection_and_evaluate() -> None:
+    st.markdown("**Truck Type**")
+    truck_preset = st.selectbox(
+        "Truck Type",
+        options=list(TRUCK_PRESETS.keys()),
+        format_func=lambda x: TRUCK_PRESETS[x].name,
+        key="truck_preset",
+    )
+    preset = TRUCK_PRESETS[truck_preset]
+    threshold = st.number_input(
+        "Operational Weight Threshold (lbs)",
+        min_value=1.0,
+        max_value=float(preset.max_weight_lbs),
+        value=float(preset.operational_weight_threshold_lbs),
+        step=100.0,
+        key="truck_operational_weight_threshold",
+    )
+    st.caption(
+        f"{preset.length_in:g} x {preset.width_in:g} x {preset.height_in:g} inches; "
+        f"legal max {preset.max_weight_lbs:,.0f} lbs"
+    )
+
+    setup_issues = validate_item_setup(
+        st.session_state.truck_normalized_records,
+        st.session_state.truck_item_setup,
+    )
+    if st.session_state.truck_build_message:
+        st.info(st.session_state.truck_build_message)
+
+    if st.button(
+        "Build / Evaluate Truck Plan",
+        use_container_width=True,
+        disabled=bool(setup_issues),
+    ):
+        with st.spinner("Evaluating fit..."):
+            _evaluate_truck_plan(truck_preset, threshold)
+
+
+def _evaluate_truck_plan(truck_preset: str, threshold: float) -> None:
+    records, setup_issues = apply_item_setup(
+        st.session_state.truck_normalized_records,
+        st.session_state.truck_item_setup,
+    )
+    if setup_issues:
+        st.error("Item setup needs attention before fit can be evaluated.")
+        st.markdown("\n".join(f"- {issue}" for issue in setup_issues))
+        return
+
+    trucks = assign_to_trucks(
+        records,
+        preset_key=truck_preset,
+        grouping_rule="kkg_load_number",
+        operational_weight_threshold_lbs=threshold,
+    )
+    st.session_state.truck_normalized_records = records
+    st.session_state.truck_validated_records = records
+    st.session_state.truck_trucks = trucks
+    st.session_state.truck_load_summary = get_load_summary(records)
+    failed_count = sum(1 for truck in trucks if truck.validation_status == "error")
+    if failed_count:
+        st.session_state.truck_build_message = f"Build complete: {failed_count} load(s) need attention."
+    else:
+        st.session_state.truck_build_message = "Build complete: all evaluated loads fit."
+    st.success("Truck plan evaluated.")
+
+
+def _render_truck_results() -> None:
     if not st.session_state.truck_trucks:
-        st.info("No truck plans available. Process files and configure inputs first.")
+        st.info("No evaluated truck plan yet. Complete Item Setup, select a truck type, then build the plan.")
         return
 
     trucks = st.session_state.truck_trucks
@@ -256,8 +374,6 @@ def render_truck_builder_tab() -> None:
         st.metric("Total Weight", f"{stats['total_weight']:.0f} lb")
     with col4:
         st.metric("Failed Loads", stats["failed_loads"])
-
-    st.divider()
 
     for truck in trucks:
         label = (
@@ -275,42 +391,11 @@ def render_truck_builder_tab() -> None:
 
             st.caption(
                 f"Truck dimensions: {truck.truck_length:.0f} x {truck.truck_width:.0f} x "
-                f"{truck.truck_height:.0f}; max weight {truck.truck_max_weight:,.0f} lb"
+                f"{truck.truck_height:.0f}; threshold {truck.truck_max_weight:,.0f} lb"
             )
-
             if truck.validation_notes:
-                st.warning("; ".join(truck.validation_notes))
-
-            item_rows = {}
-            for box in truck.boxes:
-                key = (box.retailer_po_number, box.item_number, box.row_qty)
-                item_rows[key] = item_rows.get(key, 0) + 1
-
-            st.markdown("**Item Rows:**")
-            if item_rows:
-                for (po_number, item_number, row_qty), placed_qty in sorted(item_rows.items()):
-                    st.caption(f"- PO {po_number} | Item {item_number} | Qty {row_qty} | Placed {placed_qty}")
-            else:
-                st.caption("(No placed item boxes)")
-
-    st.divider()
-    col1, col2 = st.columns(2)
-    with col1:
-        st.download_button(
-            label="Truck Summary (CSV)",
-            data=export_truck_assignments_csv(trucks),
-            file_name="truck_inventory_assignments.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-    with col2:
-        st.download_button(
-            label="Item Box Details (CSV)",
-            data=export_truck_boxes_csv(trucks),
-            file_name="truck_inventory_boxes.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
+                st.warning("Load does not meet all fit rules.")
+                st.markdown("\n".join(f"- {note}" for note in truck.validation_notes))
 
 
 def render_visualization_tab() -> None:
@@ -318,77 +403,33 @@ def render_visualization_tab() -> None:
     st.subheader("Truck Visualization")
 
     if not st.session_state.truck_trucks:
-        st.info("No trucks to visualize. Process files first.")
+        st.info("Visualization appears after the truck plan is built.")
         return
 
     render_truck_visualization(st.session_state.truck_trucks)
 
 
 def render_export_tab() -> None:
-    """Render all CSV export options."""
+    """Render final required export."""
     st.subheader("Export Data")
-    st.markdown("Download normalized inputs, required operations columns, load summaries, and truck plan details.")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Normalized & Validation**")
-        if st.session_state.truck_normalized_records:
-            st.download_button(
-                label="Normalized Data",
-                data=export_normalized_data_csv(st.session_state.truck_normalized_records),
-                file_name="truck_inventory_normalized.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        else:
-            st.button("Normalized Data (disabled)", disabled=True, use_container_width=True)
+    if not st.session_state.truck_normalized_records:
+        st.info("No parsed rows available for export. Upload and parse Excel input first.")
+        return
 
-    with col2:
-        st.markdown("**Required Columns**")
-        if st.session_state.truck_normalized_records:
-            st.download_button(
-                label="Required Export",
-                data=export_required_columns_csv(st.session_state.truck_normalized_records),
-                file_name="truck_inventory_required_export.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        else:
-            st.button("Required Export (disabled)", disabled=True, use_container_width=True)
+    if not st.session_state.truck_trucks:
+        st.warning("Truck plan has not been evaluated yet. Build the plan before final export.")
+        return
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Load Summary**")
-        if st.session_state.truck_load_summary:
-            st.download_button(
-                label="Load Summary",
-                data=export_load_summary_csv(st.session_state.truck_load_summary),
-                file_name="truck_inventory_load_summary.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        else:
-            st.button("Load Summary (disabled)", disabled=True, use_container_width=True)
-
-    with col2:
-        st.markdown("**Truck Plan & Boxes**")
-        if st.session_state.truck_trucks:
-            st.download_button(
-                label="Truck Summary",
-                data=export_truck_assignments_csv(st.session_state.truck_trucks),
-                file_name="truck_inventory_assignments.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-            st.download_button(
-                label="Item Box Details",
-                data=export_truck_boxes_csv(st.session_state.truck_trucks),
-                file_name="truck_inventory_boxes.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        else:
-            st.button("Truck Plan (disabled)", disabled=True, use_container_width=True)
+    st.markdown("**Required Excel Export**")
+    st.caption("Export contains only KKG Load #, Retailer PO #, Item #, and Qty.")
+    st.download_button(
+        label="Download Required Excel",
+        data=export_required_columns_excel(st.session_state.truck_normalized_records),
+        file_name="truck_inventory_required_export.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
 
 
 def render_truck_inventory_view() -> None:
@@ -400,7 +441,8 @@ def render_truck_inventory_view() -> None:
     _initialize_truck_state()
 
     st.markdown("### Truck Inventory Module")
-    st.markdown("Plan item-based truck loads from Excel input grouped by KKG Load #.")
+    st.markdown("Upload Excel load rows, set up item dimensions by Item #, then evaluate truck fit.")
+    _render_workflow_status()
     st.divider()
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -424,3 +466,26 @@ def render_truck_inventory_view() -> None:
         render_visualization_tab()
     with tab6:
         render_export_tab()
+
+
+def _render_workflow_status() -> None:
+    parsed = bool(st.session_state.truck_normalized_records)
+    setup_issues = (
+        validate_item_setup(st.session_state.truck_normalized_records, st.session_state.truck_item_setup)
+        if parsed
+        else ["Input not parsed"]
+    )
+    setup_complete = parsed and not setup_issues
+    built = bool(st.session_state.truck_trucks)
+    export_ready = parsed and built
+
+    steps = [
+        ("1. Upload", parsed),
+        ("2. Item Setup", setup_complete),
+        ("3. Evaluate", built),
+        ("4. Export", export_ready),
+    ]
+    cols = st.columns(len(steps))
+    for col, (label, complete) in zip(cols, steps):
+        with col:
+            st.metric(label, "Done" if complete else "Pending")

@@ -148,6 +148,8 @@ def export_truck_boxes_csv(trucks: list[TruckSummary]) -> bytes:
                 "Item Width": box.item_width,
                 "Item Height": box.item_height,
                 "Item Weight": box.item_weight,
+                "Stack Level": box.stack_level,
+                "Stack Qty": box.stack_qty,
             })
     
     df = pd.DataFrame(rows)
@@ -159,15 +161,13 @@ def export_truck_boxes_csv(trucks: list[TruckSummary]) -> bytes:
 
 
 def export_required_columns_csv(records: list[TruckInventoryRecord]) -> bytes:
-    """Export the minimum required operations columns."""
+    """Export the minimum required operations columns as CSV."""
     rows = [
         {
             "KKG Load #": record.kkg_load_number,
             "Retailer PO #": record.retailer_po_number or record.po_number,
             "Item #": record.item_number,
             "Qty": record.qty,
-            "Validation Status": record.validation_status,
-            "Validation Notes": ";".join(record.validation_notes),
         }
         for record in records
     ]
@@ -177,6 +177,26 @@ def export_required_columns_csv(records: list[TruckInventoryRecord]) -> bytes:
     df.to_csv(csv_buffer, index=False)
     csv_buffer.seek(0)
     return csv_buffer.getvalue()
+
+
+def export_required_columns_excel(records: list[TruckInventoryRecord]) -> bytes:
+    """Export only KKG Load #, Retailer PO #, Item #, and Qty as an Excel file."""
+    rows = [
+        {
+            "KKG Load #": record.kkg_load_number,
+            "Retailer PO #": record.retailer_po_number or record.po_number,
+            "Item #": record.item_number,
+            "Qty": record.qty,
+        }
+        for record in records
+    ]
+    df = pd.DataFrame(rows)
+
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Truck Export")
+    buffer.seek(0)
+    return buffer.getvalue()
 
 
 def export_combined_report_csv(

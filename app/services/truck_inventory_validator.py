@@ -56,24 +56,6 @@ def validate_records(records: list[TruckInventoryRecord]) -> tuple[list[TruckInv
         if record.qty is None or record.qty <= 0:
             issues.append("Missing or invalid Quantity")
 
-        for label, value in [
-            ("length", record.item_length),
-            ("width", record.item_width),
-            ("height", record.item_height),
-            ("weight", record.item_weight),
-        ]:
-            if value is None or value <= 0:
-                issues.append(f"Missing or invalid item {label}")
-        
-        if record.truck_length is not None and record.truck_length <= 0:
-            issues.append("Invalid truck length")
-        if record.truck_width is not None and record.truck_width <= 0:
-            issues.append("Invalid truck width")
-        if record.truck_height is not None and record.truck_height <= 0:
-            issues.append("Invalid truck height")
-        if record.truck_max_weight is not None and record.truck_max_weight <= 0:
-            issues.append("Invalid truck max weight")
-        
         # Assign validation status and notes
         if not issues:
             record.validation_status = "valid"
