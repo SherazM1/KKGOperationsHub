@@ -55,6 +55,28 @@ def export_pallet_summary_csv(summary: dict) -> bytes:
     return csv_buffer.getvalue()
 
 
+def export_load_summary_csv(summary: dict) -> bytes:
+    """Export item-based load summary to CSV."""
+    rows = []
+    for load_number, data in sorted(summary.items()):
+        rows.append({
+            "KKG Load #": load_number,
+            "Rows": data["rows"],
+            "Unique Item # Count": data["item_count"],
+            "Total Qty": data["total_qty"],
+            "Total Weight": data["total_weight"],
+            "Validation Status": data["validation_status"],
+            "Validation Notes": data["validation_notes"],
+        })
+
+    df = pd.DataFrame(rows)
+
+    csv_buffer = io.BytesIO()
+    df.to_csv(csv_buffer, index=False)
+    csv_buffer.seek(0)
+    return csv_buffer.getvalue()
+
+
 def export_truck_assignments_csv(trucks: list[TruckSummary]) -> bytes:
     """
     Export truck assignments and utilization to CSV.
@@ -69,13 +91,22 @@ def export_truck_assignments_csv(trucks: list[TruckSummary]) -> bytes:
     for truck in trucks:
         rows.append({
             "Truck ID": truck.truck_id,
+            "KKG Load #": truck.kkg_load_number,
             "Preset": truck.truck_preset,
-            "Capacity": truck.total_capacity_pallets,
-            "Used Pallets": truck.total_used_pallets,
-            "Utilization %": truck.utilization_percent,
-            "Remaining": truck.remaining_capacity,
-            "Load Groups": ";".join(truck.load_groups),
-            "Item Count": truck.items_count,
+            "Truck Length": truck.truck_length,
+            "Truck Width": truck.truck_width,
+            "Truck Height": truck.truck_height,
+            "Truck Max Weight": truck.truck_max_weight,
+            "Used Floor Area": truck.total_used_pallets,
+            "Floor Area Capacity": truck.total_capacity_pallets,
+            "Floor Utilization %": truck.utilization_percent,
+            "Total Weight": truck.total_weight,
+            "Weight Utilization %": truck.weight_utilization_percent,
+            "Item Qty": truck.items_count,
+            "Spatial Fit": truck.spatial_fit,
+            "Weight Fit": truck.weight_fit,
+            "Validation Status": truck.validation_status,
+            "Validation Notes": ";".join(truck.validation_notes),
         })
     
     df = pd.DataFrame(rows)
@@ -102,18 +133,46 @@ def export_truck_boxes_csv(trucks: list[TruckSummary]) -> bytes:
             rows.append({
                 "Truck ID": truck.truck_id,
                 "Box ID": box.box_id,
-                "Load Group": box.load_group,
-                "Pallets": box.pallet_count,
+                "KKG Load #": box.kkg_load_number,
+                "Retailer PO #": box.retailer_po_number,
+                "Item #": box.item_number,
+                "Qty": box.row_qty,
+                "Unit Index": box.unit_index,
                 "Description": box.description,
                 "Color": box.color,
                 "X Position": box.x,
                 "Y Position": box.y,
                 "Width": box.width,
                 "Height": box.height,
+                "Item Length": box.item_length,
+                "Item Width": box.item_width,
+                "Item Height": box.item_height,
+                "Item Weight": box.item_weight,
             })
     
     df = pd.DataFrame(rows)
     
+    csv_buffer = io.BytesIO()
+    df.to_csv(csv_buffer, index=False)
+    csv_buffer.seek(0)
+    return csv_buffer.getvalue()
+
+
+def export_required_columns_csv(records: list[TruckInventoryRecord]) -> bytes:
+    """Export the minimum required operations columns."""
+    rows = [
+        {
+            "KKG Load #": record.kkg_load_number,
+            "Retailer PO #": record.retailer_po_number or record.po_number,
+            "Item #": record.item_number,
+            "Qty": record.qty,
+            "Validation Status": record.validation_status,
+            "Validation Notes": ";".join(record.validation_notes),
+        }
+        for record in records
+    ]
+    df = pd.DataFrame(rows)
+
     csv_buffer = io.BytesIO()
     df.to_csv(csv_buffer, index=False)
     csv_buffer.seek(0)

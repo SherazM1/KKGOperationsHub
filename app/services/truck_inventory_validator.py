@@ -44,45 +44,50 @@ def validate_records(records: list[TruckInventoryRecord]) -> tuple[list[TruckInv
         issues = []
         
         # Check required fields
-        if not record.po_number:
-            issues.append("Missing PO Number")
+        if not record.kkg_load_number:
+            issues.append("Missing KKG Load #")
         
-        if not record.description and not record.item_number:
-            issues.append("Missing both Description and Item Number")
+        if not record.retailer_po_number and not record.po_number:
+            issues.append("Missing Retailer PO #")
+        
+        if not record.item_number:
+            issues.append("Missing Item #")
         
         if record.qty is None or record.qty <= 0:
             issues.append("Missing or invalid Quantity")
+
+        for label, value in [
+            ("length", record.item_length),
+            ("width", record.item_width),
+            ("height", record.item_height),
+            ("weight", record.item_weight),
+        ]:
+            if value is None or value <= 0:
+                issues.append(f"Missing or invalid item {label}")
         
-        # Check optional but important fields
-        if not record.delivery_date:
-            issues.append("Missing Delivery Date (optional)")
-        
-        if record.source_type == "pure" and not record.event_code:
-            issues.append("PURE file missing Event Code (optional)")
+        if record.truck_length is not None and record.truck_length <= 0:
+            issues.append("Invalid truck length")
+        if record.truck_width is not None and record.truck_width <= 0:
+            issues.append("Invalid truck width")
+        if record.truck_height is not None and record.truck_height <= 0:
+            issues.append("Invalid truck height")
+        if record.truck_max_weight is not None and record.truck_max_weight <= 0:
+            issues.append("Invalid truck max weight")
         
         # Assign validation status and notes
         if not issues:
             record.validation_status = "valid"
             result.valid_records += 1
-        elif len(issues) == 1 and "optional" in issues[0].lower():
-            record.validation_status = "warning"
-            record.validation_notes = issues
-            result.warnings += 1
         else:
-            # Errors outweigh warnings
-            has_errors = any("optional" not in issue.lower() for issue in issues)
-            if has_errors:
-                record.validation_status = "error"
-                result.errors += 1
-            else:
-                record.validation_status = "warning"
-                result.warnings += 1
+            record.validation_status = "error"
+            result.errors += 1
             record.validation_notes = issues
         
         validated.append(record)
         result.details.append({
             "index": i,
-            "po": record.po_number,
+            "kkg_load_number": record.kkg_load_number,
+            "po": record.retailer_po_number or record.po_number,
             "item": record.item_number,
             "status": record.validation_status,
             "notes": "; ".join(record.validation_notes),
