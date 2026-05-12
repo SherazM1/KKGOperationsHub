@@ -6,7 +6,7 @@ from collections import OrderedDict
 
 from app.models.truck_inventory_record import TruckInventoryRecord
 from app.models.truck_summary import BoxLayout, TruckSummary
-from app.utils.truck_presets import get_color_for_item, get_preset
+from app.utils.truck_presets import ITEM_PRESETS, ITEM_TYPE_BY_ITEM_NUMBER, get_color_for_item, get_preset
 
 
 def assign_to_trucks(
@@ -19,7 +19,7 @@ def assign_to_trucks(
     Build one truck plan per KKG Load #.
 
     MVP assumptions:
-    - one visual box is one item unit
+    - one visual box is one grouped stack unit
     - stacking is same-item only, based on each item's stack qty
     - item rows and KKG loads are not split across trucks
     - item dimensions are interpreted in inches
@@ -125,8 +125,8 @@ def _place_load_items(
         width = record.item_width or 0.0
         height = record.item_height or 0.0
         item_number = record.item_number or "UNKNOWN"
-        stack_qty = max(1, record.stack_qty if record.is_stackable else 1)
-        stack_height = height * stack_qty
+        effective_stack_qty = max(1, record.stack_qty if record.is_stackable else 1)
+        stack_height = height * effective_stack_qty
 
         row_fits = True
         if length <= 0 or width <= 0 or height <= 0:
@@ -140,9 +140,9 @@ def _place_load_items(
             row_fits = False
 
         row_start_box_count = len(boxes)
-        floor_slots = _floor_slots_for_qty(qty, stack_qty)
+        floor_slots = _floor_slots_for_qty(qty, effective_stack_qty)
         unit_index = 1
-        for _slot_index in range(1, floor_slots + 1):
+        for slot_index in range(1, floor_slots + 1):
             if x + length > truck_length:
                 x = 0.0
                 y += row_depth
@@ -153,36 +153,42 @@ def _place_load_items(
                 row_fits = False
                 break
 
-            units_in_slot = min(stack_qty, qty - unit_index + 1)
-            for stack_level in range(1, units_in_slot + 1):
-                color = _item_color(record, item_color_map)
-                # Same-item stacked units share a footprint but remain separate item boxes.
-                boxes.append(
-                    BoxLayout(
-                        box_id=box_id,
-                        load_group=record.kkg_load_number or record.load_group or "UNASSIGNED",
-                        pallet_count=1.0,
-                        description=f"Item {item_number} unit {unit_index} of {qty}",
-                        color=color,
-                        x=x / truck_length if truck_length else 0.0,
-                        y=y / truck_width if truck_width else 0.0,
-                        width=length / truck_length if truck_length else 0.0,
-                        height=width / truck_width if truck_width else 0.0,
-                        kkg_load_number=record.kkg_load_number or "",
-                        retailer_po_number=record.retailer_po_number or record.po_number,
-                        item_number=item_number,
-                        row_qty=qty,
-                        unit_index=unit_index,
-                        item_length=length,
-                        item_width=width,
-                        item_height=height,
-                        item_weight=record.item_weight or 0.0,
-                        stack_level=stack_level,
-                        stack_qty=stack_qty,
-                    )
+            represented_qty = min(effective_stack_qty, qty - unit_index + 1)
+            grouped_height = height * represented_qty
+            color = _item_color(record, item_color_map)
+            item_type = _item_type(item_number)
+            boxes.append(
+                BoxLayout(
+                    box_id=box_id,
+                    load_group=record.kkg_load_number or record.load_group or "UNASSIGNED",
+                    pallet_count=float(represented_qty),
+                    description=(
+                        f"Item {item_number} group {slot_index} of {floor_slots}; "
+                        f"represents {represented_qty} unit(s)"
+                    ),
+                    color=color,
+                    x=x / truck_length if truck_length else 0.0,
+                    y=y / truck_width if truck_width else 0.0,
+                    width=length / truck_length if truck_length else 0.0,
+                    height=width / truck_width if truck_width else 0.0,
+                    kkg_load_number=record.kkg_load_number or "",
+                    retailer_po_number=record.retailer_po_number or record.po_number,
+                    item_number=item_number,
+                    row_qty=qty,
+                    represented_qty=represented_qty,
+                    unit_index=slot_index,
+                    item_length=length,
+                    item_width=width,
+                    item_height=height,
+                    grouped_height=grouped_height,
+                    item_weight=record.item_weight or 0.0,
+                    stack_level=represented_qty,
+                    stack_qty=effective_stack_qty,
+                    item_type=item_type,
                 )
-                box_id += 1
-                unit_index += 1
+            )
+            box_id += 1
+            unit_index += represented_qty
             x += length
             row_depth = max(row_depth, width)
 
@@ -280,6 +286,13 @@ def _item_color(record: TruckInventoryRecord, item_color_map: dict[str, int]) ->
     if record.color_group and str(record.color_group).startswith("#"):
         return str(record.color_group)
     return get_color_for_item(record.item_number or "UNKNOWN", item_color_map)
+
+
+def _item_type(item_number: str) -> str:
+    preset_key = ITEM_TYPE_BY_ITEM_NUMBER.get(str(item_number).strip(), "")
+    if not preset_key:
+        return ""
+    return ITEM_PRESETS[preset_key].name
 
 
 def _group_records(

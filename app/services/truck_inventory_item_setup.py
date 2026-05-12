@@ -5,7 +5,12 @@ from __future__ import annotations
 from copy import deepcopy
 
 from app.models.truck_inventory_record import TruckInventoryRecord
-from app.utils.truck_presets import ITEM_PRESETS, get_color_for_item
+from app.utils.truck_presets import (
+    ITEM_COLOR_BY_ITEM_NUMBER,
+    ITEM_PRESETS,
+    ITEM_TYPE_BY_ITEM_NUMBER,
+    UNKNOWN_ITEM_COLOR,
+)
 
 
 def get_distinct_item_numbers(records: list[TruckInventoryRecord]) -> list[str]:
@@ -15,10 +20,10 @@ def get_distinct_item_numbers(records: list[TruckInventoryRecord]) -> list[str]:
 
 def build_default_item_setup(records: list[TruckInventoryRecord]) -> list[dict]:
     """Create editable item setup rows keyed by Item #."""
-    color_map: dict[str, int] = {}
     setup_rows = []
     for item_number in get_distinct_item_numbers(records):
-        preset = ITEM_PRESETS["custom"]
+        preset_key = infer_item_preset_key(item_number)
+        preset = ITEM_PRESETS[preset_key]
         setup_rows.append({
             "Item #": item_number,
             "Preset": preset.name,
@@ -28,7 +33,7 @@ def build_default_item_setup(records: list[TruckInventoryRecord]) -> list[dict]:
             "Weight": preset.weight,
             "Is Stackable?": "No",
             "Stack Qty": 1,
-            "Color": get_color_for_item(item_number, color_map),
+            "Color": infer_item_color(item_number),
         })
     return setup_rows
 
@@ -121,6 +126,16 @@ def preset_to_setup_values(preset_name: str) -> dict:
                 "Stack Qty": preset.stack_qty,
             }
     return {}
+
+
+def infer_item_preset_key(item_number: str) -> str:
+    """Infer a known item preset from the current sample item mappings."""
+    return ITEM_TYPE_BY_ITEM_NUMBER.get(str(item_number).strip(), "custom")
+
+
+def infer_item_color(item_number: str) -> str:
+    """Infer a starter item color from current sample mappings."""
+    return ITEM_COLOR_BY_ITEM_NUMBER.get(str(item_number).strip(), UNKNOWN_ITEM_COLOR)
 
 
 def _effective_stack_qty(value, is_stackable: bool) -> int:

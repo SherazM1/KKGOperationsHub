@@ -253,6 +253,7 @@ def _render_item_setup_section() -> None:
     _ensure_item_setup_for_selected_load()
     st.caption(
         f"Generated from unique Item # values in selected KKG Load # {selected_load}. "
+        "Known sample items are auto-filled; unknown items stay Custom and need manual setup. "
         "Item # is parsed from the load sheet and is read-only."
     )
 
@@ -267,7 +268,7 @@ def _render_item_setup_section() -> None:
         num_rows="fixed",
         column_config={
             "Item #": st.column_config.TextColumn("Item #", disabled=True),
-            "Preset": st.column_config.SelectboxColumn("Preset", options=preset_names),
+            "Preset": st.column_config.SelectboxColumn("Preset / Type", options=preset_names),
             "Length": st.column_config.NumberColumn("Length", min_value=0.0, step=0.1),
             "Width": st.column_config.NumberColumn("Width", min_value=0.0, step=0.1),
             "Height": st.column_config.NumberColumn("Height", min_value=0.0, step=0.1),

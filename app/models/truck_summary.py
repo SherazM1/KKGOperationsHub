@@ -22,13 +22,16 @@ class BoxLayout:
     retailer_po_number: str = ""
     item_number: str = ""
     row_qty: int = 1
+    represented_qty: int = 1
     unit_index: int = 1
     item_length: float = 0.0
     item_width: float = 0.0
     item_height: float = 0.0
+    grouped_height: float = 0.0
     item_weight: float = 0.0
     stack_level: int = 1
     stack_qty: int = 1
+    item_type: str = ""
 
 
 @dataclass
