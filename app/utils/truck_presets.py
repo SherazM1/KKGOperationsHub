@@ -68,7 +68,7 @@ TRUCK_PRESETS = {
 
 @dataclass(frozen=True)
 class ItemPreset:
-    """Physical defaults for common item types."""
+    """Physical defaults for common pallet footprints."""
 
     name: str
     length: float
@@ -80,8 +80,8 @@ class ItemPreset:
 
 
 ITEM_PRESETS = {
-    "pure": ItemPreset(
-        name="PURE",
+    "full_pallet": ItemPreset(
+        name="Full Pallet",
         length=40.0,
         width=48.0,
         height=15.5,
@@ -89,12 +89,30 @@ ITEM_PRESETS = {
         is_stackable=False,
         stack_qty=1,
     ),
-    "cdw": ItemPreset(
-        name="CDW",
+    "half_pallet": ItemPreset(
+        name="Half Pallet",
         length=20.0,
         width=48.0,
         height=52.7,
         weight=350.0,
+        is_stackable=False,
+        stack_qty=1,
+    ),
+    "quarter_pallet_20x20": ItemPreset(
+        name="Quarter Pallet 20x20",
+        length=20.0,
+        width=20.0,
+        height=0.0,
+        weight=0.0,
+        is_stackable=False,
+        stack_qty=1,
+    ),
+    "quarter_pallet_24x24": ItemPreset(
+        name="Quarter Pallet 24x24",
+        length=24.0,
+        width=24.0,
+        height=0.0,
+        weight=0.0,
         is_stackable=False,
         stack_qty=1,
     ),
@@ -111,8 +129,8 @@ ITEM_PRESETS = {
 
 
 ITEM_TYPE_BY_ITEM_NUMBER = {
-    "681943924": "pure",
-    "683054545": "cdw",
+    "681943924": "full_pallet",
+    "683054545": "half_pallet",
 }
 
 ITEM_COLOR_BY_ITEM_NUMBER = {

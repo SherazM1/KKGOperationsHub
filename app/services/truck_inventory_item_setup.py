@@ -13,6 +13,12 @@ from app.utils.truck_presets import (
 )
 
 
+LEGACY_PRESET_NAMES = {
+    "pure": "Full Pallet",
+    "cdw": "Half Pallet",
+}
+
+
 def get_distinct_item_numbers(records: list[TruckInventoryRecord]) -> list[str]:
     """Return sorted distinct Item # values from normalized business rows."""
     return sorted({record.item_number for record in records if record.item_number})
@@ -40,7 +46,11 @@ def build_default_item_setup(records: list[TruckInventoryRecord]) -> list[dict]:
 
 def merge_item_setup(existing_rows: list[dict], records: list[TruckInventoryRecord]) -> list[dict]:
     """Keep user-entered item setup while adding rows for newly parsed items."""
-    existing_by_item = {str(row.get("Item #", "")): row for row in existing_rows if row.get("Item #")}
+    existing_by_item = {
+        str(row.get("Item #", "")): _normalize_setup_row(row)
+        for row in existing_rows
+        if row.get("Item #")
+    }
     merged = []
     defaults_by_item = {row["Item #"]: row for row in build_default_item_setup(records)}
 
@@ -112,19 +122,20 @@ def validate_item_setup(records: list[TruckInventoryRecord], setup_rows: list[di
 
 def preset_to_setup_values(preset_name: str) -> dict:
     """Return editable setup values for a selected item preset name."""
-    preset_key = preset_name.strip().lower()
-    if preset_key == "custom":
+    preset_label = _normalize_preset_name(preset_name)
+    if preset_label.lower() == "custom":
         return {}
     for preset in ITEM_PRESETS.values():
-        if preset.name.lower() == preset_key:
-            return {
+        if preset.name.lower() == preset_label.lower():
+            values = {
                 "Length": preset.length,
                 "Width": preset.width,
-                "Height": preset.height,
-                "Weight": preset.weight,
-                "Is Stackable?": "Yes" if preset.is_stackable else "No",
-                "Stack Qty": preset.stack_qty,
             }
+            if preset.height > 0:
+                values["Height"] = preset.height
+            if preset.weight > 0:
+                values["Weight"] = preset.weight
+            return values
     return {}
 
 
@@ -162,3 +173,14 @@ def _to_float(value) -> float | None:
 
 def _positive(value: float | None) -> bool:
     return value is not None and value > 0
+
+
+def _normalize_setup_row(row: dict) -> dict:
+    normalized = deepcopy(row)
+    normalized["Preset"] = _normalize_preset_name(str(normalized.get("Preset", "Custom")))
+    return normalized
+
+
+def _normalize_preset_name(preset_name: str) -> str:
+    preset_key = str(preset_name or "").strip().lower()
+    return LEGACY_PRESET_NAMES.get(preset_key, preset_name or "Custom")

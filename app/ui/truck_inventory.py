@@ -40,6 +40,7 @@ def _initialize_truck_state() -> None:
         "truck_load_summary": {},
         "truck_last_validation_summary": "",
         "truck_build_message": "",
+        "truck_item_setup_editor_revision": {},
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -253,7 +254,7 @@ def _render_item_setup_section() -> None:
     _ensure_item_setup_for_selected_load()
     st.caption(
         f"Generated from unique Item # values in selected KKG Load # {selected_load}. "
-        "Known sample items are auto-filled; unknown items stay Custom and need manual setup. "
+        "Known sample items start with pallet-size presets; unknown items stay Custom and need manual setup. "
         "Item # is parsed from the load sheet and is read-only."
     )
 
@@ -261,6 +262,7 @@ def _render_item_setup_section() -> None:
     current_setup = st.session_state.truck_item_setup_by_load.get(selected_load, [])
     setup_df = pd.DataFrame(current_setup)
     previous_setup = [dict(row) for row in current_setup]
+    editor_revision = st.session_state.truck_item_setup_editor_revision.get(selected_load, 0)
     edited_df = st.data_editor(
         setup_df,
         use_container_width=True,
@@ -277,14 +279,18 @@ def _render_item_setup_section() -> None:
             "Stack Qty": st.column_config.NumberColumn("Stack Qty", min_value=1, step=1),
             "Color": st.column_config.TextColumn("Color"),
         },
-        key=f"truck_item_setup_editor_{selected_load}",
+        key=f"truck_item_setup_editor_{selected_load}_{editor_revision}",
     )
     edited_setup = edited_df.to_dict(orient="records")
+    edited_setup, preset_changed = _apply_changed_item_presets(previous_setup, edited_setup)
     if edited_setup != previous_setup:
         st.session_state.truck_item_setup_by_load[selected_load] = edited_setup
         st.session_state.truck_item_setup = edited_setup
         st.session_state.truck_trucks = []
         st.session_state.truck_build_message = "Item Setup changed. Rebuild the truck plan to refresh fit results."
+        if preset_changed:
+            st.session_state.truck_item_setup_editor_revision[selected_load] = editor_revision + 1
+            st.rerun()
     else:
         st.session_state.truck_item_setup_by_load[selected_load] = edited_setup
         st.session_state.truck_item_setup = edited_setup
@@ -308,6 +314,7 @@ def _render_item_setup_section() -> None:
             st.session_state.truck_item_setup_by_load[selected_load] = updated_setup
             st.session_state.truck_item_setup = updated_setup
             st.session_state.truck_trucks = []
+            st.session_state.truck_item_setup_editor_revision[selected_load] = editor_revision + 1
             st.rerun()
     with col2:
         st.caption("Use hex colors such as #4ECDC4, or keep the auto-assigned values.")
@@ -322,6 +329,30 @@ def _apply_selected_item_presets(setup_rows: list[dict]) -> list[dict]:
             updated.update(preset_values)
         updated_rows.append(updated)
     return updated_rows
+
+
+def _apply_changed_item_presets(previous_rows: list[dict], edited_rows: list[dict]) -> tuple[list[dict], bool]:
+    previous_by_item = {
+        str(row.get("Item #", "")): str(row.get("Preset", ""))
+        for row in previous_rows
+        if row.get("Item #")
+    }
+    updated_rows = []
+    preset_changed = False
+
+    for row in edited_rows:
+        updated = dict(row)
+        item_number = str(updated.get("Item #", ""))
+        previous_preset = previous_by_item.get(item_number, "")
+        current_preset = str(updated.get("Preset", ""))
+        if item_number and current_preset != previous_preset:
+            preset_values = preset_to_setup_values(current_preset)
+            if preset_values:
+                updated.update(preset_values)
+            preset_changed = True
+        updated_rows.append(updated)
+
+    return updated_rows, preset_changed
 
 
 def _render_load_selection() -> None:
