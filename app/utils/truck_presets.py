@@ -134,11 +134,17 @@ ITEM_TYPE_BY_ITEM_NUMBER = {
 }
 
 ITEM_COLOR_BY_ITEM_NUMBER = {
-    "681943924": "#4ECDC4",  # PURE teal
-    "683054545": "#FF6B9A",  # CDW pink
+    "681943924": "Teal",
+    "683054545": "Pink",
 }
 
-UNKNOWN_ITEM_COLOR = "#98A2B3"
+UNKNOWN_ITEM_COLOR = "Orange"
+
+ITEM_SETUP_COLOR_OPTIONS = {
+    "Teal": "#4ECDC4",
+    "Pink": "#FF6B9A",
+    "Orange": "#FFA07A",
+}
 
 # Color palette for item numbers (cycling)
 LOAD_GROUP_COLORS = [
@@ -177,7 +183,10 @@ def get_color_for_item(item_number: str, item_map: dict[str, int]) -> str:
     """Get a stable color for an item number during one planning run."""
     item_key = item_number or "UNKNOWN"
     if item_key in ITEM_COLOR_BY_ITEM_NUMBER:
-        return ITEM_COLOR_BY_ITEM_NUMBER[item_key]
+        return ITEM_SETUP_COLOR_OPTIONS.get(
+            ITEM_COLOR_BY_ITEM_NUMBER[item_key],
+            ITEM_SETUP_COLOR_OPTIONS[UNKNOWN_ITEM_COLOR],
+        )
     if item_key not in item_map:
         item_map[item_key] = len(item_map)
     return LOAD_GROUP_COLORS[item_map[item_key] % len(LOAD_GROUP_COLORS)]

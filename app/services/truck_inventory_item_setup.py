@@ -8,6 +8,7 @@ from app.models.truck_inventory_record import TruckInventoryRecord
 from app.utils.truck_presets import (
     ITEM_COLOR_BY_ITEM_NUMBER,
     ITEM_PRESETS,
+    ITEM_SETUP_COLOR_OPTIONS,
     ITEM_TYPE_BY_ITEM_NUMBER,
     UNKNOWN_ITEM_COLOR,
 )
@@ -84,7 +85,7 @@ def apply_item_setup(
         record.item_weight = _to_float(setup.get("Weight"))
         record.is_stackable = str(setup.get("Is Stackable?", "No")).lower() == "yes"
         record.stack_qty = _effective_stack_qty(setup.get("Stack Qty"), record.is_stackable)
-        record.color_group = str(setup.get("Color") or record.item_number or "UNKNOWN")
+        record.color_group = setup_color_to_hex(setup.get("Color"))
         record.total_weight = (record.item_weight or 0.0) * (record.qty or 0)
 
     return records, sorted(issues)
@@ -127,15 +128,10 @@ def preset_to_setup_values(preset_name: str) -> dict:
         return {}
     for preset in ITEM_PRESETS.values():
         if preset.name.lower() == preset_label.lower():
-            values = {
+            return {
                 "Length": preset.length,
                 "Width": preset.width,
             }
-            if preset.height > 0:
-                values["Height"] = preset.height
-            if preset.weight > 0:
-                values["Weight"] = preset.weight
-            return values
     return {}
 
 
@@ -147,6 +143,11 @@ def infer_item_preset_key(item_number: str) -> str:
 def infer_item_color(item_number: str) -> str:
     """Infer a starter item color from current sample mappings."""
     return ITEM_COLOR_BY_ITEM_NUMBER.get(str(item_number).strip(), UNKNOWN_ITEM_COLOR)
+
+
+def setup_color_to_hex(color_name: object) -> str:
+    """Resolve the manual Item Setup color label to the render color."""
+    return ITEM_SETUP_COLOR_OPTIONS.get(str(color_name or "").strip(), ITEM_SETUP_COLOR_OPTIONS[UNKNOWN_ITEM_COLOR])
 
 
 def _effective_stack_qty(value, is_stackable: bool) -> int:
@@ -178,9 +179,20 @@ def _positive(value: float | None) -> bool:
 def _normalize_setup_row(row: dict) -> dict:
     normalized = deepcopy(row)
     normalized["Preset"] = _normalize_preset_name(str(normalized.get("Preset", "Custom")))
+    normalized["Color"] = _normalize_color_name(normalized.get("Color"))
     return normalized
 
 
 def _normalize_preset_name(preset_name: str) -> str:
     preset_key = str(preset_name or "").strip().lower()
     return LEGACY_PRESET_NAMES.get(preset_key, preset_name or "Custom")
+
+
+def _normalize_color_name(color_name: object) -> str:
+    value = str(color_name or "").strip()
+    if value in ITEM_SETUP_COLOR_OPTIONS:
+        return value
+    for name, hex_value in ITEM_SETUP_COLOR_OPTIONS.items():
+        if value.lower() == hex_value.lower():
+            return name
+    return UNKNOWN_ITEM_COLOR

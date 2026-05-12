@@ -21,7 +21,7 @@ from app.services.truck_inventory_parser import parse_combined_load_sheet
 from app.services.truck_inventory_truck_assigner import assign_to_trucks, get_truck_summary_stats
 from app.services.truck_inventory_validator import get_validation_summary, validate_records
 from app.services.truck_inventory_visualizer import render_truck_visualization
-from app.utils.truck_presets import ITEM_PRESETS, TRUCK_PRESETS
+from app.utils.truck_presets import ITEM_PRESETS, ITEM_SETUP_COLOR_OPTIONS, TRUCK_PRESETS
 
 
 def _initialize_truck_state() -> None:
@@ -259,10 +259,11 @@ def _render_item_setup_section() -> None:
     )
 
     preset_names = [preset.name for preset in ITEM_PRESETS.values()]
+    color_names = list(ITEM_SETUP_COLOR_OPTIONS.keys())
     current_setup = st.session_state.truck_item_setup_by_load.get(selected_load, [])
     setup_df = pd.DataFrame(current_setup)
-    previous_setup = [dict(row) for row in current_setup]
     editor_revision = st.session_state.truck_item_setup_editor_revision.get(selected_load, 0)
+    editor_key = f"truck_item_setup_editor_{selected_load}_{editor_revision}"
     edited_df = st.data_editor(
         setup_df,
         use_container_width=True,
@@ -277,20 +278,19 @@ def _render_item_setup_section() -> None:
             "Weight": st.column_config.NumberColumn("Weight", min_value=0.0, step=0.1),
             "Is Stackable?": st.column_config.SelectboxColumn("Is Stackable?", options=["No", "Yes"]),
             "Stack Qty": st.column_config.NumberColumn("Stack Qty", min_value=1, step=1),
-            "Color": st.column_config.TextColumn("Color"),
+            "Color": st.column_config.SelectboxColumn("Color", options=color_names),
         },
-        key=f"truck_item_setup_editor_{selected_load}_{editor_revision}",
+        key=editor_key,
+        on_change=_commit_item_setup_editor_changes,
+        args=(selected_load, editor_key),
     )
-    edited_setup = edited_df.to_dict(orient="records")
-    edited_setup, preset_changed = _apply_changed_item_presets(previous_setup, edited_setup)
+    edited_setup = _normalize_editor_rows(edited_df.to_dict(orient="records"))
+    previous_setup = st.session_state.truck_item_setup_by_load.get(selected_load, [])
     if edited_setup != previous_setup:
         st.session_state.truck_item_setup_by_load[selected_load] = edited_setup
         st.session_state.truck_item_setup = edited_setup
         st.session_state.truck_trucks = []
         st.session_state.truck_build_message = "Item Setup changed. Rebuild the truck plan to refresh fit results."
-        if preset_changed:
-            st.session_state.truck_item_setup_editor_revision[selected_load] = editor_revision + 1
-            st.rerun()
     else:
         st.session_state.truck_item_setup_by_load[selected_load] = edited_setup
         st.session_state.truck_item_setup = edited_setup
@@ -317,7 +317,7 @@ def _render_item_setup_section() -> None:
             st.session_state.truck_item_setup_editor_revision[selected_load] = editor_revision + 1
             st.rerun()
     with col2:
-        st.caption("Use hex colors such as #4ECDC4, or keep the auto-assigned values.")
+        st.caption("Color is manual for now and drives the truck render and legend.")
 
 
 def _apply_selected_item_presets(setup_rows: list[dict]) -> list[dict]:
@@ -331,28 +331,53 @@ def _apply_selected_item_presets(setup_rows: list[dict]) -> list[dict]:
     return updated_rows
 
 
-def _apply_changed_item_presets(previous_rows: list[dict], edited_rows: list[dict]) -> tuple[list[dict], bool]:
-    previous_by_item = {
-        str(row.get("Item #", "")): str(row.get("Preset", ""))
-        for row in previous_rows
-        if row.get("Item #")
-    }
-    updated_rows = []
+def _commit_item_setup_editor_changes(selected_load: str, editor_key: str) -> None:
+    setup_rows = [
+        dict(row)
+        for row in st.session_state.truck_item_setup_by_load.get(selected_load, [])
+    ]
+    editor_state = st.session_state.get(editor_key, {})
+    edited_rows = editor_state.get("edited_rows", {}) if isinstance(editor_state, dict) else {}
+    if not setup_rows or not edited_rows:
+        return
+
+    updated_rows = setup_rows
     preset_changed = False
-
-    for row in edited_rows:
-        updated = dict(row)
-        item_number = str(updated.get("Item #", ""))
-        previous_preset = previous_by_item.get(item_number, "")
-        current_preset = str(updated.get("Preset", ""))
-        if item_number and current_preset != previous_preset:
-            preset_values = preset_to_setup_values(current_preset)
-            if preset_values:
-                updated.update(preset_values)
+    for row_index, changes in edited_rows.items():
+        if not isinstance(changes, dict):
+            continue
+        try:
+            index = int(row_index)
+        except (TypeError, ValueError):
+            continue
+        if index < 0 or index >= len(updated_rows):
+            continue
+        previous_preset = str(updated_rows[index].get("Preset", ""))
+        updated_rows[index].update(changes)
+        current_preset = str(updated_rows[index].get("Preset", ""))
+        if current_preset != previous_preset:
+            updated_rows[index].update(preset_to_setup_values(current_preset))
             preset_changed = True
-        updated_rows.append(updated)
 
-    return updated_rows, preset_changed
+    updated_rows = _normalize_editor_rows(updated_rows)
+    if updated_rows != setup_rows:
+        st.session_state.truck_item_setup_by_load[selected_load] = updated_rows
+        st.session_state.truck_item_setup = updated_rows
+        st.session_state.truck_trucks = []
+        st.session_state.truck_build_message = "Item Setup changed. Rebuild the truck plan to refresh fit results."
+        if preset_changed:
+            revision = st.session_state.truck_item_setup_editor_revision.get(selected_load, 0)
+            st.session_state.truck_item_setup_editor_revision[selected_load] = revision + 1
+
+
+def _normalize_editor_rows(rows: list[dict]) -> list[dict]:
+    normalized_rows = []
+    for row in rows:
+        normalized = dict(row)
+        if str(normalized.get("Color", "")) not in ITEM_SETUP_COLOR_OPTIONS:
+            normalized["Color"] = "Orange"
+        normalized_rows.append(normalized)
+    return normalized_rows
 
 
 def _render_load_selection() -> None:
