@@ -17,7 +17,7 @@ from app.services.truck_inventory_item_setup import (
 )
 from app.services.truck_inventory_load_summary import get_load_summary
 from app.services.truck_inventory_normalizer import normalize_rows
-from app.services.truck_inventory_parser import parse_combined_load_sheet, parse_excel_file
+from app.services.truck_inventory_parser import parse_combined_load_sheet
 from app.services.truck_inventory_truck_assigner import assign_to_trucks, get_truck_summary_stats
 from app.services.truck_inventory_validator import get_validation_summary, validate_records
 from app.services.truck_inventory_visualizer import render_truck_visualization
@@ -46,34 +46,9 @@ def _initialize_truck_state() -> None:
 
 def render_inputs_tab() -> None:
     """Render file upload and parsing controls."""
-    st.subheader("File Uploads")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**PURE File** (optional)")
-        pure_file = st.file_uploader(
-            "Upload PURE file",
-            type=["xlsx", "xlsm", "xls"],
-            key="pure_uploader",
-            label_visibility="collapsed",
-        )
-        if pure_file:
-            st.session_state.truck_pure_file = pure_file
-
-    with col2:
-        st.markdown("**CDW File** (optional)")
-        cdw_file = st.file_uploader(
-            "Upload CDW file",
-            type=["xlsx", "xlsm", "xls"],
-            key="cdw_uploader",
-            label_visibility="collapsed",
-        )
-        if cdw_file:
-            st.session_state.truck_cdw_file = cdw_file
-
-    st.divider()
-
-    st.markdown("**Combined Load Sheet** (optional)")
+    st.subheader("Main Input")
+    st.markdown("**Combined Load Sheet**")
+    st.caption("Required for truck planning. This workbook drives KKG Load # grouping, Item Setup, visualization, and export.")
     combined_file = st.file_uploader(
         "Upload combined load sheet",
         type=["xlsx", "xlsm", "xls"],
@@ -84,16 +59,43 @@ def render_inputs_tab() -> None:
         st.session_state.truck_combined_file = combined_file
 
     st.divider()
+    st.subheader("Optional Reference Files")
+    st.caption("PURE/CDW PO files are optional references only in this MVP and are not required to parse or build the truck plan.")
 
-    has_upload = any([
-        st.session_state.truck_pure_file,
-        st.session_state.truck_cdw_file,
-        st.session_state.truck_combined_file,
-    ])
-    if not has_upload:
-        st.info("Upload at least one Excel file to start the Truck Inventory workflow.")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**PURE PO File**")
+        pure_file = st.file_uploader(
+            "Upload PURE PO file",
+            type=["xlsx", "xlsm", "xls"],
+            key="pure_uploader",
+            label_visibility="collapsed",
+        )
+        if pure_file:
+            st.session_state.truck_pure_file = pure_file
 
-    if st.button("Parse Uploaded Data", use_container_width=True, key="truck_process_btn", disabled=not has_upload):
+    with col2:
+        st.markdown("**CDW PO File**")
+        cdw_file = st.file_uploader(
+            "Upload CDW PO file",
+            type=["xlsx", "xlsm", "xls"],
+            key="cdw_uploader",
+            label_visibility="collapsed",
+        )
+        if cdw_file:
+            st.session_state.truck_cdw_file = cdw_file
+
+    st.divider()
+    has_primary_input = bool(st.session_state.truck_combined_file)
+    if not has_primary_input:
+        st.info("Upload the Combined Load Sheet to start truck planning.")
+
+    if st.button(
+        "Parse Combined Load Sheet",
+        use_container_width=True,
+        key="truck_process_btn",
+        disabled=not has_primary_input,
+    ):
         with st.spinner("Parsing input..."):
             _process_truck_files()
 
@@ -108,24 +110,6 @@ def _process_truck_files() -> None:
     """Parse uploaded files and prepare item setup rows keyed by Item #."""
     records = []
 
-    if st.session_state.truck_pure_file:
-        result = parse_excel_file(st.session_state.truck_pure_file)
-        if result.success:
-            pure_records = normalize_rows(result.rows, st.session_state.truck_pure_file.name, "pure")
-            records.extend(pure_records)
-            st.toast(f"Loaded {len(pure_records)} records from PURE file")
-        else:
-            st.error(f"Failed to parse PURE file: {result.error_message}")
-
-    if st.session_state.truck_cdw_file:
-        result = parse_excel_file(st.session_state.truck_cdw_file)
-        if result.success:
-            cdw_records = normalize_rows(result.rows, st.session_state.truck_cdw_file.name, "cdw")
-            records.extend(cdw_records)
-            st.toast(f"Loaded {len(cdw_records)} records from CDW file")
-        else:
-            st.error(f"Failed to parse CDW file: {result.error_message}")
-
     if st.session_state.truck_combined_file:
         result = parse_combined_load_sheet(st.session_state.truck_combined_file)
         if result.success:
@@ -135,12 +119,18 @@ def _process_truck_files() -> None:
                 "combined_load_sheet",
             )
             records.extend(combined_records)
-            st.toast(f"Loaded {len(combined_records)} records from combined sheet")
+            st.toast(f"Loaded {len(combined_records)} planning rows from combined load sheet")
+            if result.file_type:
+                st.caption(f"Parser selected: {result.file_type}")
         else:
             st.error(f"Failed to parse combined sheet: {result.error_message}")
+            return
+    else:
+        st.error("Combined Load Sheet is required for truck planning.")
+        return
 
     if not records:
-        st.error("No data could be loaded from uploaded files.")
+        st.error("No planning rows could be loaded from the Combined Load Sheet.")
         return
 
     validated, val_result = validate_records(records)
@@ -152,7 +142,13 @@ def _process_truck_files() -> None:
         st.session_state.truck_item_setup = build_default_item_setup(validated)
     st.session_state.truck_trucks = []
     st.session_state.truck_load_summary = get_load_summary(validated)
-    st.session_state.truck_last_validation_summary = f"Validation: {get_validation_summary(val_result)}"
+    optional_refs = []
+    if st.session_state.truck_pure_file:
+        optional_refs.append("PURE PO reference attached")
+    if st.session_state.truck_cdw_file:
+        optional_refs.append("CDW PO reference attached")
+    ref_note = f" ({'; '.join(optional_refs)})" if optional_refs else ""
+    st.session_state.truck_last_validation_summary = f"Combined Load Sheet validation: {get_validation_summary(val_result)}{ref_note}"
     st.session_state.truck_build_message = ""
 
 

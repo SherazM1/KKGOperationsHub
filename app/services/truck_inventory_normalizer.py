@@ -111,15 +111,15 @@ def normalize_combined_row(row: dict, source_file: str) -> TruckInventoryRecord:
     record = TruckInventoryRecord(
         source_type="combined",
         source_file=source_file,
-        po_number=_get_field(row, ["PO", "PO_Number", "PO Number", "po", "Retailer PO #"], ""),
+        po_number=_get_field(row, ["PO", "PO_Number", "PO Number", "po", "Retailer PO #", "WM PO #"], ""),
         kkg_load_number=_get_load_number(row),
         retailer_po_number=_get_retailer_po(row),
         delivery_date=_get_field(row, ["Delivery Date", "delivery_date"], None),
         dc_number=_get_field(row, ["DC", "dc_number"], None),
         dc_name=_get_field(row, ["DC Name", "dc_name"], None),
-        item_number=_get_field(row, ["Item", "Item #", "Item Number", "item_number"], None),
+        item_number=_get_field(row, ["Item", "Item #", "ITEM #", "Item Number", "item_number"], None),
         description=_get_field(row, ["Description", "description"], None),
-        qty=_parse_int(row, ["Qty", "Quantity", "qty"]),
+        qty=_parse_int(row, ["Qty", "QTY", "Quantity", "qty"]),
         item_length=_parse_float(row, _field_names("length")),
         item_width=_parse_float(row, _field_names("width")),
         item_height=_parse_float(row, _field_names("height")),
@@ -182,9 +182,11 @@ def normalize_rows(
 
 def _get_field(row: dict, possible_names: list[str], default=None) -> str | None:
     """Get a field value from a row, checking multiple possible column names."""
+    normalized_row = {_normalize_key(key): value for key, value in row.items()}
     for name in possible_names:
-        if name in row and row[name] and row[name] != "":
-            return str(row[name]).strip()
+        normalized_name = _normalize_key(name)
+        if normalized_name in normalized_row and normalized_row[normalized_name] not in ("", None):
+            return str(normalized_row[normalized_name]).strip()
     return default
 
 
@@ -194,6 +196,8 @@ def _get_load_number(row: dict) -> str | None:
         "KKG Load Number",
         "kkg_load_number",
         "KKG Load",
+        "KK Load",
+        "KK Load #",
         "Load #",
         "Load Number",
         "load_number",
@@ -206,6 +210,7 @@ def _get_retailer_po(row: dict) -> str | None:
         "Retailer PO",
         "Retailer PO Number",
         "retailer_po_number",
+        "WM PO #",
         "PO",
         "PO Number",
         "PO_Number",
@@ -241,10 +246,12 @@ def _finalize_record(record: TruckInventoryRecord) -> None:
 
 def _parse_int(row: dict, possible_names: list[str]) -> int | None:
     """Parse an integer field from a row."""
+    normalized_row = {_normalize_key(key): value for key, value in row.items()}
     for name in possible_names:
-        if name in row:
+        normalized_name = _normalize_key(name)
+        if normalized_name in normalized_row:
             try:
-                return int(float(row[name]))
+                return int(float(normalized_row[normalized_name]))
             except (ValueError, TypeError):
                 continue
     return None
@@ -252,13 +259,19 @@ def _parse_int(row: dict, possible_names: list[str]) -> int | None:
 
 def _parse_float(row: dict, possible_names: list[str]) -> float | None:
     """Parse a float field from a row."""
+    normalized_row = {_normalize_key(key): value for key, value in row.items()}
     for name in possible_names:
-        if name in row:
+        normalized_name = _normalize_key(name)
+        if normalized_name in normalized_row:
             try:
-                return float(row[name])
+                return float(normalized_row[normalized_name])
             except (ValueError, TypeError):
                 continue
     return None
+
+
+def _normalize_key(value) -> str:
+    return "".join(ch for ch in str(value).strip().lower() if ch.isalnum())
 
 
 def _looks_like_pure(row: dict) -> bool:
