@@ -1,22 +1,31 @@
-"""Direct PDF generation for Standard-family BOL records."""
+"""Direct PDF generation for Standard-family BOL records.
+
+The renderer is intentionally coordinate-based.  The coordinates mirror the
+current Standard / No Recourse DOCX templates, whose main layout is a single
+wide Word table with narrow grid columns and stacked left-side shipment blocks.
+"""
 
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 from tempfile import mkdtemp
 from typing import Any, Callable
+from zipfile import ZipFile
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from reportlab.platypus import Paragraph
 
 from app.models.bol_standard_record import BolStandardItemLine, BolStandardRecord
 from app.services.bol_standard_docx_generator import (
     GeneratedDocxFile,
+    NO_RECOURSE_TEMPLATE_PATH,
+    STANDARD_TEMPLATE_PATH,
     _format_number,
     _format_ship_date_for_template,
     _parse_numeric,
@@ -31,12 +40,80 @@ from app.utils.bol_facilities import BolFacilityRecord
 
 
 PAGE_WIDTH, PAGE_HEIGHT = letter
-MARGIN = 0.32 * inch
 FONT_NAME = "Helvetica"
 FONT_BOLD = "Helvetica-Bold"
 LINE_COLOR = colors.black
-HEADER_FILL = colors.HexColor("#D9D9D9")
-LIGHT_FILL = colors.HexColor("#F2F2F2")
+GRAY_FILL = colors.HexColor("#D9D9D9")
+YELLOW_FILL = colors.HexColor("#FFFF00")
+
+# The DOCX table grid is 11,694 twips wide: 584.7 pt.  Centering it on letter
+# paper lands very close to the Word template's narrow left/right margins.
+GRID_WIDTHS = [
+    1710,
+    743,
+    67,
+    169,
+    1531,
+    1617,
+    454,
+    250,
+    1806,
+    412,
+    421,
+    677,
+    43,
+    665,
+    74,
+    434,
+    74,
+    473,
+    74,
+]
+COL_WIDTHS = [value / 20 for value in GRID_WIDTHS]
+TABLE_WIDTH = sum(COL_WIDTHS)
+TABLE_X = (PAGE_WIDTH - TABLE_WIDTH) / 2
+TABLE_TOP = PAGE_HEIGHT - 5
+
+# Row heights copied from the Standard template.  The No Recourse template uses
+# the same visual grid even though some explicit heights are omitted in XML.
+ROW_HEIGHTS = [
+    446,
+    287,
+    270,
+    270,
+    261,
+    288,
+    269,
+    279,
+    237,
+    279,
+    279,
+    173,
+    381,
+    272,
+    372,
+    338,
+    325,
+    310,
+    337,
+    365,
+    356,
+    551,
+    2009,
+    263,
+    519,
+    310,
+    488,
+    310,
+    316,
+    316,
+    310,
+    310,
+    327,
+    704,
+    353,
+]
+ROW_HEIGHTS_PT = [value / 20 for value in ROW_HEIGHTS]
 
 
 def _safe_text(value: Any) -> str:
@@ -53,8 +130,353 @@ def _resolve_comment(record: BolStandardRecord, batch_comment: str | None) -> st
     return record_comment if record_comment else _safe_text(batch_comment)
 
 
-def _display_number(value: float) -> str:
-    return _format_number(value)
+def _col_x(col_index: int) -> float:
+    return TABLE_X + sum(COL_WIDTHS[:col_index])
+
+
+def _col_width(start_col: int, end_col: int) -> float:
+    return sum(COL_WIDTHS[start_col:end_col])
+
+
+def _row_top(row_index: int) -> float:
+    return TABLE_TOP - sum(ROW_HEIGHTS_PT[:row_index])
+
+
+def _row_bottom(row_index: int) -> float:
+    return _row_top(row_index) - ROW_HEIGHTS_PT[row_index]
+
+
+def _row_span_top(row_start: int) -> float:
+    return _row_top(row_start)
+
+
+def _row_span_bottom(row_start: int, row_end: int) -> float:
+    return TABLE_TOP - sum(ROW_HEIGHTS_PT[:row_end])
+
+
+def _box(
+    canv: canvas.Canvas,
+    col_start: int,
+    col_end: int,
+    row_start: int,
+    row_end: int,
+    *,
+    fill: colors.Color | None = None,
+    stroke: bool = True,
+    line_width: float = 0.55,
+) -> tuple[float, float, float, float]:
+    x = _col_x(col_start)
+    y = _row_span_bottom(row_start, row_end)
+    width = _col_width(col_start, col_end)
+    height = _row_span_top(row_start) - y
+    canv.setLineWidth(line_width)
+    canv.setStrokeColor(LINE_COLOR)
+    if fill is not None:
+        canv.setFillColor(fill)
+        canv.rect(x, y, width, height, stroke=1 if stroke else 0, fill=1)
+        canv.setFillColor(colors.black)
+    elif stroke:
+        canv.rect(x, y, width, height, stroke=1, fill=0)
+    return x, y, width, height
+
+
+def _fit_font_size(
+    canv: canvas.Canvas,
+    text: str,
+    font_name: str,
+    base_size: float,
+    max_width: float,
+    min_size: float = 5.0,
+) -> float:
+    text = _safe_text(text)
+    size = base_size
+    while size > min_size and canv.stringWidth(text, font_name, size) > max_width:
+        size -= 0.25
+    return size
+
+
+def _draw_text(
+    canv: canvas.Canvas,
+    x: float,
+    y: float,
+    text: str,
+    width: float,
+    *,
+    font_name: str = FONT_NAME,
+    font_size: float = 7.0,
+    min_size: float = 5.0,
+    align: str = "left",
+) -> None:
+    text = _safe_text(text)
+    size = _fit_font_size(canv, text, font_name, font_size, width, min_size)
+    canv.setFont(font_name, size)
+    if align == "right":
+        canv.drawRightString(x + width, y, text)
+    elif align == "center":
+        canv.drawCentredString(x + width / 2, y, text)
+    else:
+        canv.drawString(x, y, text)
+
+
+def _style(
+    name: str,
+    *,
+    font_name: str = FONT_NAME,
+    font_size: float = 7.0,
+    leading: float | None = None,
+) -> ParagraphStyle:
+    return ParagraphStyle(
+        name=name,
+        fontName=font_name,
+        fontSize=font_size,
+        leading=leading or font_size + 1.1,
+        alignment=TA_LEFT,
+        spaceAfter=0,
+        spaceBefore=0,
+    )
+
+
+def _draw_paragraph(
+    canv: canvas.Canvas,
+    text: str,
+    x: float,
+    y_top: float,
+    width: float,
+    height: float,
+    *,
+    style: ParagraphStyle,
+) -> None:
+    paragraph = Paragraph(_safe_text(text).replace("\n", "<br/>"), style)
+    paragraph.wrapOn(canv, width, height)
+    paragraph.drawOn(canv, x, y_top - paragraph.height)
+
+
+def _template_path_for_mode(mode: str) -> Path:
+    return NO_RECOURSE_TEMPLATE_PATH if mode == "No Recourse" else STANDARD_TEMPLATE_PATH
+
+
+def _draw_template_logo(canv: canvas.Canvas, mode: str) -> None:
+    template_path = _template_path_for_mode(mode)
+    try:
+        with ZipFile(template_path, "r") as archive:
+            image_bytes = archive.read("word/media/image1.png")
+    except Exception:
+        image_bytes = b""
+
+    logo_x = _col_x(0) + 8
+    logo_top = _row_top(0) - 2
+    logo_w = _col_width(0, 7) - 14
+    logo_h = 36
+    if image_bytes:
+        canv.drawImage(
+            ImageReader(BytesIO(image_bytes)),
+            logo_x,
+            logo_top - logo_h,
+            width=logo_w,
+            height=logo_h,
+            preserveAspectRatio=True,
+            anchor="c",
+            mask="auto",
+        )
+    else:
+        _draw_text(
+            canv,
+            logo_x,
+            logo_top - 20,
+            "Kendal King",
+            logo_w,
+            font_name=FONT_BOLD,
+            font_size=18,
+            align="center",
+        )
+
+    _draw_text(
+        canv,
+        _col_x(0),
+        _row_bottom(1) + 2,
+        "609 SW 8th St - Ste 140 - Bentonville, AR 72712",
+        _col_width(0, 7),
+        font_size=7.0,
+        align="center",
+    )
+    _draw_text(
+        canv,
+        _col_x(8),
+        _row_bottom(0) + 3,
+        "UNIFORM BILL OF LADING",
+        _col_width(8, 18),
+        font_name=FONT_BOLD,
+        font_size=12.0,
+        align="center",
+    )
+
+
+def _draw_right_field(
+    canv: canvas.Canvas,
+    row: int,
+    label: str,
+    value: str,
+    *,
+    label_cols: tuple[int, int] = (8, 9),
+    value_cols: tuple[int, int] = (9, 14),
+) -> None:
+    y = _row_bottom(row) + 3.2
+    _draw_text(
+        canv,
+        _col_x(label_cols[0]) + 2,
+        y,
+        label,
+        _col_width(*label_cols) - 4,
+        font_name=FONT_BOLD,
+        font_size=7.0,
+        align="right",
+    )
+    _draw_text(
+        canv,
+        _col_x(value_cols[0]) + 4,
+        y,
+        value,
+        _col_width(*value_cols) - 6,
+        font_size=7.2,
+        min_size=5.3,
+    )
+
+
+def _draw_header_and_fields(
+    canv: canvas.Canvas,
+    record: BolStandardRecord,
+    mode: str,
+    *,
+    resolved_comment: str,
+) -> None:
+    _draw_template_logo(canv, mode)
+    _draw_right_field(canv, 1, "BOL #", record.bol_number)
+    _draw_right_field(canv, 2, "Ship Date", _format_ship_date_for_template(record.ship_date))
+    _draw_right_field(canv, 3, "Carrier", record.carrier, value_cols=(9, 15))
+    _draw_right_field(canv, 4, "Carrier Pro #", record.carrier_pro_number or record.kk_load_number)
+    _draw_right_field(canv, 5, "PO #", record.po_number)
+
+    if mode == "No Recourse":
+        _draw_right_field(canv, 6, "KK PO #", record.kk_po_number)
+        _draw_right_field(canv, 7, "KK Load #", record.kk_load_number)
+        _draw_right_field(canv, 8, "Seal #", record.seal_number_blank)
+        _draw_right_field(canv, 9, "Pick Up #", getattr(record, "pickup_number", ""), value_cols=(9, 15))
+        if resolved_comment:
+            _draw_right_field(canv, 11, "Comments", resolved_comment, value_cols=(9, 18))
+    else:
+        _draw_right_field(canv, 6, "Tracker #", "")
+        _draw_right_field(canv, 7, "KK PO #", record.kk_po_number)
+        _draw_right_field(canv, 8, "KKG Load #", record.kk_load_number, value_cols=(9, 15))
+        _draw_right_field(canv, 9, "Delivery Appt.", getattr(record, "pickup_number", ""), value_cols=(9, 15))
+        _draw_right_field(canv, 10, "APPT #", getattr(record, "pickup_number", ""), value_cols=(9, 15))
+        _draw_right_field(canv, 12, "Seal #", record.seal_number_blank)
+        if resolved_comment:
+            _draw_right_field(canv, 11, "Comments", resolved_comment, value_cols=(9, 18))
+
+
+def _draw_section_header(canv: canvas.Canvas, col_start: int, col_end: int, row: int, title: str) -> None:
+    x, y, width, height = _box(canv, col_start, col_end, row, row + 1, fill=GRAY_FILL)
+    _draw_text(
+        canv,
+        x + 4,
+        y + height - 9,
+        title,
+        width - 8,
+        font_name=FONT_BOLD,
+        font_size=7.3,
+    )
+
+
+def _draw_left_label_value(
+    canv: canvas.Canvas,
+    row: int,
+    label: str,
+    value: str,
+    *,
+    value_row: int | None = None,
+) -> None:
+    label_y = _row_bottom(row) + 3.2
+    value_y = _row_bottom(value_row if value_row is not None else row) + 3.2
+    _draw_text(canv, _col_x(0) + 3, label_y, label, _col_width(0, 1) - 6, font_name=FONT_BOLD, font_size=6.6)
+    _draw_text(canv, _col_x(1) + 3, value_y, value, _col_width(1, 7) - 6, font_size=7.0, min_size=5.2)
+
+
+def _draw_stacked_shipper_consignee(
+    canv: canvas.Canvas,
+    record: BolStandardRecord,
+    selected_facility: BolFacilityRecord,
+    mode: str,
+) -> None:
+    _draw_section_header(canv, 0, 7, 6, "FROM (SHIPPER)")
+    _box(canv, 0, 7, 7, 13)
+    _draw_left_label_value(canv, 7, "COMPANY", selected_facility["facility_name"])
+    _draw_left_label_value(canv, 9, "STREET", selected_facility["address"])
+    _draw_text(
+        canv,
+        _col_x(1) + 3,
+        _row_bottom(10) + 3.2,
+        selected_facility["location"],
+        _col_width(1, 7) - 6,
+        font_size=7.0,
+    )
+    _draw_left_label_value(canv, 12, "ATTN", "")
+
+    _draw_section_header(canv, 0, 7, 13, "TO (CONSIGNEE)")
+    _box(canv, 0, 7, 14, 22)
+    _draw_left_label_value(canv, 14, "COMPANY", record.consignee_company)
+    _draw_left_label_value(canv, 16, "STREET", record.consignee_street)
+    _draw_left_label_value(canv, 17, "CITY/ST/ZIP", record.consignee_city_state_zip)
+    if mode == "Standard":
+        _draw_left_label_value(canv, 18, "APPOINTMENT #", getattr(record, "pickup_number", ""))
+        _draw_left_label_value(canv, 19, "DC:", record.dc_number)
+    else:
+        _draw_left_label_value(canv, 19, "DC#", record.dc_number)
+
+
+def _draw_freight_billto_subject(canv: canvas.Canvas, record: BolStandardRecord) -> None:
+    _draw_section_header(canv, 8, 18, 13, "FREIGHT CHARGE TERMS:")
+    _box(canv, 8, 18, 14, 17)
+    terms_x = _col_x(9) + 6
+    _draw_text(canv, terms_x, _row_bottom(14) + 4, "X      FREIGHT PREPAID", 160, font_size=7.2)
+    _draw_text(canv, terms_x, _row_bottom(15) + 4, "FREIGHT COLLECT", 160, font_size=7.2)
+    _draw_text(canv, terms_x, _row_bottom(16) + 4, "FREIGHT THIRD PARTY", 160, font_size=7.2)
+
+    _draw_section_header(canv, 8, 18, 17, "BILL TO:")
+    _box(canv, 8, 18, 18, 22)
+    bill_x = _col_x(8) + 12
+    bill_w = _col_width(8, 18) - 24
+    bill_lines = [
+        record.bill_to.company,
+        record.bill_to.street,
+        record.bill_to.city_state_zip,
+        "Attn:",
+    ]
+    y = _row_top(18) - 10
+    for line in bill_lines:
+        _draw_text(canv, bill_x, y, line, bill_w, font_size=7.2)
+        y -= 9.0
+
+    subject_x = _col_x(0)
+    subject_top = _row_top(21) - 2
+    subject_w = _col_width(0, 7)
+    subject_h = _row_span_top(21) - _row_span_bottom(21, 23)
+    canv.setLineWidth(0.55)
+    canv.rect(subject_x, subject_top - subject_h, subject_w, subject_h, stroke=1, fill=0)
+    subject = (
+        "SUBJECT TO SECTION 7: Of the conditions if shipment is to be delivered to consignee "
+        "without recourse on the consignor, the consignor shall sign the following statement: "
+        "The Carrier shall not make delivery of the shipment without payment of the freight "
+        "and all other lawful charges."
+    )
+    _draw_paragraph(
+        canv,
+        subject,
+        subject_x + 5,
+        subject_top - 5,
+        subject_w - 10,
+        subject_h - 10,
+        style=_style("Subject7", font_size=5.9, leading=6.7),
+    )
 
 
 def _line_has_data(line: BolStandardItemLine) -> bool:
@@ -120,283 +542,60 @@ def _calculate_totals(
                 total_weight_value += numeric_weight
 
     total_qty_display = (
-        _display_number(total_pallet_qty_value)
+        _format_number(total_pallet_qty_value)
         if filter_blank_item_lines and has_pallet_qty_value
-        else _display_number(total_qty)
+        else _format_number(total_qty)
     )
-    return (
-        total_qty_display,
-        _display_number(total_skids_value),
-        _display_number(total_weight_value),
-    )
+    return total_qty_display, _format_number(total_skids_value), _format_number(total_weight_value)
 
 
-def _fit_font_size(
+def _draw_table_cell_text(
     canv: canvas.Canvas,
+    col_start: int,
+    col_end: int,
+    row_start: int,
+    row_end: int,
     text: str,
-    font_name: str,
-    base_size: float,
-    max_width: float,
-    min_size: float = 6.0,
-) -> float:
-    size = base_size
-    while size > min_size and canv.stringWidth(text, font_name, size) > max_width:
-        size -= 0.5
-    return size
-
-
-def _draw_string_fit(
-    canv: canvas.Canvas,
-    x: float,
-    y: float,
-    text: str,
-    max_width: float,
     *,
     font_name: str = FONT_NAME,
-    font_size: float = 8,
-    align: str = "left",
-    min_size: float = 6,
-) -> None:
-    text = _safe_text(text)
-    size = _fit_font_size(canv, text, font_name, font_size, max_width, min_size)
-    canv.setFont(font_name, size)
-    if align == "right":
-        canv.drawRightString(x + max_width, y, text)
-    elif align == "center":
-        canv.drawCentredString(x + max_width / 2, y, text)
-    else:
-        canv.drawString(x, y, text)
-
-
-def _paragraph_style(
-    name: str,
-    *,
-    font_name: str = FONT_NAME,
-    font_size: float = 7.5,
-    leading: float | None = None,
-    alignment: int = TA_LEFT,
-) -> ParagraphStyle:
-    return ParagraphStyle(
-        name=name,
-        fontName=font_name,
-        fontSize=font_size,
-        leading=leading or font_size + 1.2,
-        alignment=alignment,
-        spaceAfter=0,
-        spaceBefore=0,
-    )
-
-
-def _draw_paragraph(
-    canv: canvas.Canvas,
-    text: str,
-    x: float,
-    y_top: float,
-    width: float,
-    height: float,
-    *,
-    style: ParagraphStyle,
-) -> None:
-    paragraph = Paragraph(_safe_text(text).replace("\n", "<br/>"), style)
-    paragraph.wrapOn(canv, width, height)
-    paragraph.drawOn(canv, x, y_top - paragraph.height)
-
-
-def _draw_box(canv: canvas.Canvas, x: float, y: float, width: float, height: float) -> None:
-    canv.setStrokeColor(LINE_COLOR)
-    canv.setLineWidth(0.7)
-    canv.rect(x, y, width, height, stroke=1, fill=0)
-
-
-def _draw_label_cell(
-    canv: canvas.Canvas,
-    x: float,
-    y: float,
-    width: float,
-    height: float,
-    label: str,
-    *,
-    fill: bool = True,
+    font_size: float = 6.5,
     align: str = "left",
 ) -> None:
-    if fill:
-        canv.setFillColor(HEADER_FILL)
-        canv.rect(x, y, width, height, stroke=0, fill=1)
-        canv.setFillColor(colors.black)
-    _draw_box(canv, x, y, width, height)
-    _draw_string_fit(
+    x = _col_x(col_start)
+    y = _row_span_bottom(row_start, row_end)
+    width = _col_width(col_start, col_end)
+    height = _row_span_top(row_start) - y
+    _draw_text(
         canv,
         x + 3,
         y + height - 9,
-        label,
+        text,
         width - 6,
-        font_name=FONT_BOLD,
-        font_size=7.2,
+        font_name=font_name,
+        font_size=font_size,
+        min_size=5.0,
         align=align,
     )
 
 
-def _draw_value_cell(
-    canv: canvas.Canvas,
-    x: float,
-    y: float,
-    width: float,
-    height: float,
-    value: str,
-    *,
-    font_size: float = 7.5,
-    bold: bool = False,
-) -> None:
-    _draw_box(canv, x, y, width, height)
-    _draw_string_fit(
-        canv,
-        x + 3,
-        y + height - 9,
-        value,
-        width - 6,
-        font_name=FONT_BOLD if bold else FONT_NAME,
-        font_size=font_size,
-    )
-
-
-def _draw_checkbox(canv: canvas.Canvas, x: float, y: float, label: str, *, checked: bool = False) -> None:
-    size = 7
-    canv.rect(x, y, size, size, stroke=1, fill=0)
-    if checked:
-        canv.line(x + 1.5, y + 3, x + 3, y + 1.5)
-        canv.line(x + 3, y + 1.5, x + 6, y + 6)
-    canv.setFont(FONT_NAME, 6.5)
-    canv.drawString(x + size + 3, y + 1, label)
-
-
-def _draw_header(
-    canv: canvas.Canvas,
-    record: BolStandardRecord,
-    mode: str,
-    *,
-    resolved_comment: str,
-) -> None:
-    top = PAGE_HEIGHT - MARGIN
-    left_width = 4.2 * inch
-    right_x = MARGIN + left_width + 0.18 * inch
-    right_width = PAGE_WIDTH - MARGIN - right_x
-
-    canv.setFont(FONT_NAME, 7.5)
-    canv.drawString(MARGIN, top - 10, "609 SW 8th St • Ste 140 • Bentonville, AR 72712")
-    canv.setFont(FONT_BOLD, 15)
-    title = "UNIFORM BILL OF LADING" if mode == "No Recourse" else "STRAIGHT BILL OF LADING"
-    canv.drawCentredString(MARGIN + left_width / 2, top - 33, title)
-    canv.setFont(FONT_NAME, 7)
-    canv.drawCentredString(MARGIN + left_width / 2, top - 46, "Original - Not Negotiable")
-
-    row_h = 14
-    label_w = 0.82 * inch
-    value_w = right_width - label_w
-    rows = [
-        ("BOL #", record.bol_number),
-        ("Ship Date", _format_ship_date_for_template(record.ship_date)),
-        ("Carrier", record.carrier),
-        ("Carrier Pro #", record.carrier_pro_number or record.kk_load_number),
-        ("PO #", record.po_number),
-        ("KK PO #", record.kk_po_number),
-        ("KK Load #", record.kk_load_number),
-        ("Seal #", record.seal_number_blank),
-        ("Pick Up #", getattr(record, "pickup_number", "")),
-        ("Comments", resolved_comment),
-    ]
-    y = top - row_h
-    for label, value in rows:
-        _draw_label_cell(canv, right_x, y, label_w, row_h, label, fill=False, align="right")
-        _draw_value_cell(canv, right_x + label_w, y, value_w, row_h, value, font_size=7.5)
-        y -= row_h
-
-
-def _draw_party_blocks(
-    canv: canvas.Canvas,
-    record: BolStandardRecord,
-    selected_facility: BolFacilityRecord,
-) -> None:
-    x = MARGIN
-    y_top = PAGE_HEIGHT - MARGIN - 1.95 * inch
-    width = PAGE_WIDTH - (2 * MARGIN)
-    block_h = 0.96 * inch
-    half_w = width / 2
-
-    for offset, title in ((0, "FROM (SHIPPER)"), (half_w, "TO (CONSIGNEE)")):
-        _draw_label_cell(canv, x + offset, y_top - 15, half_w, 15, title)
-        _draw_box(canv, x + offset, y_top - block_h, half_w, block_h - 15)
-
-    label_w = 0.72 * inch
-    row_h = 13.5
-    ship_values = [
-        ("COMPANY", selected_facility["facility_name"]),
-        ("STREET", selected_facility["address"]),
-        ("CITY/ST/ZIP", selected_facility["location"]),
-    ]
-    consignee_values = [
-        ("COMPANY", record.consignee_company),
-        ("STREET", record.consignee_street),
-        ("CITY/ST/ZIP", record.consignee_city_state_zip),
-        ("DC #", record.dc_number),
-    ]
-    for col_x, values in ((x, ship_values), (x + half_w, consignee_values)):
-        row_y = y_top - 30
-        for label, value in values:
-            canv.setFont(FONT_BOLD, 6.7)
-            canv.drawString(col_x + 4, row_y, label)
-            _draw_string_fit(canv, col_x + label_w, row_y, value, half_w - label_w - 8, font_size=7.5)
-            row_y -= row_h
-
-
-def _draw_terms_subject_billto(canv: canvas.Canvas, record: BolStandardRecord) -> None:
-    x = MARGIN
-    y = PAGE_HEIGHT - MARGIN - 3.08 * inch
-    width = PAGE_WIDTH - (2 * MARGIN)
-    terms_h = 0.44 * inch
-    subject_h = 0.48 * inch
-    bill_w = 2.3 * inch
-    subject_w = width - bill_w - 0.08 * inch
-
-    _draw_box(canv, x, y - terms_h, width, terms_h)
-    canv.setFont(FONT_BOLD, 7)
-    canv.drawString(x + 5, y - 11, "FREIGHT CHARGE TERMS")
-    _draw_checkbox(canv, x + 130, y - 15, "Prepaid", checked=True)
-    _draw_checkbox(canv, x + 195, y - 15, "Collect")
-    _draw_checkbox(canv, x + 255, y - 15, "3rd Party")
-    canv.setFont(FONT_NAME, 6.5)
-    canv.drawString(x + 340, y - 13, "Freight charges are subject to all lawful tariffs and classifications.")
-
-    subject_y = y - terms_h - 0.06 * inch
-    _draw_box(canv, x, subject_y - subject_h, subject_w, subject_h)
-    subject = (
-        "SUBJECT TO SECTION 7: Of the conditions if shipment is to be delivered to consignee "
-        "without recourse on the consignor, the consignor shall sign the following statement: "
-        "The Carrier shall not make delivery of the shipment without payment of the freight "
-        "and all other lawful charges."
+def _draw_item_description(canv: canvas.Canvas, row: int, line: BolStandardItemLine) -> None:
+    x = _col_x(5) + 4
+    y_top = _row_top(row) - 4
+    width = _col_width(5, 11) - 8
+    height = ROW_HEIGHTS_PT[row] - 6
+    text = (
+        f"{_safe_text(line.item_description)}<br/>"
+        f"Item #: {_safe_text(line.item_number)}     UPC #: {_safe_text(line.upc)}"
     )
     _draw_paragraph(
         canv,
-        subject,
-        x + 5,
-        subject_y - 4,
-        subject_w - 10,
-        subject_h - 8,
-        style=_paragraph_style("Subject7", font_size=6.0, leading=6.8),
+        text,
+        x,
+        y_top,
+        width,
+        height,
+        style=_style("ItemDescription", font_size=6.2, leading=7.0),
     )
-
-    bill_x = x + subject_w + 0.08 * inch
-    _draw_label_cell(canv, bill_x, subject_y - 14, bill_w, 14, "BILL TO:")
-    _draw_box(canv, bill_x, subject_y - subject_h, bill_w, subject_h - 14)
-    bill_lines = [
-        record.bill_to.company,
-        record.bill_to.street,
-        record.bill_to.city_state_zip,
-        "Attn:",
-    ]
-    line_y = subject_y - 27
-    for line in bill_lines:
-        _draw_string_fit(canv, bill_x + 6, line_y, line, bill_w - 12, font_size=7.2)
-        line_y -= 8.5
 
 
 def _draw_item_table(
@@ -406,7 +605,7 @@ def _draw_item_table(
     mode: str,
     bol_type: str | None,
     qty_type: str,
-) -> float:
+) -> None:
     rendered_type = _normalize_bol_type(bol_type)
     filter_blank = mode == "No Recourse"
     item_lines = _rendered_item_lines(record.item_lines, filter_blank_item_lines=filter_blank)
@@ -416,186 +615,159 @@ def _draw_item_table(
         filter_blank_item_lines=filter_blank,
     )
 
-    x = MARGIN
-    top = PAGE_HEIGHT - MARGIN - 4.15 * inch
-    width = PAGE_WIDTH - (2 * MARGIN)
-    header_h = 18
-    row_h = 24 if mode == "No Recourse" else 27
-    totals_h = 18
-    min_rows = 4 if mode == "No Recourse" else 5
-    rows_to_draw = max(min_rows, len(item_lines))
-    table_h = header_h + (rows_to_draw * row_h) + totals_h
+    # Header and item table grid from the DOCX template.
+    for row in range(23, 34):
+        _box(canv, 0, 1, row, row + 1, fill=GRAY_FILL if row == 23 else None)
+        _box(canv, 1, 3, row, row + 1, fill=GRAY_FILL if row == 23 else None)
+        _box(canv, 3, 5, row, row + 1, fill=GRAY_FILL if row == 23 else None)
+        _box(canv, 5, 11, row, row + 1, fill=GRAY_FILL if row == 23 else None)
+        _box(canv, 11, 14, row, row + 1, fill=GRAY_FILL if row == 23 else None)
+        _box(canv, 14, 19, row, row + 1, fill=GRAY_FILL if row == 23 else None)
 
-    col_widths = [
-        0.62 * inch,
-        0.42 * inch,
-        1.0 * inch,
-        2.05 * inch,
-        0.72 * inch,
-        1.0 * inch,
-        0.55 * inch,
-        width - (6.36 * inch),
-    ]
     headers = [
-        _qty_type_header(qty_type),
-        "TYPE",
-        "PO #",
-        "ITEM DESCRIPTION",
-        "ITEM #",
-        "UPC #",
-        "# SKIDS",
-        "WEIGHT",
+        (0, 1, _qty_type_header(qty_type)),
+        (1, 3, "Type"),
+        (3, 5, "PO #"),
+        (5, 11, "ITEM DESCRIPTION"),
+        (11, 14, "# SKIDS"),
+        (14, 19, "WEIGHT"),
     ]
-
-    y = top - header_h
-    canv.setFillColor(HEADER_FILL)
-    canv.rect(x, y, width, header_h, stroke=0, fill=1)
-    canv.setFillColor(colors.black)
-    cursor_x = x
-    for header, col_w in zip(headers, col_widths):
-        _draw_box(canv, cursor_x, y, col_w, header_h)
-        _draw_string_fit(
+    for col_start, col_end, label in headers:
+        _draw_table_cell_text(
             canv,
-            cursor_x + 2,
-            y + 6,
-            header,
-            col_w - 4,
+            col_start,
+            col_end,
+            23,
+            24,
+            label,
             font_name=FONT_BOLD,
-            font_size=6.7,
+            font_size=6.5,
             align="center",
         )
-        cursor_x += col_w
 
-    item_style = _paragraph_style("ItemCell", font_size=6.5, leading=7.2)
-    for row_index in range(rows_to_draw):
-        y -= row_h
-        line = item_lines[row_index] if row_index < len(item_lines) else None
-        values = (
-            [
-                line.pallet_qty,
-                rendered_type,
-                line.po_number,
-                line.item_description,
-                line.item_number,
-                line.upc,
-                line.skids,
-                line.weight_each,
-            ]
-            if line is not None
-            else ["", "", "", "", "", "", "", ""]
-        )
-        cursor_x = x
-        for col_index, (value, col_w) in enumerate(zip(values, col_widths)):
-            _draw_box(canv, cursor_x, y, col_w, row_h)
-            if col_index == 3:
-                _draw_paragraph(
-                    canv,
-                    value,
-                    cursor_x + 3,
-                    y + row_h - 4,
-                    col_w - 6,
-                    row_h - 6,
-                    style=item_style,
-                )
-            else:
-                _draw_string_fit(
-                    canv,
-                    cursor_x + 3,
-                    y + row_h - 12,
-                    value,
-                    col_w - 6,
-                    font_size=6.5,
-                    min_size=5.5,
-                )
-            cursor_x += col_w
+    item_rows = list(range(24, 33))
+    for row, line in zip(item_rows, item_lines):
+        _draw_table_cell_text(canv, 0, 1, row, row + 1, line.pallet_qty, font_size=6.5)
+        _draw_table_cell_text(canv, 1, 3, row, row + 1, rendered_type, font_size=6.5)
+        _draw_table_cell_text(canv, 3, 5, row, row + 1, line.po_number, font_size=6.2)
+        _draw_item_description(canv, row, line)
+        _draw_table_cell_text(canv, 11, 14, row, row + 1, line.skids, font_size=6.5)
+        _draw_table_cell_text(canv, 14, 19, row, row + 1, line.weight_each, font_size=6.5)
 
-    y -= totals_h
-    cursor_x = x
-    totals = [total_qty, "", "", "TOTALS", "", "", total_skids, total_weight]
-    for col_index, (value, col_w) in enumerate(zip(totals, col_widths)):
-        fill = col_index == 3
-        if fill:
-            canv.setFillColor(LIGHT_FILL)
-            canv.rect(cursor_x, y, col_w, totals_h, stroke=0, fill=1)
-            canv.setFillColor(colors.black)
-        _draw_box(canv, cursor_x, y, col_w, totals_h)
-        font = FONT_BOLD if col_index in {0, 3, 6, 7} else FONT_NAME
-        align = "center" if col_index == 3 else "left"
-        _draw_string_fit(
-            canv,
-            cursor_x + 3,
-            y + 6,
-            value,
-            col_w - 6,
-            font_name=font,
-            font_size=7,
-            align=align,
-        )
-        cursor_x += col_w
-
-    return y
+    _draw_table_cell_text(canv, 5, 11, 33, 34, "TOTALS", font_name=FONT_BOLD, font_size=7.0, align="center")
+    _draw_table_cell_text(canv, 0, 1, 33, 34, total_qty, font_name=FONT_BOLD, font_size=7.0)
+    _draw_table_cell_text(canv, 11, 14, 33, 34, total_skids, font_name=FONT_BOLD, font_size=7.0)
+    _draw_table_cell_text(canv, 14, 19, 33, 34, total_weight, font_name=FONT_BOLD, font_size=7.0)
 
 
-def _draw_footer(canv: canvas.Canvas, record: BolStandardRecord, table_bottom: float, *, mode: str) -> None:
-    x = MARGIN
-    width = PAGE_WIDTH - (2 * MARGIN)
-    y = table_bottom - 0.08 * inch
+def _draw_standard_footer(canv: canvas.Canvas) -> None:
+    y = _row_bottom(34) - 8
+    _draw_text(canv, _col_x(0), y, "Shipper Signature:", _col_width(0, 6), font_name=FONT_BOLD, font_size=7)
+    canv.line(_col_x(2), y - 2, _col_x(9), y - 2)
+    _draw_text(canv, _col_x(10), y, "Driver Signature:", _col_width(10, 4), font_name=FONT_BOLD, font_size=7)
+    canv.line(_col_x(13), y - 2, _col_x(19), y - 2)
 
-    if mode == "No Recourse":
-        notice_h = 0.42 * inch
-        _draw_box(canv, x, y - notice_h, width, notice_h)
-        notice = (
-            "BROKER PAYMENT / NO RECOURSE NOTICE: Carrier agrees to seek payment solely from "
-            "the broker and waives recourse against shipper, consignee, and Kendal King for "
-            "freight charges unless otherwise required by law."
-        )
-        _draw_paragraph(
-            canv,
-            notice,
-            x + 5,
-            y - 5,
-            width - 10,
-            notice_h - 10,
-            style=_paragraph_style("NoRecourseNotice", font_name=FONT_BOLD, font_size=6.6, leading=7.4),
-        )
-        y -= notice_h + 0.06 * inch
 
-    legal_h = 0.44 * inch
-    _draw_box(canv, x, y - legal_h, width, legal_h)
+def _draw_no_recourse_footer(canv: canvas.Canvas) -> None:
+    row_top = _row_top(34)
+    row_y = _row_bottom(34)
+    _draw_table_cell_text(canv, 0, 6, 34, 35, "Shipper Signature:", font_name=FONT_BOLD, font_size=7.0)
+    canv.line(_col_x(2), row_y + 5, _col_x(7), row_y + 5)
+
+    note_top = row_top - 18
+    note_h = 22
+    canv.rect(_col_x(0), note_top - note_h, _col_width(0, 19), note_h, stroke=1, fill=0)
+    note = (
+        "CUSTOMER NOTE: Please check this shipment carefully. No returns accepted without prior approval. "
+        "If shipment does not agree with this manifest, have carrier note discrepancy on receipt and notify "
+        "shipper immediately."
+    )
+    _draw_paragraph(
+        canv,
+        note,
+        _col_x(0) + 5,
+        note_top - 4,
+        _col_width(0, 19) - 10,
+        note_h - 8,
+        style=_style("CustomerNote", font_size=5.1, leading=5.7),
+    )
+
+    sig_top = note_top - note_h - 3
+    sig_h = 16
+    half_w = _col_width(0, 19) / 2
+    canv.rect(_col_x(0), sig_top - sig_h, half_w, sig_h, stroke=1, fill=0)
+    canv.setFillColor(YELLOW_FILL)
+    canv.rect(_col_x(0) + half_w, sig_top - sig_h, half_w, sig_h, stroke=1, fill=1)
+    canv.setFillColor(colors.black)
+    _draw_text(canv, _col_x(0) + 5, sig_top - 11, "Receiver Signature:", half_w - 10, font_name=FONT_BOLD, font_size=6.6)
+    _draw_text(
+        canv,
+        _col_x(0) + half_w + 5,
+        sig_top - 13,
+        "Driver Signature:",
+        half_w - 10,
+        font_name=FONT_BOLD,
+        font_size=6.6,
+    )
+
+    notice_top = sig_top - sig_h - 3
+    notice_h = 44
+    canv.rect(_col_x(0), notice_top - notice_h, _col_width(0, 19), notice_h, stroke=1, fill=0)
+    _draw_text(
+        canv,
+        _col_x(0) + 5,
+        notice_top - 10,
+        "BROKER PAYMENT & NO RECOURSE NOTICE",
+        _col_width(0, 19) - 10,
+        font_name=FONT_BOLD,
+        font_size=6.8,
+        align="center",
+    )
+    _draw_text(
+        canv,
+        _col_x(0) + 5,
+        notice_top - 20,
+        "Broker of Record: TRIDENT TRANSPORT, LLC",
+        _col_width(0, 19) - 10,
+        font_name=FONT_BOLD,
+        font_size=5.8,
+    )
+    notice = (
+        "Freight charges for this shipment are to be paid solely by the Broker of Record. Carrier agrees "
+        "that it shall look exclusively to the Broker for payment of freight charges and hereby waives any "
+        "right of recourse against Kendal King Group for unpaid freight charges. Payment by Kendal King Group "
+        "to Broker shall constitute full satisfaction of Shipper's freight payment obligation. Carrier "
+        "acknowledges and agrees that it has no lien, claim, or right to pursue Kendal King Group for unpaid "
+        "freight charges. This provision shall survive delivery and any termination of transportation services."
+    )
+    _draw_paragraph(
+        canv,
+        notice,
+        _col_x(0) + 5,
+        notice_top - 25,
+        _col_width(0, 19) - 10,
+        notice_h - 27,
+        style=_style("NoRecourse", font_size=4.25, leading=4.75),
+    )
+
+    legal_top = notice_top - notice_h - 3
     legal = (
-        "Received, subject to individually determined rates or contracts that have been agreed upon "
-        "in writing between the carrier and shipper, if applicable, otherwise to the rates, "
-        "classifications and rules that have been established by the carrier and are available "
-        "to the shipper on request."
+        "The transportation of the property described herein is tendered and accepted subject to applicable "
+        "federal transportation law and the written agreements between the Parties. In the event of any conflict "
+        "between this Bill of Lading and any other document, the applicable written contract between Kendal King "
+        "Group and the Broker of Record shall control. Nothing herein shall be construed to impose payment "
+        "responsibility on Kendal King Group beyond its obligation to pay the Broker of Record in accordance with "
+        "the governing agreement."
     )
     _draw_paragraph(
         canv,
         legal,
-        x + 5,
-        y - 5,
-        width - 10,
-        legal_h - 10,
-        style=_paragraph_style("Legal", font_size=5.7, leading=6.5),
+        _col_x(0) + 5,
+        legal_top,
+        _col_width(0, 19) - 10,
+        28,
+        style=_style("FinalLegal", font_size=4.15, leading=4.65),
     )
-    y -= legal_h + 0.08 * inch
-
-    sig_h = 0.58 * inch
-    half = width / 2
-    _draw_box(canv, x, y - sig_h, half, sig_h)
-    _draw_box(canv, x + half, y - sig_h, half, sig_h)
-    canv.setFont(FONT_BOLD, 6.7)
-    canv.drawString(x + 5, y - 10, "SHIPPER SIGNATURE / DATE")
-    canv.drawString(x + half + 5, y - 10, "CARRIER SIGNATURE / PICKUP DATE")
-    canv.line(x + 8, y - sig_h + 13, x + half - 8, y - sig_h + 13)
-    canv.line(x + half + 8, y - sig_h + 13, x + width - 8, y - sig_h + 13)
-
-    cod_y = y - sig_h - 0.06 * inch
-    _draw_box(canv, x, cod_y - 0.34 * inch, width, 0.34 * inch)
-    _draw_checkbox(canv, x + 6, cod_y - 16, "COD Amount: $")
-    canv.line(x + 92, cod_y - 12, x + 190, cod_y - 12)
-    _draw_checkbox(canv, x + 210, cod_y - 16, "Fee terms: Collect")
-    _draw_checkbox(canv, x + 315, cod_y - 16, "Prepaid")
-    _draw_checkbox(canv, x + 390, cod_y - 16, "Customer check acceptable")
 
 
 def _draw_bol_pdf(
@@ -612,17 +784,16 @@ def _draw_bol_pdf(
     canv = canvas.Canvas(str(destination_pdf), pagesize=letter)
     canv.setTitle(f"{mode} BOL {record.bol_number}")
 
-    _draw_header(canv, record, mode, resolved_comment=_resolve_comment(record, batch_comment))
-    _draw_party_blocks(canv, record, selected_facility)
-    _draw_terms_subject_billto(canv, record)
-    table_bottom = _draw_item_table(
-        canv,
-        record,
-        mode=mode,
-        bol_type=bol_type,
-        qty_type=qty_type,
-    )
-    _draw_footer(canv, record, table_bottom, mode=mode)
+    resolved_comment = _resolve_comment(record, batch_comment)
+    _draw_header_and_fields(canv, record, mode, resolved_comment=resolved_comment)
+    _draw_stacked_shipper_consignee(canv, record, selected_facility, mode)
+    _draw_freight_billto_subject(canv, record)
+    _draw_item_table(canv, record, mode=mode, bol_type=bol_type, qty_type=qty_type)
+    if mode == "No Recourse":
+        _draw_no_recourse_footer(canv)
+    else:
+        _draw_standard_footer(canv)
+
     canv.showPage()
     canv.save()
 
