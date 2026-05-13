@@ -12,11 +12,6 @@ import re
 import zipfile
 
 from docx import Document
-from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
-from docx.shared import Pt
 from docx.table import Table
 
 from app.models.bol_standard_record import BolStandardItemLine, BolStandardRecord
@@ -50,30 +45,6 @@ def _tok(name: str) -> str:
 
 ITEM_PLACEHOLDER_TOKENS: tuple[str, ...] = tuple(
     _tok(alias) for aliases in ITEM_TOKEN_ALIASES.values() for alias in aliases
-)
-
-TOP_RIGHT_LABELS: tuple[str, ...] = (
-    "BOL #",
-    "Ship Date",
-    "Carrier",
-    "Carrier Pro #",
-    "PO #",
-    "Tracker #",
-    "KK PO #",
-    "KKG Load #",
-    "KK Load #",
-    "Delivery Appt.",
-    "APPT #",
-    "Seal #",
-    "Pick Up #",
-)
-
-BILL_TO_MARKERS: tuple[str, ...] = (
-    "BILL TO:",
-    "Trident Transport",
-    "505 Riverfront",
-    "Chattanooga",
-    "Attn:",
 )
 
 
@@ -224,148 +195,6 @@ def _replace_text_in_document(
         _replace_in_table_collection(section.footer.tables)
         if include_xml_tree:
             _replace_in_element_tree(section.footer._element)
-
-
-def _unique_row_cells(row) -> list:
-    unique_cells = []
-    seen: set[int] = set()
-    for cell in row.cells:
-        cell_id = id(cell._tc)
-        if cell_id in seen:
-            continue
-        seen.add(cell_id)
-        unique_cells.append(cell)
-    return unique_cells
-
-
-def _remove_cell_no_wrap(cell) -> None:
-    tc_pr = cell._tc.get_or_add_tcPr()
-    for no_wrap in list(tc_pr.findall(qn("w:noWrap"))):
-        tc_pr.remove(no_wrap)
-
-
-def _set_cell_margin_twips(cell, *, top: int = 0, bottom: int = 0, left: int = 36, right: int = 36) -> None:
-    tc_pr = cell._tc.get_or_add_tcPr()
-    tc_mar = tc_pr.find(qn("w:tcMar"))
-    if tc_mar is None:
-        tc_mar = OxmlElement("w:tcMar")
-        tc_pr.append(tc_mar)
-
-    for side, value in (("top", top), ("bottom", bottom), ("left", left), ("right", right)):
-        node = tc_mar.find(qn(f"w:{side}"))
-        if node is None:
-            node = OxmlElement(f"w:{side}")
-            tc_mar.append(node)
-        node.set(qn("w:w"), str(value))
-        node.set(qn("w:type"), "dxa")
-
-
-def _format_cell_text(
-    cell,
-    *,
-    font_size_pt: float,
-    bold: bool | None = None,
-    alignment: WD_ALIGN_PARAGRAPH | None = None,
-    remove_no_wrap: bool = True,
-) -> None:
-    if remove_no_wrap:
-        _remove_cell_no_wrap(cell)
-    _set_cell_margin_twips(cell)
-    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-
-    for paragraph in cell.paragraphs:
-        paragraph.paragraph_format.space_before = Pt(0)
-        paragraph.paragraph_format.space_after = Pt(0)
-        paragraph.paragraph_format.line_spacing = 1.0
-        if alignment is not None:
-            paragraph.alignment = alignment
-        for run in paragraph.runs:
-            run.font.name = "Arial"
-            run.font.size = Pt(font_size_pt)
-            if bold is not None:
-                run.bold = bold
-
-
-def _cell_contains_any(cell, markers: tuple[str, ...]) -> bool:
-    text = " ".join(cell.text.split()).upper()
-    return any(marker.upper() in text for marker in markers)
-
-
-def _strip_cell_display_text(cell) -> None:
-    lines = [line.strip() for line in cell.text.replace("\u00a0", " ").splitlines()]
-    cleaned_lines = [line for line in lines if line]
-    cell.text = "\n".join(cleaned_lines)
-
-
-def _normalize_top_right_field_block(doc: Document) -> None:
-    if not doc.tables:
-        return
-
-    table = doc.tables[0]
-    table.autofit = False
-
-    for row in table.rows:
-        unique_cells = _unique_row_cells(row)
-        label_index = None
-        for index, cell in enumerate(unique_cells):
-            if _cell_contains_any(cell, TOP_RIGHT_LABELS):
-                label_index = index
-                break
-
-        if label_index is None:
-            continue
-
-        row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
-        row.height = Pt(13)
-
-        label_cell = unique_cells[label_index]
-        _strip_cell_display_text(label_cell)
-        _format_cell_text(
-            label_cell,
-            font_size_pt=7.5,
-            bold=True,
-            alignment=WD_ALIGN_PARAGRAPH.RIGHT,
-            remove_no_wrap=False,
-        )
-
-        if label_index + 1 < len(unique_cells):
-            value_cell = unique_cells[label_index + 1]
-            _strip_cell_display_text(value_cell)
-            _format_cell_text(
-                value_cell,
-                font_size_pt=7.5,
-                bold=False,
-                alignment=WD_ALIGN_PARAGRAPH.LEFT,
-                remove_no_wrap=True,
-            )
-
-
-def _normalize_bill_to_block(doc: Document) -> None:
-    if not doc.tables:
-        return
-
-    table = doc.tables[0]
-    for row in table.rows:
-        if not any(_cell_contains_any(cell, BILL_TO_MARKERS) for cell in _unique_row_cells(row)):
-            continue
-
-        row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
-        row.height = Pt(13)
-        for cell in _unique_row_cells(row):
-            if _cell_contains_any(cell, BILL_TO_MARKERS):
-                _strip_cell_display_text(cell)
-                _format_cell_text(
-                    cell,
-                    font_size_pt=8,
-                    bold=None,
-                    alignment=WD_ALIGN_PARAGRAPH.LEFT,
-                    remove_no_wrap=True,
-                )
-
-
-def _normalize_standard_pdf_layout(doc: Document) -> None:
-    _normalize_top_right_field_block(doc)
-    _normalize_bill_to_block(doc)
 
 
 def _replace_tokens_in_row_element(row_element, replacements: dict[str, str]) -> None:
@@ -870,52 +699,7 @@ def _postprocess_comments_in_document_xml(
     updated_xml = _clear_comment_placeholders(updated_xml)
     updated_xml = _clear_existing_comment_label_values(updated_xml)
     updated_xml, populated = _populate_first_comment_label(updated_xml, resolved_comment.strip())
-    updated_xml = _normalize_comment_textbox_xml(updated_xml)
     return updated_xml, populated
-
-
-def _normalize_comment_textbox_xml(xml_text: str) -> str:
-    alternate_content_pattern = re.compile(
-        r"<mc:AlternateContent\b(?:(?!</mc:AlternateContent>).)*?"
-        r"Comments?:"
-        r"(?:(?!</mc:AlternateContent>).)*?</mc:AlternateContent>",
-        flags=re.DOTALL | re.IGNORECASE,
-    )
-
-    def _normalize_block(match: re.Match[str]) -> str:
-        block = match.group(0)
-
-        block = re.sub(
-            r'(<a:ext\b[^>]*\bcy=")[^"]+(")',
-            lambda ext_match: f'{ext_match.group(1)}457200{ext_match.group(2)}',
-            block,
-            count=1,
-        )
-        block = re.sub(
-            r'(style="[^"]*\bheight:)[^;"]+(;)',
-            lambda style_match: f"{style_match.group(1)}36pt{style_match.group(2)}",
-            block,
-            count=1,
-        )
-        block = block.replace('vertOverflow="overflow"', 'vertOverflow="clip"')
-        block = block.replace('horzOverflow="overflow"', 'horzOverflow="clip"')
-        block = block.replace(
-            "<a:noAutofit/>",
-            '<a:normAutofit fontScale="90000" lnSpcReduction="20000"/>',
-        )
-        block = re.sub(
-            r"(<w:spacing\b[^>]*)/>",
-            lambda spacing_match: (
-                spacing_match.group(1)
-                if 'w:after=' in spacing_match.group(1)
-                else spacing_match.group(1) + ' w:after="0"'
-            )
-            + "/>",
-            block,
-        )
-        return block
-
-    return alternate_content_pattern.sub(_normalize_block, xml_text)
 
 
 def _apply_template_record_values(
@@ -1050,7 +834,6 @@ def generate_standard_docx_set(
                 compact_standard_item_area=is_standard_template or is_no_recourse_template,
                 filter_blank_item_lines=is_no_recourse_template,
             )
-            _normalize_standard_pdf_layout(doc)
 
             safe_bol = _sanitize_filename_part(record.bol_number)
             destination = _unique_destination_path(
