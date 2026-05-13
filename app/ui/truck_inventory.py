@@ -240,6 +240,10 @@ def render_truck_builder_tab() -> None:
         st.warning("Select a KKG Load # before configuring items.")
         return
 
+    selected_load = st.session_state.truck_selected_load_number
+    st.caption(
+        f"Active KKG Load # {selected_load} drives Item Setup, Build / Evaluate, Visualization, and Export."
+    )
     _render_item_setup_section()
     st.divider()
     _render_truck_selection_and_evaluate()
@@ -264,7 +268,7 @@ def _render_item_setup_section() -> None:
     setup_df = pd.DataFrame(current_setup)
     editor_revision = st.session_state.truck_item_setup_editor_revision.get(selected_load, 0)
     editor_key = f"truck_item_setup_editor_{selected_load}_{editor_revision}"
-    edited_df = st.data_editor(
+    st.data_editor(
         setup_df,
         use_container_width=True,
         hide_index=True,
@@ -284,16 +288,6 @@ def _render_item_setup_section() -> None:
         on_change=_commit_item_setup_editor_changes,
         args=(selected_load, editor_key),
     )
-    edited_setup = _normalize_editor_rows(edited_df.to_dict(orient="records"))
-    previous_setup = st.session_state.truck_item_setup_by_load.get(selected_load, [])
-    if edited_setup != previous_setup:
-        st.session_state.truck_item_setup_by_load[selected_load] = edited_setup
-        st.session_state.truck_item_setup = edited_setup
-        st.session_state.truck_trucks = []
-        st.session_state.truck_build_message = "Item Setup changed. Rebuild the truck plan to refresh fit results."
-    else:
-        st.session_state.truck_item_setup_by_load[selected_load] = edited_setup
-        st.session_state.truck_item_setup = edited_setup
 
     setup_issues = validate_item_setup(
         selected_records,
@@ -356,7 +350,9 @@ def _commit_item_setup_editor_changes(selected_load: str, editor_key: str) -> No
         updated_rows[index].update(changes)
         current_preset = str(updated_rows[index].get("Preset", ""))
         if current_preset != previous_preset:
-            updated_rows[index].update(preset_to_setup_values(current_preset))
+            preset_values = preset_to_setup_values(current_preset)
+            if preset_values:
+                updated_rows[index].update(preset_values)
             preset_changed = True
 
     updated_rows = _normalize_editor_rows(updated_rows)
@@ -404,8 +400,12 @@ def _render_load_selection() -> None:
     else:
         st.session_state[selector_key] = current_load
 
+    st.markdown("**Active KKG Load Context**")
+    st.caption(
+        "Select the KKG Load # before configuring Item Setup. Everything below uses this selected load."
+    )
     selected_load = st.selectbox(
-        "KKG Load #",
+        "Select KKG Load #",
         options=load_numbers,
         index=load_numbers.index(current_load),
         key=selector_key,
@@ -637,7 +637,7 @@ def render_truck_inventory_view() -> None:
     _initialize_truck_state()
 
     st.markdown("### Truck Inventory Module")
-    st.markdown("Upload Excel load rows, set up item dimensions by Item #, then evaluate truck fit.")
+    st.markdown("Upload the Combined Load Sheet, choose the KKG Load #, then set up items and evaluate truck fit.")
     if st.session_state.truck_normalized_records:
         _render_load_selection()
     _render_workflow_status()
@@ -677,15 +677,17 @@ def _render_workflow_status() -> None:
         if parsed and selected_records
         else ["Input not parsed"]
     )
-    setup_complete = parsed and bool(selected_records) and not setup_issues
+    load_selected = parsed and bool(st.session_state.truck_selected_load_number) and bool(selected_records)
+    setup_complete = load_selected and not setup_issues
     built = bool(st.session_state.truck_trucks)
     export_ready = parsed and built
 
     steps = [
-        ("1. Upload", parsed),
-        ("2. Item Setup", setup_complete),
-        ("3. Evaluate", built),
-        ("4. Export", export_ready),
+        ("1. Parse", parsed),
+        ("2. Select Load", load_selected),
+        ("3. Item Setup", setup_complete),
+        ("4. Evaluate", built),
+        ("5. Export", export_ready),
     ]
     cols = st.columns(len(steps))
     for col, (label, complete) in zip(cols, steps):
