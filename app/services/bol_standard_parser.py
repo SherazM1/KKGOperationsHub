@@ -35,7 +35,15 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
     "kk_po": {"primary": "KK PO#", "fallback_aliases": ["KK PO #", "KK PO"]},
     "wm_po": {
         "primary": "WM PO #",
-        "fallback_aliases": ["WM PO#", "WM PO", "TGT PO #", "TGT PO#", "TGT PO"],
+        "fallback_aliases": [
+            "WM PO#",
+            "WM PO",
+            "TGT PO #",
+            "TGT PO#",
+            "TGT PO",
+            "PO #",
+            "PO#",
+        ],
     },
     "dc_number": {"primary": "DC #", "fallback_aliases": ["DC#"]},
     "dc_name": {"primary": "DC NAME", "fallback_aliases": []},
@@ -255,6 +263,14 @@ def _combine_city_state_zip(row: pd.Series, column_map: dict[str, str]) -> str:
     return " ".join(part for part in (city_state, zip_code) if part)
 
 
+def _effective_bol_number(row_values: dict[str, str]) -> str:
+    bol_number = row_values["bol_number"].strip()
+    if bol_number:
+        return bol_number
+
+    return row_values["wm_po"].strip()
+
+
 def parse_standard_bol_excel(file: Any) -> list[BolStandardRow]:
     if file is None:
         raise ValueError("No file uploaded. Upload an Excel file to parse.")
@@ -284,7 +300,7 @@ def parse_standard_bol_excel(file: Any) -> list[BolStandardRow]:
         parsed_rows.append(
             BolStandardRow(
                 source_row_number=row_number,
-                bol_number=row_values["bol_number"],
+                bol_number=_effective_bol_number(row_values),
                 ship_date=row_values["ship_date"],
                 carrier=row_values["carrier"],
                 kk_load=row_values["kk_load"],

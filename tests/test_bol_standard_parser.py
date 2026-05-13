@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from app.services.bol_standard_parser import parse_standard_bol_excel
+from app.services.bol_standard_mapper import map_standard_rows_to_records
 
 
 def _standard_load_row() -> dict[str, object]:
@@ -101,3 +102,73 @@ def test_parse_standard_bol_excel_rejects_invalid_workbook_with_clear_error() ->
 
     with pytest.raises(ValueError, match="Could not find a BOL load sheet"):
         parse_standard_bol_excel(workbook)
+
+
+def test_parse_standard_bol_excel_prefers_populated_bol_number_over_po_fallback() -> None:
+    row = _standard_load_row()
+    row["BOL #"] = "BOL-PRIMARY"
+    row["TGT PO #"] = "TGT-FALLBACK"
+
+    workbook = _workbook_with_sheet("LOAD SHEET", [row])
+
+    rows = parse_standard_bol_excel(workbook)
+
+    assert len(rows) == 1
+    assert rows[0].bol_number == "BOL-PRIMARY"
+    assert rows[0].wm_po == "TGT-FALLBACK"
+
+
+def test_parse_standard_bol_excel_uses_tgt_po_as_effective_bol_when_bol_blank() -> None:
+    row = _standard_load_row()
+    row["BOL #"] = ""
+    row["TGT PO #"] = "10001859231-0551"
+
+    workbook = _workbook_with_sheet("LOAD SHEET", [row])
+
+    rows = parse_standard_bol_excel(workbook)
+
+    assert len(rows) == 1
+    assert rows[0].bol_number == "10001859231-0551"
+    assert rows[0].wm_po == "10001859231-0551"
+
+
+def test_standard_bol_mapping_groups_blank_bol_rows_by_effective_po_fallback() -> None:
+    first_row = _standard_load_row()
+    first_row["BOL #"] = ""
+    first_row["TGT PO #"] = "10001859231-0551"
+    first_row["load#"] = "LOAD-0551"
+    first_row["DC #"] = "0551"
+    first_row["DC NAME"] = "DC 0551"
+
+    second_row = _standard_load_row()
+    second_row["BOL #"] = ""
+    second_row["TGT PO #"] = "10001859231-0553"
+    second_row["load#"] = "LOAD-0553"
+    second_row["DC #"] = "0553"
+    second_row["DC NAME"] = "DC 0553"
+
+    workbook = _workbook_with_sheet("LOAD SHEET", [first_row, second_row])
+
+    rows = parse_standard_bol_excel(workbook)
+    records = map_standard_rows_to_records(rows)
+
+    assert [record.bol_number for record in records] == [
+        "10001859231-0551",
+        "10001859231-0553",
+    ]
+    assert all(record.status == "Ready" for record in records)
+
+
+def test_standard_bol_mapping_keeps_missing_bol_when_bol_and_po_are_blank() -> None:
+    row = _standard_load_row()
+    row["BOL #"] = ""
+    row["TGT PO #"] = ""
+
+    workbook = _workbook_with_sheet("LOAD SHEET", [row])
+
+    rows = parse_standard_bol_excel(workbook)
+    records = map_standard_rows_to_records(rows)
+
+    assert len(records) == 1
+    assert records[0].bol_number == ""
+    assert "BOL #" in records[0].missing_required_fields
