@@ -36,6 +36,7 @@ from app.services.bol_standard_pdf_converter import (
     StandardPdfConversionResult,
     convert_standard_docx_set_to_pdf,
 )
+from app.services.bol_standard_pdf_generator import generate_standard_pdf_set
 from app.services.bol_standard_parser import parse_standard_bol_excel
 from app.utils.bol_facilities import BOL_FACILITY_LOOKUP, BOL_FACILITY_OPTIONS, BolFacilityRecord
 
@@ -274,6 +275,31 @@ def _pdf_result_matches_docx_result(docx_result: StandardDocxGenerationResult) -
     if st.session_state.get("bol_pdf_source_signature") != _docx_result_signature(docx_result):
         return False
     return all(Path(pdf_file.file_path).exists() for pdf_file in pdf_result.converted_files)
+
+
+def _generate_pdf_result(
+    *,
+    mode: str,
+    docx_result: StandardDocxGenerationResult,
+    grouped_records: list[Any],
+    progress_callback: Any,
+) -> StandardPdfConversionResult:
+    if mode == "Multistop":
+        return convert_standard_docx_set_to_pdf(
+            docx_result.generated_files,
+            progress_callback=progress_callback,
+        )
+
+    return generate_standard_pdf_set(
+        grouped_records,
+        selected_facility=st.session_state["bol_selected_facility"],
+        generated_docx_files=docx_result.generated_files,
+        mode=mode,
+        bol_type=st.session_state.get("bol_type_selector", "PLT"),
+        qty_type=st.session_state.get("bol_qty_type_selector", "PLT"),
+        batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
+        progress_callback=progress_callback,
+    )
 
 
 def _format_total_skids(value: float) -> int | float:
@@ -962,13 +988,15 @@ def render_bol_generator_view() -> None:
                     generated_file: Any,
                 ) -> None:
                     progress_status.write(
-                        f"Converting PDF {current_index} of {total_files}: "
+                        f"Generating PDF {current_index} of {total_files}: "
                         f"{generated_file.file_name}"
                     )
                     progress_bar.progress(current_index / total_files if total_files else 0)
 
-                pdf_result = convert_standard_docx_set_to_pdf(
-                    docx_result.generated_files,
+                pdf_result = _generate_pdf_result(
+                    mode=mode,
+                    docx_result=docx_result,
+                    grouped_records=grouped_records,
                     progress_callback=_update_pdf_progress,
                 )
                 st.session_state["bol_pdf_result"] = pdf_result
@@ -985,7 +1013,7 @@ def render_bol_generator_view() -> None:
                     )
                 else:
                     st.session_state["bol_generation_status"] = (
-                        f"{mode} PDF conversion complete. Converted {pdf_result.converted_count}, "
+                        f"{mode} PDF generation complete. Created {pdf_result.converted_count}, "
                         f"failed {pdf_result.failed_count}."
                     )
         except Exception as exc:
@@ -1042,13 +1070,15 @@ def render_bol_generator_view() -> None:
                 generated_file: Any,
             ) -> None:
                 progress_status.write(
-                    f"Converting PDF {current_index} of {total_files}: "
+                    f"Generating PDF {current_index} of {total_files}: "
                     f"{generated_file.file_name}"
                 )
                 progress_bar.progress(current_index / total_files if total_files else 0)
 
-            pdf_result_all = convert_standard_docx_set_to_pdf(
-                docx_result_all.generated_files,
+            pdf_result_all = _generate_pdf_result(
+                mode=mode,
+                docx_result=docx_result_all,
+                grouped_records=grouped_records,
                 progress_callback=_update_generate_all_pdf_progress,
             )
             st.session_state["bol_pdf_result"] = pdf_result_all
