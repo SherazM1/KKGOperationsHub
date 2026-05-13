@@ -127,6 +127,11 @@ def _normalize_bol_type(bol_type: str | None) -> str:
     return normalized if normalized in {"PLT", "CASE"} else "PLT"
 
 
+def _qty_type_header(qty_type: str | None) -> str:
+    normalized = (qty_type or "PLT").strip().upper()
+    return "Case Qty" if normalized == "CASE" else "Pallet Qty"
+
+
 def _unique_destination_path(directory: Path, base_name: str, extension: str) -> Path:
     candidate = directory / f"{base_name}{extension}"
     if not candidate.exists():
@@ -392,10 +397,12 @@ def _populate_item_table(
     total_qty: float,
     *,
     bol_type: str | None = None,
+    qty_type: str = "PLT",
     compact_standard_item_area: bool = False,
     filter_blank_item_lines: bool = False,
 ) -> None:
     rendered_type = _normalize_bol_type(bol_type)
+    rendered_qty_header = _qty_type_header(qty_type)
     rendered_item_lines = (
         [line for line in item_lines if _item_line_has_data(line)]
         if filter_blank_item_lines
@@ -491,6 +498,9 @@ def _populate_item_table(
         idx for idx, cell_text in enumerate(header_cells)
         if "QTY" in cell_text and "# SKIDS" not in cell_text
     ]
+    if qty_col_indexes:
+        table.rows[header_idx].cells[qty_col_indexes[0]].text = rendered_qty_header
+
     skids_col_indexes = [idx for idx, cell_text in enumerate(header_cells) if "# SKIDS" in cell_text]
     type_col_indexes = [idx for idx, cell_text in enumerate(header_cells) if cell_text == "TYPE"]
     weight_col_indexes = [idx for idx, cell_text in enumerate(header_cells) if "WEIGHT" in cell_text]
@@ -709,6 +719,7 @@ def _apply_template_record_values(
     batch_comment: str | None,
     *,
     bol_type: str | None = None,
+    qty_type: str = "PLT",
     compact_standard_item_area: bool = False,
     filter_blank_item_lines: bool = False,
 ) -> list[str]:
@@ -764,6 +775,7 @@ def _apply_template_record_values(
                 record.item_lines,
                 record.total_skids,
                 bol_type=bol_type,
+                qty_type=qty_type,
                 compact_standard_item_area=compact_standard_item_area,
                 filter_blank_item_lines=filter_blank_item_lines,
             )
@@ -781,6 +793,7 @@ def generate_standard_docx_set(
     selected_facility: BolFacilityRecord | None,
     batch_comment: str | None = None,
     bol_type: str | None = None,
+    qty_type: str = "PLT",
     template_path: Path | None = None,
     output_dir: Path | None = None,
     file_name_prefix: str = "standard_bol",
@@ -831,6 +844,7 @@ def generate_standard_docx_set(
                 selected_facility,
                 batch_comment,
                 bol_type=bol_type,
+                qty_type=qty_type,
                 compact_standard_item_area=is_standard_template or is_no_recourse_template,
                 filter_blank_item_lines=is_no_recourse_template,
             )

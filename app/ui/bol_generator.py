@@ -94,6 +94,8 @@ def _initialize_bol_state() -> None:
         st.session_state["bol_batch_comment_textarea"] = ""
     if "bol_type_selector" not in st.session_state:
         st.session_state["bol_type_selector"] = "PLT"
+    if "bol_qty_type_selector" not in st.session_state:
+        st.session_state["bol_qty_type_selector"] = "PLT"
     if "bol_batch_name" not in st.session_state:
         st.session_state["bol_batch_name"] = ""
     if "bol_multistop_individual_template_mode" not in st.session_state:
@@ -484,6 +486,17 @@ def render_bol_generator_view() -> None:
         key="bol_type_selector",
         on_change=_clear_generation_state,
     )
+    current_qty_type = st.session_state.get("bol_qty_type_selector", "PLT")
+    if current_qty_type not in ("PLT", "Case"):
+        current_qty_type = "PLT"
+        st.session_state["bol_qty_type_selector"] = current_qty_type
+    st.selectbox(
+        "Qty Type",
+        options=["PLT", "Case"],
+        index=["PLT", "Case"].index(current_qty_type),
+        key="bol_qty_type_selector",
+        on_change=_clear_generation_state,
+    )
     st.text_input(
         "Batch name",
         key="bol_batch_name",
@@ -860,6 +873,7 @@ def render_bol_generator_view() -> None:
                     selected_facility=st.session_state["bol_selected_facility"],
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
                     bol_type=st.session_state.get("bol_type_selector", "PLT"),
+                    qty_type=st.session_state.get("bol_qty_type_selector", "PLT"),
                     template_path=template_path,
                     file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
                 )
@@ -1010,6 +1024,7 @@ def render_bol_generator_view() -> None:
                     selected_facility=st.session_state["bol_selected_facility"],
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
                     bol_type=st.session_state.get("bol_type_selector", "PLT"),
+                    qty_type=st.session_state.get("bol_qty_type_selector", "PLT"),
                     template_path=template_path,
                     file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
                 )
