@@ -79,7 +79,7 @@ def test_parse_standard_bol_excel_falls_back_to_header_based_sheet_detection() -
     rows = parse_standard_bol_excel(output)
 
     assert len(rows) == 1
-    assert rows[0].kk_load == "LOAD-001"
+    assert rows[0].kk_load == "KL-001"
 
 
 def test_parse_standard_bol_excel_normalizes_line_break_headers() -> None:
@@ -172,3 +172,47 @@ def test_standard_bol_mapping_keeps_missing_bol_when_bol_and_po_are_blank() -> N
     assert len(records) == 1
     assert records[0].bol_number == ""
     assert "BOL #" in records[0].missing_required_fields
+
+
+def test_standard_bol_mapping_uses_kk_load_for_kkg_load_when_bol_falls_back_to_tgt_po() -> None:
+    row = _standard_load_row()
+    row["KK Load"] = "1073839"
+    row["load#"] = "CARRIER-LOAD-001"
+    row["BOL #"] = ""
+    row["TGT PO #"] = "10001859231-0551"
+
+    workbook = _workbook_with_sheet("LOAD SHEET", [row])
+
+    rows = parse_standard_bol_excel(workbook)
+    records = map_standard_rows_to_records(rows)
+
+    assert len(records) == 1
+    assert records[0].bol_number == "10001859231-0551"
+    assert records[0].kk_load_number == "1073839"
+
+
+def test_parse_standard_bol_excel_preserves_base_load_number_when_only_load_number_exists() -> None:
+    row = _standard_load_row()
+    row.pop("KK Load")
+    row["load#"] = "BASE-LOAD-001"
+
+    workbook = _workbook_with_sheet("MAIN LOAD SHEET", [row])
+
+    rows = parse_standard_bol_excel(workbook)
+
+    assert len(rows) == 1
+    assert rows[0].kk_load == "BASE-LOAD-001"
+
+
+def test_parse_standard_bol_excel_uses_next_load_source_when_dedicated_load_is_blank() -> None:
+    row = _standard_load_row()
+    row["KKG Load #"] = ""
+    row["KK Load"] = "1073839"
+    row["load#"] = "CARRIER-LOAD-001"
+
+    workbook = _workbook_with_sheet("LOAD SHEET", [row])
+
+    rows = parse_standard_bol_excel(workbook)
+
+    assert len(rows) == 1
+    assert rows[0].kk_load == "1073839"

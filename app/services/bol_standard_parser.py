@@ -29,8 +29,20 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
     "ship_date": {"primary": "ship date", "fallback_aliases": ["SHIP DATE"]},
     "carrier": {"primary": "Carrier", "fallback_aliases": ["CARRIER"]},
     "kk_load": {
-        "primary": "load#",
-        "fallback_aliases": ["Load#", "LOAD#", "KK Load", "KK LOAD"],
+        "primary": "KKG Load #",
+        "fallback_aliases": [
+            "KKG LOAD #",
+            "KKG Load",
+            "KKG LOAD",
+            "KK Load",
+            "KK LOAD",
+            "KK Load #",
+            "Load",
+            "Load #",
+            "load#",
+            "Load#",
+            "LOAD#",
+        ],
     },
     "kk_po": {"primary": "KK PO#", "fallback_aliases": ["KK PO #", "KK PO"]},
     "wm_po": {
@@ -93,6 +105,21 @@ LOAD_SHEET_HEADER_SCAN_COLUMNS: tuple[str, ...] = (
     "Total Weight",
 )
 
+KK_LOAD_COLUMN_PRIORITY: tuple[str, ...] = (
+    "KKG Load #",
+    "KKG LOAD #",
+    "KKG Load",
+    "KKG LOAD",
+    "KK Load",
+    "KK LOAD",
+    "KK Load #",
+    "Load",
+    "Load #",
+    "load#",
+    "Load#",
+    "LOAD#",
+)
+
 
 def _normalize_header(header: str) -> str:
     cleaned = str(header).replace("\r", " ").replace("\n", " ").strip()
@@ -153,6 +180,15 @@ def _resolve_dc_city_state_zip_components(columns: list[str]) -> dict[str, str]:
     return resolved
 
 
+def _resolve_kk_load_columns(columns: list[str]) -> list[str]:
+    resolved_columns: list[str] = []
+    for candidate in KK_LOAD_COLUMN_PRIORITY:
+        source_column = _resolve_column_name(columns, candidate, ())
+        if source_column is not None and source_column not in resolved_columns:
+            resolved_columns.append(source_column)
+    return resolved_columns
+
+
 def _resolve_columns_with_missing(columns: list[str]) -> tuple[dict[str, str], list[str]]:
     resolved_columns = [str(col) for col in columns]
 
@@ -162,7 +198,11 @@ def _resolve_columns_with_missing(columns: list[str]) -> tuple[dict[str, str], l
     for logical_name, spec in REQUIRED_COLUMN_SPECS.items():
         primary = str(spec["primary"])
         fallback_aliases = [str(alias) for alias in spec["fallback_aliases"]]
-        resolved_name = _resolve_column_name(resolved_columns, primary, fallback_aliases)
+        if logical_name == "kk_load":
+            kk_load_columns = _resolve_kk_load_columns(resolved_columns)
+            resolved_name = kk_load_columns[0] if kk_load_columns else None
+        else:
+            resolved_name = _resolve_column_name(resolved_columns, primary, fallback_aliases)
 
         if resolved_name is None:
             if logical_name == "dc_city_state_zip":
@@ -271,6 +311,14 @@ def _effective_bol_number(row_values: dict[str, str]) -> str:
     return row_values["wm_po"].strip()
 
 
+def _effective_kk_load(row: pd.Series, kk_load_columns: list[str]) -> str:
+    for source_column in kk_load_columns:
+        value = _coerce_to_string(row[source_column])
+        if value:
+            return value
+    return ""
+
+
 def parse_standard_bol_excel(file: Any) -> list[BolStandardRow]:
     if file is None:
         raise ValueError("No file uploaded. Upload an Excel file to parse.")
@@ -283,6 +331,7 @@ def parse_standard_bol_excel(file: Any) -> list[BolStandardRow]:
         raise ValueError(f"Worksheet '{resolved_sheet_name}' contains no rows.")
 
     column_map = _resolve_columns(df.columns.tolist(), worksheet_name=resolved_sheet_name)
+    kk_load_columns = _resolve_kk_load_columns(df.columns.tolist())
 
     parsed_rows: list[BolStandardRow] = []
 
@@ -303,7 +352,7 @@ def parse_standard_bol_excel(file: Any) -> list[BolStandardRow]:
                 bol_number=_effective_bol_number(row_values),
                 ship_date=row_values["ship_date"],
                 carrier=row_values["carrier"],
-                kk_load=row_values["kk_load"],
+                kk_load=_effective_kk_load(row, kk_load_columns),
                 kk_po=row_values["kk_po"],
                 wm_po=row_values["wm_po"],
                 dc_number=row_values["dc_number"],
