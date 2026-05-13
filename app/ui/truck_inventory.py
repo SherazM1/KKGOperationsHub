@@ -35,6 +35,8 @@ def _initialize_truck_state() -> None:
         "truck_validated_records": [],
         "truck_item_setup": [],
         "truck_item_setup_by_load": {},
+        "truck_item_setup_draft_by_load": {},
+        "truck_item_setup_confirmed_by_load": {},
         "truck_selected_load_number": None,
         "truck_trucks": [],
         "truck_load_summary": {},
@@ -264,54 +266,73 @@ def _render_item_setup_section() -> None:
 
     preset_names = [preset.name for preset in ITEM_PRESETS.values()]
     color_names = list(ITEM_SETUP_COLOR_OPTIONS.keys())
-    current_setup = st.session_state.truck_item_setup_by_load.get(selected_load, [])
-    setup_df = pd.DataFrame(current_setup)
+    saved_setup = st.session_state.truck_item_setup_by_load.get(selected_load, [])
+    draft_setup = st.session_state.truck_item_setup_draft_by_load.get(selected_load, [])
+    setup_df = pd.DataFrame(draft_setup)
     editor_revision = st.session_state.truck_item_setup_editor_revision.get(selected_load, 0)
     editor_key = f"truck_item_setup_editor_{selected_load}_{editor_revision}"
-    st.data_editor(
-        setup_df,
-        use_container_width=True,
-        hide_index=True,
-        num_rows="fixed",
-        column_config={
-            "Item #": st.column_config.TextColumn("Item #", disabled=True),
-            "Preset": st.column_config.SelectboxColumn("Preset / Type", options=preset_names),
-            "Length": st.column_config.NumberColumn("Length", min_value=0.0, step=0.1),
-            "Width": st.column_config.NumberColumn("Width", min_value=0.0, step=0.1),
-            "Height": st.column_config.NumberColumn("Height", min_value=0.0, step=0.1),
-            "Weight": st.column_config.NumberColumn("Weight", min_value=0.0, step=0.1),
-            "Is Stackable?": st.column_config.SelectboxColumn("Is Stackable?", options=["No", "Yes"]),
-            "Stack Qty": st.column_config.NumberColumn("Stack Qty", min_value=1, step=1),
-            "Color": st.column_config.SelectboxColumn("Color", options=color_names),
-        },
-        key=editor_key,
-        on_change=_commit_item_setup_editor_changes,
-        args=(selected_load, editor_key),
-    )
 
-    setup_issues = validate_item_setup(
-        selected_records,
-        st.session_state.truck_item_setup_by_load.get(selected_load, []),
-    )
-    if setup_issues:
-        st.warning("Complete Item Setup before building the truck plan.")
-        st.markdown("\n".join(f"- {issue}" for issue in setup_issues))
+    with st.form(key=f"truck_item_setup_form_{selected_load}_{editor_revision}"):
+        edited_df = st.data_editor(
+            setup_df,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="fixed",
+            column_config={
+                "Item #": st.column_config.TextColumn("Item #", disabled=True),
+                "Preset": st.column_config.SelectboxColumn("Preset / Type", options=preset_names),
+                "Length": st.column_config.NumberColumn("Length", min_value=0.0, step=0.1),
+                "Width": st.column_config.NumberColumn("Width", min_value=0.0, step=0.1),
+                "Height": st.column_config.NumberColumn("Height", min_value=0.0, step=0.1),
+                "Weight": st.column_config.NumberColumn("Weight", min_value=0.0, step=0.1),
+                "Is Stackable?": st.column_config.SelectboxColumn("Is Stackable?", options=["No", "Yes"]),
+                "Stack Qty": st.column_config.NumberColumn("Stack Qty", min_value=1, step=1),
+                "Color": st.column_config.SelectboxColumn("Color", options=color_names),
+            },
+            key=editor_key,
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            save_setup = st.form_submit_button("Save Item Setup", use_container_width=True)
+        with col2:
+            apply_presets = st.form_submit_button("Apply Selected Presets", use_container_width=True)
+
+    edited_setup = _normalize_editor_rows(edited_df.to_dict(orient="records"))
+    edited_setup, _ = _apply_preset_changes(draft_setup, edited_setup)
+    if apply_presets:
+        updated_setup = _apply_selected_item_presets(edited_setup)
+        st.session_state.truck_item_setup_draft_by_load[selected_load] = updated_setup
+        st.session_state.truck_item_setup_confirmed_by_load[selected_load] = False
+        st.session_state.truck_trucks = []
+        st.session_state.truck_build_message = "Item Setup draft changed. Save Item Setup before rebuilding the truck plan."
+        st.session_state.truck_item_setup_editor_revision[selected_load] = editor_revision + 1
+        st.rerun()
+
+    if save_setup:
+        st.session_state.truck_item_setup_draft_by_load[selected_load] = edited_setup
+        st.session_state.truck_item_setup_by_load[selected_load] = edited_setup
+        st.session_state.truck_item_setup = edited_setup
+        st.session_state.truck_item_setup_confirmed_by_load[selected_load] = True
+        st.session_state.truck_trucks = []
+        saved_setup = edited_setup
+        setup_issues = validate_item_setup(selected_records, edited_setup)
+        if setup_issues:
+            st.session_state.truck_build_message = "Saved Item Setup has validation issues."
+        else:
+            st.session_state.truck_build_message = f"Item Setup saved for KKG Load # {selected_load}."
+        st.session_state.truck_item_setup_editor_revision[selected_load] = editor_revision + 1
+        st.rerun()
+
+    setup_confirmed = st.session_state.truck_item_setup_confirmed_by_load.get(selected_load, False)
+    saved_issues = validate_item_setup(selected_records, saved_setup) if setup_confirmed else []
+    if not setup_confirmed:
+        st.warning("Item Setup is not saved yet. Complete the table, then click Save Item Setup.")
+    elif saved_issues:
+        st.warning("Saved Item Setup needs attention before building the truck plan.")
+        st.markdown("\n".join(f"- {issue}" for issue in saved_issues))
     else:
-        st.success("Item Setup is complete.")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Apply Selected Presets", use_container_width=True):
-            updated_setup = _apply_selected_item_presets(
-                st.session_state.truck_item_setup_by_load.get(selected_load, [])
-            )
-            st.session_state.truck_item_setup_by_load[selected_load] = updated_setup
-            st.session_state.truck_item_setup = updated_setup
-            st.session_state.truck_trucks = []
-            st.session_state.truck_item_setup_editor_revision[selected_load] = editor_revision + 1
-            st.rerun()
-    with col2:
-        st.caption("Color is manual for now and drives the truck render and legend.")
+        st.success(f"Item Setup saved for KKG Load # {selected_load}.")
+    st.caption("Edits in this table are draft values until Save Item Setup is clicked. Color is manual for now and drives the truck render and legend.")
 
 
 def _apply_selected_item_presets(setup_rows: list[dict]) -> list[dict]:
@@ -325,45 +346,26 @@ def _apply_selected_item_presets(setup_rows: list[dict]) -> list[dict]:
     return updated_rows
 
 
-def _commit_item_setup_editor_changes(selected_load: str, editor_key: str) -> None:
-    setup_rows = [
-        dict(row)
-        for row in st.session_state.truck_item_setup_by_load.get(selected_load, [])
-    ]
-    editor_state = st.session_state.get(editor_key, {})
-    edited_rows = editor_state.get("edited_rows", {}) if isinstance(editor_state, dict) else {}
-    if not setup_rows or not edited_rows:
-        return
-
-    updated_rows = setup_rows
+def _apply_preset_changes(previous_rows: list[dict], edited_rows: list[dict]) -> tuple[list[dict], bool]:
+    previous_preset_by_item = {
+        str(row.get("Item #", "")): str(row.get("Preset", ""))
+        for row in previous_rows
+        if row.get("Item #")
+    }
+    updated_rows = []
     preset_changed = False
-    for row_index, changes in edited_rows.items():
-        if not isinstance(changes, dict):
-            continue
-        try:
-            index = int(row_index)
-        except (TypeError, ValueError):
-            continue
-        if index < 0 or index >= len(updated_rows):
-            continue
-        previous_preset = str(updated_rows[index].get("Preset", ""))
-        updated_rows[index].update(changes)
-        current_preset = str(updated_rows[index].get("Preset", ""))
-        if current_preset != previous_preset:
+    for row in edited_rows:
+        updated = dict(row)
+        item_number = str(updated.get("Item #", ""))
+        previous_preset = previous_preset_by_item.get(item_number)
+        current_preset = str(updated.get("Preset", ""))
+        if previous_preset is not None and current_preset != previous_preset:
             preset_values = preset_to_setup_values(current_preset)
             if preset_values:
-                updated_rows[index].update(preset_values)
+                updated.update(preset_values)
             preset_changed = True
-
-    updated_rows = _normalize_editor_rows(updated_rows)
-    if updated_rows != setup_rows:
-        st.session_state.truck_item_setup_by_load[selected_load] = updated_rows
-        st.session_state.truck_item_setup = updated_rows
-        st.session_state.truck_trucks = []
-        st.session_state.truck_build_message = "Item Setup changed. Rebuild the truck plan to refresh fit results."
-        if preset_changed:
-            revision = st.session_state.truck_item_setup_editor_revision.get(selected_load, 0)
-            st.session_state.truck_item_setup_editor_revision[selected_load] = revision + 1
+        updated_rows.append(updated)
+    return updated_rows, preset_changed
 
 
 def _normalize_editor_rows(rows: list[dict]) -> list[dict]:
@@ -436,11 +438,23 @@ def _ensure_item_setup_for_selected_load() -> None:
 
     selected_records = _get_selected_records()
     setup_by_load = st.session_state.truck_item_setup_by_load
+    draft_by_load = st.session_state.truck_item_setup_draft_by_load
+    confirmed_by_load = st.session_state.truck_item_setup_confirmed_by_load
     existing_setup = setup_by_load.get(selected_load, [])
-    setup_by_load[selected_load] = (
+    saved_setup = (
         merge_item_setup(existing_setup, selected_records)
         if existing_setup
         else build_default_item_setup(selected_records)
+    )
+    if saved_setup != existing_setup:
+        confirmed_by_load[selected_load] = False
+    setup_by_load[selected_load] = saved_setup
+
+    existing_draft = draft_by_load.get(selected_load, [])
+    draft_by_load[selected_load] = (
+        merge_item_setup(existing_draft, selected_records)
+        if existing_draft
+        else [dict(row) for row in saved_setup]
     )
     st.session_state.truck_item_setup = setup_by_load[selected_load]
 
@@ -501,17 +515,21 @@ def _render_truck_selection_and_evaluate() -> None:
         f"legal max {preset.max_weight_lbs:,.0f} lbs"
     )
 
+    selected_load = st.session_state.truck_selected_load_number
+    setup_confirmed = st.session_state.truck_item_setup_confirmed_by_load.get(selected_load, False)
     setup_issues = validate_item_setup(
         _get_selected_records(),
-        st.session_state.truck_item_setup_by_load.get(st.session_state.truck_selected_load_number, []),
+        st.session_state.truck_item_setup_by_load.get(selected_load, []),
     )
     if st.session_state.truck_build_message:
         st.info(st.session_state.truck_build_message)
+    if not setup_confirmed:
+        st.warning("Save Item Setup before building the truck plan.")
 
     if st.button(
         "Build / Evaluate Truck Plan",
         use_container_width=True,
-        disabled=bool(setup_issues),
+        disabled=(not setup_confirmed or bool(setup_issues)),
     ):
         with st.spinner("Evaluating fit..."):
             _evaluate_truck_plan(truck_preset, threshold)
@@ -519,7 +537,11 @@ def _render_truck_selection_and_evaluate() -> None:
 
 def _evaluate_truck_plan(truck_preset: str, threshold: float) -> None:
     selected_records = _get_selected_records()
-    selected_setup = st.session_state.truck_item_setup_by_load.get(st.session_state.truck_selected_load_number, [])
+    selected_load = st.session_state.truck_selected_load_number
+    if not st.session_state.truck_item_setup_confirmed_by_load.get(selected_load, False):
+        st.error("Save Item Setup before fit can be evaluated.")
+        return
+    selected_setup = st.session_state.truck_item_setup_by_load.get(selected_load, [])
     records, setup_issues = apply_item_setup(
         selected_records,
         selected_setup,
@@ -678,7 +700,11 @@ def _render_workflow_status() -> None:
         else ["Input not parsed"]
     )
     load_selected = parsed and bool(st.session_state.truck_selected_load_number) and bool(selected_records)
-    setup_complete = load_selected and not setup_issues
+    setup_confirmed = st.session_state.truck_item_setup_confirmed_by_load.get(
+        st.session_state.truck_selected_load_number,
+        False,
+    )
+    setup_complete = load_selected and setup_confirmed and not setup_issues
     built = bool(st.session_state.truck_trucks)
     export_ready = parsed and built
 
