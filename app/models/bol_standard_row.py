@@ -26,3 +26,5 @@ class BolStandardRow:
     unit_qty: str
     plt_qty: str
     weight_each: str
+    total_weight: str = ""
+    pickup_number: str = ""

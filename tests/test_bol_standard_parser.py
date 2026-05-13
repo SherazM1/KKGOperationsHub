@@ -49,6 +49,7 @@ def test_parse_standard_bol_excel_accepts_normalized_main_load_sheet_name() -> N
 
     assert len(rows) == 1
     assert rows[0].bol_number == "BOL-001"
+    assert rows[0].total_weight == "100"
 
 
 def test_parse_standard_bol_excel_accepts_load_sheet_with_trailing_space() -> None:
@@ -216,3 +217,45 @@ def test_parse_standard_bol_excel_uses_next_load_source_when_dedicated_load_is_b
 
     assert len(rows) == 1
     assert rows[0].kk_load == "1073839"
+
+
+def test_parse_standard_bol_excel_accepts_total_weight_alias_and_pickup() -> None:
+    row = _standard_load_row()
+    row["Line Weight"] = row.pop("Total Weight")
+    row["Delivery Appointment Number"] = "APPT-123"
+
+    workbook = _workbook_with_sheet("LOAD SHEET", [row])
+
+    rows = parse_standard_bol_excel(workbook)
+
+    assert len(rows) == 1
+    assert rows[0].total_weight == "100"
+    assert rows[0].pickup_number == "APPT-123"
+
+
+def test_parse_standard_bol_excel_allows_missing_optional_total_weight_and_pickup() -> None:
+    row = _standard_load_row()
+    row.pop("Total Weight")
+
+    workbook = _workbook_with_sheet("LOAD SHEET", [row])
+
+    rows = parse_standard_bol_excel(workbook)
+
+    assert len(rows) == 1
+    assert rows[0].total_weight == ""
+    assert rows[0].pickup_number == ""
+
+
+def test_standard_bol_mapping_preserves_total_weight_and_first_pickup() -> None:
+    row = _standard_load_row()
+    row["Total Weight"] = "306 lbs."
+    row["Pick Up #"] = "PU-001"
+
+    workbook = _workbook_with_sheet("LOAD SHEET", [row])
+
+    rows = parse_standard_bol_excel(workbook)
+    records = map_standard_rows_to_records(rows)
+
+    assert len(records) == 1
+    assert records[0].pickup_number == "PU-001"
+    assert records[0].item_lines[0].total_weight == "306 lbs."

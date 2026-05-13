@@ -12,6 +12,8 @@ import re
 import zipfile
 
 from docx import Document
+from docx.oxml.ns import qn
+from docx.shared import Pt
 from docx.table import Table
 
 from app.models.bol_standard_record import BolStandardItemLine, BolStandardRecord
@@ -46,6 +48,7 @@ def _tok(name: str) -> str:
 ITEM_PLACEHOLDER_TOKENS: tuple[str, ...] = tuple(
     _tok(alias) for aliases in ITEM_TOKEN_ALIASES.values() for alias in aliases
 )
+DOCUMENT_FONT_NAME = "Arial"
 
 
 def resolve_template_path_for_mode(mode: str) -> Path:
@@ -342,6 +345,150 @@ def _format_number(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else f"{value:.2f}".rstrip("0").rstrip(".")
 
 
+def _set_run_font_name(run, font_name: str = DOCUMENT_FONT_NAME) -> None:
+    run.font.name = font_name
+    r_pr = run._element.get_or_add_rPr()
+    r_fonts = r_pr.rFonts
+    if r_fonts is None:
+        r_fonts = r_pr._add_rFonts()
+    for attr_name in ("ascii", "hAnsi", "eastAsia", "cs"):
+        r_fonts.set(qn(f"w:{attr_name}"), font_name)
+    for attr_name in ("asciiTheme", "hAnsiTheme", "eastAsiaTheme", "cstheme"):
+        theme_attr = qn(f"w:{attr_name}")
+        if theme_attr in r_fonts.attrib:
+            del r_fonts.attrib[theme_attr]
+
+
+def _normalize_font_in_xml_tree(element, font_name: str = DOCUMENT_FONT_NAME) -> None:
+    for r_pr in element.findall(".//w:rPr", element.nsmap):
+        r_fonts = r_pr.find("w:rFonts", element.nsmap)
+        if r_fonts is None:
+            r_fonts = r_pr.makeelement(qn("w:rFonts"), nsmap=r_pr.nsmap)
+            r_pr.insert(0, r_fonts)
+        for attr_name in ("ascii", "hAnsi", "eastAsia", "cs"):
+            r_fonts.set(qn(f"w:{attr_name}"), font_name)
+        for attr_name in ("asciiTheme", "hAnsiTheme", "eastAsiaTheme", "cstheme"):
+            theme_attr = qn(f"w:{attr_name}")
+            if theme_attr in r_fonts.attrib:
+                del r_fonts.attrib[theme_attr]
+
+
+def _iter_table_paragraphs(table: Table):
+    for row in table.rows:
+        for cell in row.cells:
+            yield from cell.paragraphs
+            for nested_table in cell.tables:
+                yield from _iter_table_paragraphs(nested_table)
+
+
+def _normalize_document_font(doc: Document, font_name: str = DOCUMENT_FONT_NAME) -> None:
+    for paragraph in doc.paragraphs:
+        for run in paragraph.runs:
+            _set_run_font_name(run, font_name)
+
+    for table in doc.tables:
+        for paragraph in _iter_table_paragraphs(table):
+            for run in paragraph.runs:
+                _set_run_font_name(run, font_name)
+
+    for section in doc.sections:
+        for paragraph in section.header.paragraphs:
+            for run in paragraph.runs:
+                _set_run_font_name(run, font_name)
+        for table in section.header.tables:
+            for paragraph in _iter_table_paragraphs(table):
+                for run in paragraph.runs:
+                    _set_run_font_name(run, font_name)
+
+        for paragraph in section.footer.paragraphs:
+            for run in paragraph.runs:
+                _set_run_font_name(run, font_name)
+        for table in section.footer.tables:
+            for paragraph in _iter_table_paragraphs(table):
+                for run in paragraph.runs:
+                    _set_run_font_name(run, font_name)
+
+    _normalize_font_in_xml_tree(doc.element, font_name)
+    for section in doc.sections:
+        _normalize_font_in_xml_tree(section.header._element, font_name)
+        _normalize_font_in_xml_tree(section.footer._element, font_name)
+
+
+def _set_cell_text_size(cell, size: Pt) -> None:
+    for paragraph in cell.paragraphs:
+        paragraph.paragraph_format.space_after = Pt(0)
+        for run in paragraph.runs:
+            run.font.size = size
+
+
+def _remove_cell_nowrap(cell) -> None:
+    tc_pr = cell._tc.get_or_add_tcPr()
+    for no_wrap in list(tc_pr.findall(qn("w:noWrap"))):
+        tc_pr.remove(no_wrap)
+
+
+def _row_is_item_header(row) -> bool:
+    row_text = " ".join(cell.text.strip() for cell in row.cells if cell.text.strip()).upper()
+    return (
+        "QTY" in row_text
+        and "TYPE" in row_text
+        and "PO #" in row_text
+        and "ITEM DESCRIPTION" in row_text
+    )
+
+
+def _apply_header_fit_cleanup(doc: Document, record: BolStandardRecord) -> None:
+    long_values = {
+        value.strip()
+        for value in (
+            record.bol_number,
+            record.po_number,
+            record.kk_po_number,
+            record.kk_load_number,
+            record.pickup_number,
+        )
+        if len((value or "").strip()) >= 11
+    }
+    if not long_values:
+        return
+
+    for table in doc.tables:
+        for row in table.rows:
+            if _row_is_item_header(row):
+                break
+            for cell in row.cells:
+                cell_text = cell.text.strip()
+                if not cell_text or not any(value in cell_text for value in long_values):
+                    continue
+                _remove_cell_nowrap(cell)
+                _set_cell_text_size(cell, Pt(8))
+
+
+def _apply_subject7_fit_cleanup(doc: Document) -> None:
+    for paragraph in doc.element.findall(".//w:p", doc.element.nsmap):
+        paragraph_text = "".join(
+            node.text or "" for node in paragraph.findall(".//w:t", paragraph.nsmap)
+        )
+        if "SUBJECT TO SECTION 7" not in paragraph_text.upper():
+            continue
+        for r_pr in paragraph.findall(".//w:rPr", paragraph.nsmap):
+            sz = r_pr.find("w:sz", paragraph.nsmap)
+            if sz is None:
+                sz = r_pr.makeelement(qn("w:sz"), nsmap=r_pr.nsmap)
+                r_pr.append(sz)
+            sz.set(qn("w:val"), "14")
+
+            sz_cs = r_pr.find("w:szCs", paragraph.nsmap)
+            if sz_cs is None:
+                sz_cs = r_pr.makeelement(qn("w:szCs"), nsmap=r_pr.nsmap)
+                r_pr.append(sz_cs)
+            sz_cs.set(qn("w:val"), "14")
+
+    for body_pr in doc.element.findall(".//wps:bodyPr", doc.element.nsmap):
+        body_pr.set("horzOverflow", "clip")
+        body_pr.set("vertOverflow", "clip")
+
+
 def _item_line_has_data(line: BolStandardItemLine) -> bool:
     return any(
         value.strip()
@@ -353,6 +500,7 @@ def _item_line_has_data(line: BolStandardItemLine) -> bool:
             line.upc,
             line.skids,
             line.weight_each,
+            line.total_weight,
         )
     )
 
@@ -540,6 +688,8 @@ def _populate_item_table(
     total_skids_value = 0.0
     total_weight_value = 0.0
     has_pallet_qty_value = False
+    use_line_total_weight = any((line.total_weight or "").strip() for line in rendered_item_lines)
+    has_total_weight_value = False
     for line in rendered_item_lines:
         numeric_pallet_qty = _parse_numeric(line.pallet_qty)
         if numeric_pallet_qty is not None:
@@ -550,9 +700,18 @@ def _populate_item_table(
         if numeric_skids is not None:
             total_skids_value += numeric_skids
 
-        numeric_weight = _parse_numeric(line.weight_each)
+        weight_source = line.total_weight if use_line_total_weight else line.weight_each
+        numeric_weight = _parse_numeric(weight_source)
         if numeric_weight is not None:
             total_weight_value += numeric_weight
+            if use_line_total_weight:
+                has_total_weight_value = True
+
+    if use_line_total_weight and not has_total_weight_value:
+        for line in rendered_item_lines:
+            numeric_weight = _parse_numeric(line.weight_each)
+            if numeric_weight is not None:
+                total_weight_value += numeric_weight
 
     total_qty_display = (
         _format_number(total_pallet_qty_value)
@@ -724,6 +883,7 @@ def _apply_template_record_values(
     filter_blank_item_lines: bool = False,
 ) -> list[str]:
     notices: list[str] = []
+    has_explicit_pickup_token = _document_contains_token(doc, _tok("Pick_Up_"))
     replacements = {
         _tok("BOL"): record.bol_number,
         _tok("SHIP_DATE"): _format_ship_date_for_template(record.ship_date),
@@ -732,13 +892,13 @@ def _apply_template_record_values(
         _tok("HOST_PO"): record.po_number,
         _tok("KKG_PO"): record.kk_po_number,
         _tok("KKG_LOAD_"): record.kk_load_number,
-        _tok("Pick_Up_"): "",
+        _tok("Pick_Up_"): record.pickup_number,
         _tok("TRACKER_"): "",
         # Suppress competing mergefield comment box; visible "Comments:" label is authoritative.
         _tok("COMMENTS"): "",
         _tok("SHIP_FROM"): selected_facility["facility_name"],
         _tok("SHIP_FROM_ADDRESS"): selected_facility["address"],
-        _tok("SHIP_FROM_CITY_STATE_ZIP"): "",
+        _tok("SHIP_FROM_CITY_STATE_ZIP"): "" if has_explicit_pickup_token else record.pickup_number,
         _tok("SHIP_TO_NAME"): record.consignee_company,
         _tok("SHIP_TO_ADDRESS"): record.consignee_street,
         _tok("SHIP_TO_CITY_STATE_ZIP"): record.consignee_city_state_zip,
@@ -779,6 +939,9 @@ def _apply_template_record_values(
                 compact_standard_item_area=compact_standard_item_area,
                 filter_blank_item_lines=filter_blank_item_lines,
             )
+            _apply_header_fit_cleanup(doc, record)
+            _apply_subject7_fit_cleanup(doc)
+            _normalize_document_font(doc)
             return notices
         except ValueError as exc:
             last_error = exc

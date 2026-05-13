@@ -52,11 +52,13 @@ def _ready_record() -> BolStandardRecord:
                 upc="000111222333",
                 skids="2",
                 weight_each="100",
+                total_weight="306 lbs.",
             )
         ],
         total_skids=2,
         is_ready=True,
         status="Ready",
+        pickup_number="PU-123",
     )
 
 
@@ -94,6 +96,28 @@ def _first_item_type_value(doc: Document) -> str:
     raise AssertionError("First item row was not found.")
 
 
+def _document_text(doc: Document) -> str:
+    parts: list[str] = []
+    for paragraph in doc.paragraphs:
+        if paragraph.text.strip():
+            parts.append(paragraph.text)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                if cell.text.strip():
+                    parts.append(cell.text)
+    return "\n".join(parts)
+
+
+def _totals_row_text(doc: Document) -> str:
+    for table in doc.tables:
+        for row in table.rows:
+            row_text = " ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+            if "TOTALS" in row_text.upper():
+                return row_text
+    raise AssertionError("Totals row was not found.")
+
+
 def test_standard_docx_qty_type_plt_renders_pallet_qty_header(tmp_path: Path) -> None:
     doc = _generated_docx("Standard", tmp_path, bol_type="CASE", qty_type="PLT")
 
@@ -113,3 +137,10 @@ def test_no_recourse_docx_qty_type_case_renders_case_qty_header(tmp_path: Path) 
 
     assert _item_header_text(doc) == "Case Qty"
     assert _first_item_type_value(doc) == "PLT"
+
+
+def test_standard_docx_totals_prefer_total_weight_and_pickup_renders(tmp_path: Path) -> None:
+    doc = _generated_docx("Standard", tmp_path, bol_type="PLT", qty_type="PLT")
+
+    assert "PU-123" in _document_text(doc)
+    assert "306" in _totals_row_text(doc)

@@ -28,6 +28,7 @@ class BolStandardItemLine:
     upc: str
     skids: str
     weight_each: str
+    total_weight: str = ""
 
 
 @dataclass(slots=True)
@@ -59,3 +60,4 @@ class BolStandardRecord:
     conversion_skip_reason: str | None = None
     issues: list[str] = field(default_factory=list)
     carrier_pro_number: str = ""
+    pickup_number: str = ""

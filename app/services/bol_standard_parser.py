@@ -84,6 +84,34 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
     "weight_each": {"primary": "weight each", "fallback_aliases": ["WEIGHT EACH"]},
 }
 
+OPTIONAL_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
+    "total_weight": {
+        "primary": "Total Weight",
+        "fallback_aliases": [
+            "TOTAL WEIGHT",
+            "total weight",
+            "TotalWeight",
+            "TOTALWEIGHT",
+            "Line Total Weight",
+            "Line Weight",
+        ],
+    },
+    "pickup_number": {
+        "primary": "Pick Up #",
+        "fallback_aliases": [
+            "Pickup #",
+            "PICK UP #",
+            "PICKUP #",
+            "Pick Up",
+            "Pickup",
+            "Delivery Appt #",
+            "Delivery Appt#",
+            "Delivery Appointment #",
+            "Delivery Appointment Number",
+        ],
+    },
+}
+
 DC_CITY_STATE_ZIP_COMPONENT_SPECS: dict[str, tuple[str, ...]] = {
     "dc_city": ("DC CITY", "DC City"),
     "dc_state": ("DC ST", "DCST", "DC STATE", "DC State"),
@@ -218,6 +246,13 @@ def _resolve_columns_with_missing(columns: list[str]) -> tuple[dict[str, str], l
             )
             missing.append(f"{logical_name} (expected '{primary}'{alias_text})")
         else:
+            resolved[logical_name] = resolved_name
+
+    for logical_name, spec in OPTIONAL_COLUMN_SPECS.items():
+        primary = str(spec["primary"])
+        fallback_aliases = [str(alias) for alias in spec["fallback_aliases"]]
+        resolved_name = _resolve_column_name(resolved_columns, primary, fallback_aliases)
+        if resolved_name is not None:
             resolved[logical_name] = resolved_name
 
     return resolved, missing
@@ -365,6 +400,8 @@ def parse_standard_bol_excel(file: Any) -> list[BolStandardRow]:
                 unit_qty=row_values["unit_qty"],
                 plt_qty=row_values["plt_qty"],
                 weight_each=row_values["weight_each"],
+                total_weight=row_values.get("total_weight", ""),
+                pickup_number=row_values.get("pickup_number", ""),
             )
         )
 

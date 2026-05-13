@@ -158,6 +158,7 @@ def map_standard_rows_to_records(rows: list[BolStandardRow]) -> list[BolStandard
                 upc=row.upc,
                 skids=row.plt_qty,
                 weight_each=row.weight_each,
+                total_weight=row.total_weight,
             )
             item_lines.append(item_line)
 
@@ -190,6 +191,7 @@ def map_standard_rows_to_records(rows: list[BolStandardRow]) -> list[BolStandard
             generation_skip_reason=None,
             conversion_skip_reason=None,
             issues=[],
+            pickup_number=_first_non_empty(bol_rows, "pickup_number"),
         )
 
         missing_required = _missing_required_fields(record)
