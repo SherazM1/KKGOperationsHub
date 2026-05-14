@@ -6,6 +6,8 @@ import re
 from time import perf_counter
 from typing import Any
 
+from openpyxl import load_workbook
+from openpyxl.utils.exceptions import InvalidFileException
 import pandas as pd
 
 from app.models.bol_standard_row import BolStandardRow
@@ -24,6 +26,7 @@ LOAD_SHEET_NOT_FOUND_MESSAGE = (
     "or LOAD SHEET, or a sheet containing BOL load headers such as KK Load, "
     "Carrier, DC #, TGT PO #, UPC, and Total Weight."
 )
+STREAMING_BLANK_ROW_LIMIT = 100
 
 REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
     "bol_number": {"primary": "BOL #", "fallback_aliases": []},
@@ -358,6 +361,38 @@ def _resolve_load_sheet_name(workbook: pd.ExcelFile) -> str:
     raise ValueError(LOAD_SHEET_NOT_FOUND_MESSAGE)
 
 
+def _resolve_openpyxl_load_sheet_name(workbook: Any) -> str:
+    normalized_lookup = {
+        _normalize_sheet_name(sheet_name): str(sheet_name)
+        for sheet_name in workbook.sheetnames
+    }
+    for accepted_name in ACCEPTED_LOAD_SHEET_NAMES:
+        resolved_name = normalized_lookup.get(accepted_name)
+        if resolved_name is not None:
+            return resolved_name
+
+    best_sheet_name: str | None = None
+    best_score = 0
+    for sheet_name in workbook.sheetnames:
+        worksheet = workbook[sheet_name]
+        header_values = [
+            cell.value
+            for cell in next(
+                worksheet.iter_rows(min_row=1, max_row=1, values_only=False),
+                [],
+            )
+        ]
+        score = _load_sheet_header_score([str(value or "") for value in header_values])
+        if score > best_score:
+            best_score = score
+            best_sheet_name = str(sheet_name)
+
+    if best_sheet_name is not None and best_score >= 6:
+        return best_sheet_name
+
+    raise ValueError(LOAD_SHEET_NOT_FOUND_MESSAGE)
+
+
 def _coerce_to_string(value: Any) -> str:
     if pd.isna(value):
         return ""
@@ -392,9 +427,174 @@ def _effective_kk_load(row: pd.Series, kk_load_columns: list[str]) -> str:
     return ""
 
 
+def _effective_kk_load_from_values(row_values: dict[str, str], kk_load_columns: list[str]) -> str:
+    for source_column in kk_load_columns:
+        value = row_values.get(f"kk_load::{source_column}", "")
+        if value:
+            return value
+    return ""
+
+
+def _iter_openpyxl_standard_rows(
+    worksheet: Any,
+    column_map: dict[str, str],
+    kk_load_columns: list[str],
+) -> list[BolStandardRow]:
+    header_values = [
+        _coerce_to_string(value)
+        for value in next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), [])
+    ]
+    column_indices = {header: index for index, header in enumerate(header_values)}
+    needed_columns = set(column_map.values()) | set(kk_load_columns)
+    needed_indices = {
+        column_name: column_indices[column_name]
+        for column_name in needed_columns
+        if column_name in column_indices
+    }
+    max_needed_index = max(needed_indices.values(), default=-1)
+    if max_needed_index < 0:
+        return []
+
+    parsed_rows: list[BolStandardRow] = []
+    blank_streak = 0
+    found_data = False
+
+    for row_number, values in enumerate(
+        worksheet.iter_rows(
+            min_row=2,
+            max_col=max_needed_index + 1,
+            values_only=True,
+        ),
+        start=2,
+    ):
+        row_values: dict[str, str] = {}
+        for logical_name, source_column in column_map.items():
+            index = needed_indices[source_column]
+            row_values[logical_name] = _coerce_to_string(
+                values[index] if index < len(values) else None
+            )
+        for source_column in kk_load_columns:
+            index = needed_indices[source_column]
+            row_values[f"kk_load::{source_column}"] = _coerce_to_string(
+                values[index] if index < len(values) else None
+            )
+
+        if not any(row_values.values()):
+            if found_data:
+                blank_streak += 1
+                if blank_streak >= STREAMING_BLANK_ROW_LIMIT:
+                    print(
+                        "BOL parse timing: stopped_after_blank_rows="
+                        f"{STREAMING_BLANK_ROW_LIMIT} last_excel_row={row_number}"
+                    )
+                    break
+            continue
+
+        found_data = True
+        blank_streak = 0
+        parsed_rows.append(
+            BolStandardRow(
+                source_row_number=row_number,
+                bol_number=_effective_bol_number(row_values),
+                ship_date=row_values["ship_date"],
+                carrier=row_values["carrier"],
+                kk_load=_effective_kk_load_from_values(row_values, kk_load_columns),
+                kk_po=row_values["kk_po"],
+                wm_po=row_values["wm_po"],
+                dc_number=row_values["dc_number"],
+                dc_name=row_values["dc_name"],
+                dc_street=row_values["dc_street"],
+                dc_city_state_zip=_combine_city_state_zip_from_values(row_values),
+                item_number=row_values["item_number"],
+                upc=row_values["upc"],
+                item_description=row_values["item_description"],
+                unit_qty=row_values["unit_qty"],
+                plt_qty=row_values["plt_qty"],
+                weight_each=row_values["weight_each"],
+                total_weight=row_values.get("total_weight", ""),
+                pickup_number=row_values.get("pickup_number", ""),
+                carrier_pro_number=row_values.get("carrier_pro_number", ""),
+            )
+        )
+
+    return parsed_rows
+
+
+def _combine_city_state_zip_from_values(row_values: dict[str, str]) -> str:
+    if "dc_city_state_zip" in row_values:
+        return row_values["dc_city_state_zip"]
+
+    city = row_values["dc_city"]
+    state = row_values["dc_state"]
+    zip_code = row_values["dc_zip"]
+    city_state = ", ".join(part for part in (city, state) if part)
+    return " ".join(part for part in (city_state, zip_code) if part)
+
+
+def _parse_standard_bol_excel_openpyxl(file: Any) -> list[BolStandardRow]:
+    started_at = perf_counter()
+    file.seek(0)
+    workbook = load_workbook(file, read_only=True, data_only=True)
+    workbook_loaded_at = perf_counter()
+    print(
+        "BOL parse timing: workbook_load_openpyxl="
+        f"{workbook_loaded_at - started_at:.3f}s sheets={len(workbook.sheetnames)}"
+    )
+
+    try:
+        resolved_sheet_name = _resolve_openpyxl_load_sheet_name(workbook)
+        sheet_resolved_at = perf_counter()
+        print(
+            "BOL parse timing: sheet_detection_openpyxl="
+            f"{sheet_resolved_at - workbook_loaded_at:.3f}s sheet={resolved_sheet_name!r}"
+        )
+
+        worksheet = workbook[resolved_sheet_name]
+        header_values = [
+            _coerce_to_string(value)
+            for value in next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), [])
+        ]
+        header_loaded_at = perf_counter()
+        print(
+            "BOL parse timing: header_row_openpyxl="
+            f"{header_loaded_at - sheet_resolved_at:.3f}s columns={len(header_values)}"
+        )
+
+        if not header_values:
+            raise ValueError(f"Worksheet '{resolved_sheet_name}' contains no rows.")
+
+        column_map = _resolve_columns(header_values, worksheet_name=resolved_sheet_name)
+        kk_load_columns = _resolve_kk_load_columns(header_values)
+        columns_resolved_at = perf_counter()
+        print(
+            "BOL parse timing: column_resolution_openpyxl="
+            f"{columns_resolved_at - header_loaded_at:.3f}s"
+        )
+
+        parsed_rows = _iter_openpyxl_standard_rows(worksheet, column_map, kk_load_columns)
+        rows_parsed_at = perf_counter()
+        print(
+            "BOL parse timing: row_stream_openpyxl="
+            f"{rows_parsed_at - columns_resolved_at:.3f}s parsed_rows={len(parsed_rows)} "
+            f"total={rows_parsed_at - started_at:.3f}s"
+        )
+
+        if not parsed_rows:
+            raise ValueError(f"No non-empty data rows found in '{resolved_sheet_name}'.")
+
+        return parsed_rows
+    finally:
+        workbook.close()
+
+
 def parse_standard_bol_excel(file: Any) -> list[BolStandardRow]:
     if file is None:
         raise ValueError("No file uploaded. Upload an Excel file to parse.")
+
+    try:
+        return _parse_standard_bol_excel_openpyxl(file)
+    except (InvalidFileException, OSError, KeyError):
+        file.seek(0)
 
     started_at = perf_counter()
     file.seek(0)
