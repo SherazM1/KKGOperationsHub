@@ -58,6 +58,23 @@ KNOWN_PLACEHOLDER_TOKENS = frozenset(
         "BILL_TO_ADDRESS",
         "BILL_TO_CITY_STATE_ZIP",
         "TOTAL_QTY",
+        "ITEM_2",
+        "ITEM_3",
+        "ITEM_4",
+        "UPC_2",
+        "UPC_3",
+        "UPC_4",
+        "Item #:",
+        "UPC #:",
+        "Item",
+        "UPC",
+        "#:",
+        "TOTALS",
+        "Pallet Qty",
+        "Case Qty",
+        "Pallet",
+        "Case",
+        "Qty",
     }
 )
 
@@ -241,6 +258,17 @@ def _top_value_box(baseline: float, *, x: float = 444.4, width: float = 128.0) -
     )
 
 
+def _no_recourse_top_value_box(baseline: float, *, x: float = 444.4, width: float = 128.0) -> TextBox:
+    return _box_for_baseline(
+        x=x,
+        baseline=baseline,
+        width=width,
+        height=10.4,
+        font_size=8.8,
+        min_font_size=6.5,
+    )
+
+
 def _right_value_box(row: int, value_cols: tuple[int, int] = (9, 14)) -> TextBox:
     return TextBox(
         x=_col_x(value_cols[0]) + 2,
@@ -324,47 +352,43 @@ def _standard_fields() -> dict[str, TextBox]:
 
 
 def _no_recourse_fields() -> dict[str, TextBox]:
-    fields = _standard_fields()
-    fields.update(
-        {
-            "bol_number": _top_value_box(743.5),
-            "ship_date": _top_value_box(732.0),
-            "carrier": _top_value_box(720.5, width=150.0),
-            "carrier_pro_number": _top_value_box(709.0),
-            "po_number": _top_value_box(697.5),
-            "kk_po_number": _top_value_box(686.6),
-            "kk_load_number": _top_value_box(674.7),
-            "seal_number": _top_value_box(662.7),
-            "pickup_number": _top_value_box(650.7, width=150.0),
-            "comments": _box_for_baseline(
-                x=444.4,
-                baseline=626.4,
-                width=128.0,
-                height=18.0,
-                font_size=7.8,
-                min_font_size=5.2,
-                multiline=True,
-            ),
-            "ship_from_company": _box_for_baseline(x=112.5, baseline=674.7, width=220.0, font_size=7.8),
-            "ship_from_street": _box_for_baseline(x=112.5, baseline=650.7, width=220.0, font_size=7.8),
-            "ship_from_city_state_zip": _box_for_baseline(x=115.0, baseline=638.7, width=217.0, font_size=7.8),
-            "consignee_company": _box_for_baseline(x=112.5, baseline=590.4, width=210.0, font_size=7.8),
-            "consignee_street": _box_for_baseline(x=112.5, baseline=566.4, width=210.0, font_size=7.8),
-            "consignee_city_state_zip": _box_for_baseline(x=112.5, baseline=554.4, width=220.0, font_size=7.8),
-            "bill_to": TextBox(
-                x=398.0,
-                y=506.0,
-                width=176.0,
-                height=34.0,
-                font_size=7.4,
-                min_font_size=5.4,
-                multiline=True,
-                leading=10.0,
-            ),
-            "dc_number": _box_for_baseline(x=48.0, baseline=510.3, width=95.0, font_size=7.8),
-        }
-    )
-    return fields
+    return {
+        "bol_number": _no_recourse_top_value_box(743.5),
+        "ship_date": _no_recourse_top_value_box(732.0),
+        "carrier": _no_recourse_top_value_box(720.5, width=150.0),
+        "carrier_pro_number": _no_recourse_top_value_box(709.0),
+        "po_number": _no_recourse_top_value_box(697.5),
+        "kk_po_number": _no_recourse_top_value_box(686.6),
+        "kk_load_number": _no_recourse_top_value_box(674.7),
+        "seal_number": _no_recourse_top_value_box(662.7),
+        "pickup_number": _no_recourse_top_value_box(650.7, width=150.0),
+        "comments": _box_for_baseline(
+            x=444.4,
+            baseline=626.4,
+            width=128.0,
+            height=18.0,
+            font_size=8.2,
+            min_font_size=6.5,
+            multiline=True,
+        ),
+        "ship_from_company": _box_for_baseline(x=112.5, baseline=674.7, width=220.0, font_size=8.7, min_font_size=6.5),
+        "ship_from_street": _box_for_baseline(x=112.5, baseline=650.7, width=220.0, font_size=8.7, min_font_size=6.5),
+        "ship_from_city_state_zip": _box_for_baseline(x=115.0, baseline=638.7, width=217.0, font_size=8.7, min_font_size=6.5),
+        "consignee_company": _box_for_baseline(x=112.5, baseline=590.4, width=210.0, font_size=8.7, min_font_size=6.5),
+        "consignee_street": _box_for_baseline(x=112.5, baseline=566.4, width=210.0, font_size=8.7, min_font_size=6.5),
+        "consignee_city_state_zip": _box_for_baseline(x=112.5, baseline=554.4, width=220.0, font_size=8.7, min_font_size=6.5),
+        "bill_to": TextBox(
+            x=398.0,
+            y=502.0,
+            width=176.0,
+            height=40.0,
+            font_size=8.4,
+            min_font_size=6.5,
+            multiline=True,
+            leading=11.0,
+        ),
+        "dc_number": _box_for_baseline(x=48.0, baseline=510.3, width=95.0, font_size=8.5, min_font_size=6.5),
+    }
 
 
 STANDARD_CONFIG = PdfTemplateConfig(
@@ -401,23 +425,23 @@ NO_RECOURSE_CONFIG = replace(
         {
             # No Recourse removes template placeholder text objects first, then
             # draws values only. These boxes must not paint over form borders.
-            "qty_header": _box_for_baseline(x=35.0, baseline=398.3, width=52.0, height=10.0, font_size=5.8, min_font_size=4.8, align="center"),
-            "qty": TextBox(35.0, 0, 54.0, 0, 7.0, align="center"),
-            "type": TextBox(96.0, 0, 54.0, 0, 7.0, align="center"),
-            "po": TextBox(157.0, 0, 76.0, 0, 6.8, align="center"),
-            "description": TextBox(238.0, 0, 242.0, 0, 6.5, multiline=True, leading=8.4),
-            "skids": TextBox(488.0, 0, 48.0, 0, 7.0, align="center"),
-            "weight": TextBox(542.0, 0, 48.0, 0, 7.0, align="center"),
+            "qty_header": _box_for_baseline(x=35.0, baseline=398.3, width=60.0, height=10.0, font_size=7.8, min_font_size=6.2, align="center"),
+            "qty": TextBox(35.0, 0, 54.0, 0, 8.8, min_font_size=6.5, align="center"),
+            "type": TextBox(96.0, 0, 54.0, 0, 8.8, min_font_size=6.5, align="center"),
+            "po": TextBox(157.0, 0, 76.0, 0, 8.0, min_font_size=6.5, align="center"),
+            "description": TextBox(238.0, 0, 242.0, 0, 7.6, min_font_size=6.5, multiline=True, leading=9.2),
+            "skids": TextBox(488.0, 0, 48.0, 0, 8.8, min_font_size=6.5, align="center"),
+            "weight": TextBox(542.0, 0, 48.0, 0, 8.8, min_font_size=6.5, align="center"),
         }
     ),
     item_row_height=22.0,
     max_item_rows=4,
     totals=_without_whiteout_map(
         {
-            "qty": _box_for_baseline(x=472.0, baseline=195.3, width=76.0, height=12.0, font_size=7.4, bold=True, align="center"),
-            "label": _box_for_baseline(x=_col_x(5) + 2, baseline=207.2, width=_col_width(5, 11) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
-            "skids": _box_for_baseline(x=488.0, baseline=207.2, width=48.0, height=12.0, font_size=7.4, bold=True, align="center"),
-            "weight": _box_for_baseline(x=542.0, baseline=207.2, width=48.0, height=12.0, font_size=7.4, bold=True, align="center"),
+            "qty": _box_for_baseline(x=472.0, baseline=195.3, width=76.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
+            "label": _box_for_baseline(x=_col_x(5) + 2, baseline=207.2, width=_col_width(5, 11) - 4, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
+            "skids": _box_for_baseline(x=488.0, baseline=207.2, width=48.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
+            "weight": _box_for_baseline(x=542.0, baseline=207.2, width=48.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
         }
     ),
     item_row_baselines=(386.3, 364.6, 332.5, 300.5),
@@ -630,8 +654,14 @@ def _no_recourse_record_values(
     batch_comment: str | None,
 ) -> dict[str, str]:
     values = _standard_record_values(record, selected_facility, batch_comment)
+    no_recourse_comment = _safe_text(record.comments)
     values.update(
         {
+            "comments": no_recourse_comment,
+            "delivery_appt": "",
+            "appt_number": "",
+            "appointment_number": "",
+            "tracker_number": "",
             "ship_from_company": "Kendal King C/O Shorr",
             "ship_from_street": "975 W Oakdale Road",
             "ship_from_city_state_zip": "Grand Prairie, TX 75050",
@@ -884,6 +914,7 @@ def _stamp_template_pdf(
     template_path: Path,
     destination_pdf: Path,
     draw_callback: Callable[[canvas.Canvas], None],
+    strip_known_tokens: bool = False,
 ) -> None:
     destination_pdf.parent.mkdir(parents=True, exist_ok=True)
     template_reader = PdfReader(str(template_path))
@@ -894,7 +925,7 @@ def _stamp_template_pdf(
     writer.add_page(template_reader.pages[0])
 
     template_page = writer.pages[0]
-    _strip_template_placeholder_text(template_page)
+    _strip_template_placeholder_text(template_page, strip_known_tokens=strip_known_tokens)
     overlay_buffer = _create_overlay_pdf(template_page, draw_callback)
     overlay_reader = PdfReader(overlay_buffer)
     template_page.merge_page(overlay_reader.pages[0])
@@ -903,7 +934,7 @@ def _stamp_template_pdf(
         writer.write(output_file)
 
 
-def _strip_template_placeholder_text(page: Any) -> None:
+def _strip_template_placeholder_text(page: Any, *, strip_known_tokens: bool = False) -> None:
     content = page.get_contents()
     if content is None:
         return
@@ -916,36 +947,63 @@ def _strip_template_placeholder_text(page: Any) -> None:
                 operands[0], inside_placeholder = _strip_placeholder_fragment(
                     operands[0],
                     inside_placeholder,
+                    strip_known_tokens=strip_known_tokens,
                 )
         elif operator == b"TJ" and operands:
             text_array = operands[0]
             if isinstance(text_array, ArrayObject):
+                joined_text = "".join(value for value in text_array if isinstance(value, str))
+                if _should_strip_text_fragment(joined_text, inside_placeholder, strip_known_tokens=strip_known_tokens):
+                    for index, value in enumerate(text_array):
+                        if isinstance(value, str):
+                            text_array[index] = TextStringObject("")
+                    inside_placeholder = "\u00ab" in joined_text and "\u00bb" not in joined_text
+                    continue
                 for index, value in enumerate(text_array):
                     text_array[index], inside_placeholder = _strip_placeholder_fragment(
                         value,
                         inside_placeholder,
+                        strip_known_tokens=strip_known_tokens,
                     )
 
     page[NameObject("/Contents")] = content_stream
 
 
-def _strip_placeholder_fragment(value: Any, inside_placeholder: bool) -> tuple[Any, bool]:
+def _strip_placeholder_fragment(
+    value: Any,
+    inside_placeholder: bool,
+    *,
+    strip_known_tokens: bool = False,
+) -> tuple[Any, bool]:
     if not isinstance(value, str):
         return value, inside_placeholder
 
+    if _should_strip_text_fragment(value, inside_placeholder, strip_known_tokens=strip_known_tokens):
+        starts_placeholder = "\u00ab" in value or "Ť" in value
+        ends_placeholder = "\u00bb" in value or "ť" in value
+        return TextStringObject(""), starts_placeholder or (inside_placeholder and not ends_placeholder)
+
+    return value, inside_placeholder
+
+
+def _should_strip_text_fragment(
+    value: str,
+    inside_placeholder: bool,
+    *,
+    strip_known_tokens: bool,
+) -> bool:
     starts_placeholder = "\u00ab" in value
     ends_placeholder = "\u00bb" in value
-    contains_known_token = any(token in value for token in KNOWN_PLACEHOLDER_TOKENS)
-    if (
+    starts_placeholder = starts_placeholder or "Ť" in value
+    ends_placeholder = ends_placeholder or "ť" in value
+    contains_known_token = strip_known_tokens and any(token in value for token in KNOWN_PLACEHOLDER_TOKENS)
+    return (
         inside_placeholder
         or starts_placeholder
         or ends_placeholder
         or PLACEHOLDER_TEXT_PATTERN.search(value)
         or contains_known_token
-    ):
-        return TextStringObject(""), starts_placeholder or (inside_placeholder and not ends_placeholder)
-
-    return value, inside_placeholder
+    )
 
 
 def _records_by_bol(records: list[Any]) -> dict[str, Any]:
@@ -1036,6 +1094,7 @@ def stamp_bol_pdf_set(
                 _stamp_template_pdf(
                     template_path=config.template_path,
                     destination_pdf=destination_pdf,
+                    strip_known_tokens=config.mode == "No Recourse",
                     draw_callback=lambda canv, record=record: _draw_multistop_overlay(
                         canv,
                         config,
@@ -1051,6 +1110,7 @@ def stamp_bol_pdf_set(
                 _stamp_template_pdf(
                     template_path=config.template_path,
                     destination_pdf=destination_pdf,
+                    strip_known_tokens=config.mode == "No Recourse",
                     draw_callback=lambda canv, record=record: _draw_standard_overlay(
                         canv,
                         config,

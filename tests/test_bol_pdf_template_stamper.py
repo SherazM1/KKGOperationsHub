@@ -32,7 +32,12 @@ def _standard_record(
     optional_fields: bool = True,
     bol_number: str = "10001859231-0553",
     po_number: str = "10001859231-0553",
+    comments: str | None = None,
+    dc_number: str = "0553",
+    pickup_number: str | None = None,
 ) -> BolStandardRecord:
+    resolved_comments = comments if comments is not None else ("Handle cleanly" if optional_fields else "")
+    resolved_pickup = pickup_number if pickup_number is not None else ("PU-123" if optional_fields else "")
     return BolStandardRecord(
         bol_number=bol_number,
         ship_date="2026-05-13",
@@ -40,14 +45,14 @@ def _standard_record(
         kk_load_number="1",
         kk_po_number="KKPO-001",
         po_number=po_number,
-        dc_number="0553",
+        dc_number=dc_number,
         consignee_company="Test DC",
         consignee_street="123 Test Street",
         consignee_city_state_zip="Dallas, TX 75001",
         ship_from=_address("Kendal King C/O Shorr"),
         bill_to=_address(),
         seal_number_blank="SEAL-1" if optional_fields else "",
-        comments="Handle cleanly" if optional_fields else "",
+        comments=resolved_comments,
         item_lines=[
             BolStandardItemLine(
                 source_row_number=2,
@@ -66,7 +71,7 @@ def _standard_record(
         is_ready=True,
         status="Ready",
         carrier_pro_number="1073839",
-        pickup_number="PU-123" if optional_fields else "",
+        pickup_number=resolved_pickup,
     )
 
 
@@ -298,6 +303,58 @@ def test_no_recourse_template_stamper_removes_placeholders_and_draws_actual_addr
     assert "C A S E" not in text
     assert "1073839" in text
     assert "306" in text
+
+
+def test_no_recourse_template_stamper_keeps_pickup_comments_and_dc_separate(tmp_path: Path) -> None:
+    docx_file = _docx_file(tmp_path, "no_recourse_bol_10001859231-0553.docx", "10001859231-0553")
+
+    result = stamp_bol_pdf_set(
+        [
+            _standard_record(
+                optional_fields=False,
+                comments="",
+                dc_number="0553",
+                pickup_number="39860370",
+            )
+        ],
+        selected_facility=BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]],
+        generated_docx_files=[docx_file],
+        mode="No Recourse",
+        bol_type="PLT",
+        qty_type="PLT",
+        batch_comment="39860370",
+        output_dir=tmp_path / "pdf",
+    )
+
+    assert result.converted_count == 1
+    text = _pdf_text(result.converted_files[0].file_path)
+    assert text.count("39860370") == 1
+    assert "0553" in text
+    assert "Handle cleanly" not in text
+
+
+def test_no_recourse_template_stamper_has_single_header_totals_and_item_detail(tmp_path: Path) -> None:
+    docx_file = _docx_file(tmp_path, "no_recourse_bol_10001859231-0553.docx", "10001859231-0553")
+
+    result = stamp_bol_pdf_set(
+        [_standard_record()],
+        selected_facility=BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]],
+        generated_docx_files=[docx_file],
+        mode="No Recourse",
+        bol_type="PLT",
+        qty_type="PLT",
+        output_dir=tmp_path / "pdf",
+    )
+
+    assert result.converted_count == 1
+    text = _pdf_text(result.converted_files[0].file_path)
+    assert text.count("Pallet Qty") == 1
+    assert text.count("TOTALS") == 1
+    assert text.count("Item #:") == 1
+    assert text.count("UPC #:") == 1
+    assert "PLT" in text
+    assert "P\nL\nT" not in text
+    assert "10001859231-0553" in text
 
 
 def test_no_recourse_template_stamper_does_not_configure_whiteout_boxes() -> None:
