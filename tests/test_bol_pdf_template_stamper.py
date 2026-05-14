@@ -227,7 +227,8 @@ def test_no_recourse_template_stamper_creates_one_page_pdf_with_missing_optional
     assert "1073839" in text
     assert "CASE" in text
     assert "Case Qty" in text
-    assert "«" not in text
+    assert "\u00ab" not in text
+    assert "\u00bb" not in text
     assert "SHIP_TO_CITY_STATE_ZIP" not in text
     assert "QTY_2" not in text
     assert "TYPE_2" not in text
@@ -273,8 +274,8 @@ def test_no_recourse_template_stamper_removes_placeholders_and_draws_actual_addr
     assert result.converted_count == 1
     assert result.failed_count == 0
     text = _pdf_text(result.converted_files[0].file_path)
-    assert "«" not in text
-    assert "»" not in text
+    assert "\u00ab" not in text
+    assert "\u00bb" not in text
     for placeholder_name in (
         "SHIP_TO_CITY_STATE_ZIP",
         "QTY_2",
@@ -289,6 +290,9 @@ def test_no_recourse_template_stamper_removes_placeholders_and_draws_actual_addr
     assert "Trident Transport, LLC" in text
     assert "505 Riverfront Pkwy" in text
     assert "Chattanooga, TN 37402" in text
+    assert "Kendal King C/O Shorr" in text
+    assert "975 W Oakdale Road" in text
+    assert "Grand Prairie, TX 75050" in text
     assert "Dallas, TX 75001" in text
     assert "CASE" in text
     assert "C A S E" not in text

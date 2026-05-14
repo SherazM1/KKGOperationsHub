@@ -154,13 +154,17 @@ def _row_span_bottom(row_start: int, row_end: int) -> float:
     return TABLE_TOP - sum(ROW_HEIGHTS_PT[:row_end])
 
 
-def _safe_text(value: Any) -> str:
+def clean_value(value: Any) -> str:
     text = str(value or "").strip()
-    if text.startswith("«") and text.endswith("»"):
+    if text.startswith("\u00ab") and text.endswith("\u00bb"):
         return ""
-    if "«" in text or "»" in text:
+    if "\u00ab" in text or "\u00bb" in text:
         return ""
     return text
+
+
+def _safe_text(value: Any) -> str:
+    return clean_value(value)
 
 
 def _box_for_baseline(
@@ -584,6 +588,22 @@ def _standard_record_values(
     }
 
 
+def _no_recourse_record_values(
+    record: BolStandardRecord,
+    selected_facility: BolFacilityRecord,
+    batch_comment: str | None,
+) -> dict[str, str]:
+    values = _standard_record_values(record, selected_facility, batch_comment)
+    values.update(
+        {
+            "ship_from_company": "Kendal King C/O Shorr",
+            "ship_from_street": "975 W Oakdale Road",
+            "ship_from_city_state_zip": "Grand Prairie, TX 75050",
+        }
+    )
+    return values
+
+
 def _line_has_data(line: BolStandardItemLine) -> bool:
     return any(
         _safe_text(value)
@@ -667,11 +687,16 @@ def _draw_standard_overlay(
     qty_type: str,
     batch_comment: str | None,
 ) -> None:
+    record_values = (
+        _no_recourse_record_values(record, selected_facility, batch_comment)
+        if config.mode == "No Recourse"
+        else _standard_record_values(record, selected_facility, batch_comment)
+    )
     for field_name, box in config.fields.items():
         _draw_box_value(
             canv,
             box,
-            _standard_record_values(record, selected_facility, batch_comment).get(field_name, ""),
+            record_values.get(field_name, ""),
         )
 
     qty_header_box = config.item_columns.get("qty_header")
