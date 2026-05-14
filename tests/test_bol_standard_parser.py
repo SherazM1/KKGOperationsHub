@@ -219,6 +219,35 @@ def test_parse_standard_bol_excel_uses_next_load_source_when_dedicated_load_is_b
     assert rows[0].kk_load == "1073839"
 
 
+def test_parse_standard_bol_excel_uses_qty_as_plt_qty_when_no_pallet_quantity_column() -> None:
+    row = _standard_load_row()
+    row.pop("TOTAL PALLETS")
+    row["QTY"] = 10
+
+    workbook = _workbook_with_sheet("LOAD SHEET", [row])
+
+    rows = parse_standard_bol_excel(workbook)
+
+    assert len(rows) == 1
+    assert rows[0].unit_qty == "10"
+    assert rows[0].plt_qty == "10"
+
+
+def test_parse_standard_bol_excel_prefers_explicit_pallet_quantity_over_qty() -> None:
+    row = _standard_load_row()
+    row["PLT QTY"] = 3
+    row["QTY"] = 10
+    row.pop("TOTAL PALLETS")
+
+    workbook = _workbook_with_sheet("LOAD SHEET", [row])
+
+    rows = parse_standard_bol_excel(workbook)
+
+    assert len(rows) == 1
+    assert rows[0].unit_qty == "10"
+    assert rows[0].plt_qty == "3"
+
+
 def test_parse_standard_bol_excel_accepts_total_weight_alias_and_pickup() -> None:
     row = _standard_load_row()
     row["Line Weight"] = row.pop("Total Weight")
