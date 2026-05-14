@@ -353,7 +353,7 @@ def _draw_header_and_fields(
     _draw_right_field(canv, 1, "BOL #", record.bol_number)
     _draw_right_field(canv, 2, "Ship Date", _format_ship_date_for_template(record.ship_date))
     _draw_right_field(canv, 3, "Carrier", record.carrier, value_cols=(9, 15))
-    _draw_right_field(canv, 4, "Carrier Pro #", record.carrier_pro_number or record.kk_load_number)
+    _draw_right_field(canv, 4, "Carrier Pro #", record.carrier_pro_number)
     _draw_right_field(canv, 5, "PO #", record.po_number)
 
     if mode == "No Recourse":
@@ -648,7 +648,7 @@ def _draw_item_table(
     item_rows = list(range(24, 33))
     for row, line in zip(item_rows, item_lines):
         _draw_table_cell_text(canv, 0, 1, row, row + 1, line.pallet_qty, font_size=6.5)
-        _draw_table_cell_text(canv, 1, 3, row, row + 1, rendered_type, font_size=6.5)
+        _draw_table_cell_text(canv, 1, 3, row, row + 1, rendered_type, font_size=6.0)
         _draw_table_cell_text(canv, 3, 5, row, row + 1, line.po_number, font_size=6.2)
         _draw_item_description(canv, row, line)
         _draw_table_cell_text(canv, 11, 14, row, row + 1, line.skids, font_size=6.5)

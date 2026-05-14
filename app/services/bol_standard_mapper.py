@@ -96,6 +96,7 @@ def _inconsistent_shipment_warnings(bol_rows: list[BolStandardRow]) -> list[str]
         ("SHIP DATE", "ship_date"),
         ("CARRIER", "carrier"),
         ("KK LOAD", "kk_load"),
+        ("Carrier Pro #", "carrier_pro_number"),
         ("KK PO#", "kk_po"),
         ("WM PO #", "wm_po"),
         ("DC #", "dc_number"),
@@ -191,6 +192,7 @@ def map_standard_rows_to_records(rows: list[BolStandardRow]) -> list[BolStandard
             generation_skip_reason=None,
             conversion_skip_reason=None,
             issues=[],
+            carrier_pro_number=_first_non_empty(bol_rows, "carrier_pro_number"),
             pickup_number=_first_non_empty(bol_rows, "pickup_number"),
         )
 

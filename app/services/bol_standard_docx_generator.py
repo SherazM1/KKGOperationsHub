@@ -421,6 +421,12 @@ def _set_cell_text_size(cell, size: Pt) -> None:
             run.font.size = size
 
 
+def _set_cell_nowrap(cell) -> None:
+    tc_pr = cell._tc.get_or_add_tcPr()
+    if tc_pr.find(qn("w:noWrap")) is None:
+        tc_pr.append(cell._tc.makeelement(qn("w:noWrap"), nsmap=cell._tc.nsmap))
+
+
 def _remove_cell_nowrap(cell) -> None:
     tc_pr = cell._tc.get_or_add_tcPr()
     for no_wrap in list(tc_pr.findall(qn("w:noWrap"))):
@@ -452,16 +458,69 @@ def _apply_header_fit_cleanup(doc: Document, record: BolStandardRecord) -> None:
     if not long_values:
         return
 
+    header_labels = (
+        "BOL #",
+        "PO #",
+        "CARRIER PRO #",
+        "KK PO #",
+        "KKG LOAD #",
+        "KK LOAD #",
+        "PICK UP #",
+        "DELIVERY APPT.",
+        "APPT #",
+    )
     for table in doc.tables:
         for row in table.rows:
             if _row_is_item_header(row):
                 break
-            for cell in row.cells:
+            for index, cell in enumerate(row.cells):
                 cell_text = cell.text.strip()
-                if not cell_text or not any(value in cell_text for value in long_values):
+                cell_text_upper = cell_text.upper()
+                has_long_value = any(value in cell_text for value in long_values)
+                has_header_label = any(label in cell_text_upper for label in header_labels)
+                if not cell_text or not has_long_value:
                     continue
-                _remove_cell_nowrap(cell)
-                _set_cell_text_size(cell, Pt(8))
+                _set_cell_text_size(cell, Pt(7.5))
+                if has_header_label and index + 1 < len(row.cells):
+                    value_cell = row.cells[index + 1]
+                    _set_cell_text_size(value_cell, Pt(7.5))
+                    _set_cell_nowrap(value_cell)
+                else:
+                    _set_cell_nowrap(cell)
+
+
+def _apply_type_column_fit_cleanup(doc: Document) -> None:
+    for table in doc.tables:
+        header_idx = None
+        type_col_indexes: list[int] = []
+        for idx, row in enumerate(table.rows):
+            row_text_upper = " ".join(cell.text.strip() for cell in row.cells).upper()
+            if (
+                "TYPE" in row_text_upper
+                and "PO #" in row_text_upper
+                and "ITEM DESCRIPTION" in row_text_upper
+            ):
+                header_idx = idx
+                type_col_indexes = [
+                    col_idx
+                    for col_idx, cell in enumerate(row.cells)
+                    if cell.text.strip().upper() == "TYPE"
+                ]
+                break
+        if header_idx is None or not type_col_indexes:
+            continue
+
+        for row in table.rows[header_idx + 1 :]:
+            row_text_upper = " ".join(cell.text.strip() for cell in row.cells).upper()
+            if "TOTALS" in row_text_upper:
+                break
+            for col_idx in type_col_indexes:
+                if col_idx >= len(row.cells):
+                    continue
+                cell = row.cells[col_idx]
+                if cell.text.strip().upper() in {"PLT", "CASE"}:
+                    _set_cell_text_size(cell, Pt(7))
+                    _set_cell_nowrap(cell)
 
 
 def _apply_subject7_fit_cleanup(doc: Document) -> None:
@@ -888,7 +947,7 @@ def _apply_template_record_values(
         _tok("BOL"): record.bol_number,
         _tok("SHIP_DATE"): _format_ship_date_for_template(record.ship_date),
         _tok("CARRIER"): record.carrier,
-        _tok("Carrier_Pro_"): record.carrier_pro_number or record.kk_load_number,
+        _tok("Carrier_Pro_"): record.carrier_pro_number,
         _tok("HOST_PO"): record.po_number,
         _tok("KKG_PO"): record.kk_po_number,
         _tok("KKG_LOAD_"): record.kk_load_number,
@@ -940,6 +999,7 @@ def _apply_template_record_values(
                 filter_blank_item_lines=filter_blank_item_lines,
             )
             _apply_header_fit_cleanup(doc, record)
+            _apply_type_column_fit_cleanup(doc)
             _apply_subject7_fit_cleanup(doc)
             _normalize_document_font(doc)
             return notices

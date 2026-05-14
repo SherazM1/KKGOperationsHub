@@ -32,11 +32,8 @@ from app.services.bol_standard_docx_generator import (
     resolve_template_path_for_mode,
 )
 from app.services.bol_standard_mapper import map_standard_rows_to_records
-from app.services.bol_standard_pdf_converter import (
-    StandardPdfConversionResult,
-    convert_standard_docx_set_to_pdf,
-)
-from app.services.bol_standard_pdf_generator import generate_standard_pdf_set
+from app.services.bol_standard_pdf_converter import StandardPdfConversionResult
+from app.services.bol_pdf_template_stamper import stamp_bol_pdf_set
 from app.services.bol_standard_parser import parse_standard_bol_excel
 from app.utils.bol_facilities import BOL_FACILITY_LOOKUP, BOL_FACILITY_OPTIONS, BolFacilityRecord
 
@@ -195,6 +192,8 @@ def _refresh_bundles() -> StandardBundleResult | None:
                 "Multistop PDF bundle was created with "
                 f"{bundle_result.pdf_bundle.missing_count} missing converted source file(s)."
             )
+        elif bundle_result.combined_pdf_error:
+            st.session_state["bol_bundle_error"] = bundle_result.combined_pdf_error
         else:
             st.session_state["bol_bundle_error"] = None
         return bundle_result
@@ -284,13 +283,7 @@ def _generate_pdf_result(
     grouped_records: list[Any],
     progress_callback: Any,
 ) -> StandardPdfConversionResult:
-    if mode == "Multistop":
-        return convert_standard_docx_set_to_pdf(
-            docx_result.generated_files,
-            progress_callback=progress_callback,
-        )
-
-    return generate_standard_pdf_set(
+    return stamp_bol_pdf_set(
         grouped_records,
         selected_facility=st.session_state["bol_selected_facility"],
         generated_docx_files=docx_result.generated_files,
@@ -1112,6 +1105,7 @@ def render_bol_generator_view() -> None:
     bundle_result = st.session_state["bol_bundle_result"]
     docx_bundle_bytes = None
     pdf_bundle_bytes = None
+    combined_pdf_bytes = None
     all_bundle_bytes = None
 
     if isinstance(bundle_result, StandardBundleResult):
@@ -1119,6 +1113,8 @@ def render_bol_generator_view() -> None:
             docx_bundle_bytes = _read_file_bytes(bundle_result.docx_bundle.file_path)
         if bundle_result.pdf_bundle:
             pdf_bundle_bytes = _read_file_bytes(bundle_result.pdf_bundle.file_path)
+        if bundle_result.combined_pdf:
+            combined_pdf_bytes = _read_file_bytes(bundle_result.combined_pdf.file_path)
         if bundle_result.all_files_bundle:
             all_bundle_bytes = _read_file_bytes(bundle_result.all_files_bundle.file_path)
 
@@ -1132,10 +1128,16 @@ def render_bol_generator_view() -> None:
             bundle_read_errors.append(
                 f"PDF bundle file is missing on disk: {bundle_result.pdf_bundle.file_path}"
             )
+        if bundle_result.combined_pdf and combined_pdf_bytes is None:
+            bundle_read_errors.append(
+                f"Combined PDF file is missing on disk: {bundle_result.combined_pdf.file_path}"
+            )
         if bundle_result.all_files_bundle and all_bundle_bytes is None:
             bundle_read_errors.append(
                 f"Combined bundle file is missing on disk: {bundle_result.all_files_bundle.file_path}"
             )
+        if bundle_result.combined_pdf_error:
+            bundle_read_errors.append(bundle_result.combined_pdf_error)
 
     if bundle_read_errors:
         st.session_state["bol_bundle_error"] = " | ".join(bundle_read_errors)
@@ -1163,6 +1165,8 @@ def render_bol_generator_view() -> None:
                     docx_bundle_bytes = _read_file_bytes(bundle_result.docx_bundle.file_path)
                 if bundle_result.pdf_bundle:
                     pdf_bundle_bytes = _read_file_bytes(bundle_result.pdf_bundle.file_path)
+                if bundle_result.combined_pdf:
+                    combined_pdf_bytes = _read_file_bytes(bundle_result.combined_pdf.file_path)
                 if bundle_result.all_files_bundle:
                     all_bundle_bytes = _read_file_bytes(bundle_result.all_files_bundle.file_path)
 
@@ -1190,6 +1194,18 @@ def render_bol_generator_view() -> None:
         disabled=pdf_bundle_bytes is None,
         use_container_width=True,
     )
+    if combined_pdf_bytes is not None:
+        st.download_button(
+            "Download Combined PDF",
+            data=combined_pdf_bytes,
+            file_name=(
+                bundle_result.combined_pdf.file_name
+                if isinstance(bundle_result, StandardBundleResult) and bundle_result.combined_pdf
+                else f"{st.session_state['bol_mode'].lower().replace(' ', '_')}_bol_combined.pdf"
+            ),
+            mime="application/pdf",
+            use_container_width=True,
+        )
     st.download_button(
         "Download All Files",
         data=all_bundle_bytes or b"",
@@ -1287,6 +1303,7 @@ def render_bol_generator_view() -> None:
                 {
                     "docx_bundle_ready": bundle_result.docx_bundle is not None and docx_bundle_bytes is not None,
                     "pdf_bundle_ready": bundle_result.pdf_bundle is not None and pdf_bundle_bytes is not None,
+                    "combined_pdf_ready": bundle_result.combined_pdf is not None and combined_pdf_bytes is not None,
                     "combined_bundle_ready": bundle_result.all_files_bundle is not None and all_bundle_bytes is not None,
                 }
             )
@@ -1298,6 +1315,9 @@ def render_bol_generator_view() -> None:
                 ),
                 "pdf_bundle_file_count": (
                     bundle_result.pdf_bundle.file_count if bundle_result.pdf_bundle else 0
+                ),
+                "combined_pdf_file_count": (
+                    bundle_result.combined_pdf.file_count if bundle_result.combined_pdf else 0
                 ),
                 "combined_bundle_file_count": (
                     bundle_result.all_files_bundle.file_count if bundle_result.all_files_bundle else 0

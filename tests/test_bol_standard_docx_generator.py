@@ -22,7 +22,7 @@ def _ready_record() -> BolStandardRecord:
         bol_number="10001859231-0553",
         ship_date="2026-05-13",
         carrier="Test Carrier",
-        kk_load_number="1073839",
+        kk_load_number="1",
         kk_po_number="KKPO-001",
         po_number="10001859231-0553",
         dc_number="0553",
@@ -58,6 +58,7 @@ def _ready_record() -> BolStandardRecord:
         total_skids=2,
         is_ready=True,
         status="Ready",
+        carrier_pro_number="1073839",
         pickup_number="PU-123",
     )
 
@@ -144,3 +145,29 @@ def test_standard_docx_totals_prefer_total_weight_and_pickup_renders(tmp_path: P
 
     assert "PU-123" in _document_text(doc)
     assert "306" in _totals_row_text(doc)
+
+
+def test_standard_docx_renders_carrier_pro_from_load_number_not_kk_load(tmp_path: Path) -> None:
+    doc = _generated_docx("Standard", tmp_path, bol_type="PLT", qty_type="PLT")
+    text = _document_text(doc)
+
+    assert "1073839" in text
+    assert "1" in text
+
+
+def test_standard_docx_type_case_has_no_inserted_spaces_or_line_breaks(tmp_path: Path) -> None:
+    doc = _generated_docx("Standard", tmp_path, bol_type="CASE", qty_type="PLT")
+    type_value = _first_item_type_value(doc)
+
+    assert type_value == "CASE"
+    assert "C A S E" not in _document_text(doc)
+    assert "CAS\nE" not in _document_text(doc)
+
+
+def test_no_recourse_docx_type_case_has_no_inserted_spaces_or_line_breaks(tmp_path: Path) -> None:
+    doc = _generated_docx("No Recourse", tmp_path, bol_type="CASE", qty_type="PLT")
+    type_value = _first_item_type_value(doc)
+
+    assert type_value == "CASE"
+    assert "C A S E" not in _document_text(doc)
+    assert "CAS\nE" not in _document_text(doc)

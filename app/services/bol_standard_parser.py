@@ -37,11 +37,6 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
             "KK Load",
             "KK LOAD",
             "KK Load #",
-            "Load",
-            "Load #",
-            "load#",
-            "Load#",
-            "LOAD#",
         ],
     },
     "kk_po": {"primary": "KK PO#", "fallback_aliases": ["KK PO #", "KK PO"]},
@@ -85,6 +80,18 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
 }
 
 OPTIONAL_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
+    "carrier_pro_number": {
+        "primary": "load#",
+        "fallback_aliases": [
+            "Load #",
+            "LOAD #",
+            "Load#",
+            "LOAD#",
+            "load",
+            "Load",
+            "LOAD",
+        ],
+    },
     "total_weight": {
         "primary": "Total Weight",
         "fallback_aliases": [
@@ -141,11 +148,6 @@ KK_LOAD_COLUMN_PRIORITY: tuple[str, ...] = (
     "KK Load",
     "KK LOAD",
     "KK Load #",
-    "Load",
-    "Load #",
-    "load#",
-    "Load#",
-    "LOAD#",
 )
 
 
@@ -402,6 +404,7 @@ def parse_standard_bol_excel(file: Any) -> list[BolStandardRow]:
                 weight_each=row_values["weight_each"],
                 total_weight=row_values.get("total_weight", ""),
                 pickup_number=row_values.get("pickup_number", ""),
+                carrier_pro_number=row_values.get("carrier_pro_number", ""),
             )
         )
 

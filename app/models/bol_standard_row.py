@@ -28,3 +28,4 @@ class BolStandardRow:
     weight_each: str
     total_weight: str = ""
     pickup_number: str = ""
+    carrier_pro_number: str = ""

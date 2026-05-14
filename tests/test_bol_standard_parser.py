@@ -50,6 +50,7 @@ def test_parse_standard_bol_excel_accepts_normalized_main_load_sheet_name() -> N
     assert len(rows) == 1
     assert rows[0].bol_number == "BOL-001"
     assert rows[0].total_weight == "100"
+    assert rows[0].carrier_pro_number == "LOAD-001"
 
 
 def test_parse_standard_bol_excel_accepts_load_sheet_with_trailing_space() -> None:
@@ -177,8 +178,8 @@ def test_standard_bol_mapping_keeps_missing_bol_when_bol_and_po_are_blank() -> N
 
 def test_standard_bol_mapping_uses_kk_load_for_kkg_load_when_bol_falls_back_to_tgt_po() -> None:
     row = _standard_load_row()
-    row["KK Load"] = "1073839"
-    row["load#"] = "CARRIER-LOAD-001"
+    row["KK Load"] = "1"
+    row["load#"] = "1073839"
     row["BOL #"] = ""
     row["TGT PO #"] = "10001859231-0551"
 
@@ -189,20 +190,19 @@ def test_standard_bol_mapping_uses_kk_load_for_kkg_load_when_bol_falls_back_to_t
 
     assert len(records) == 1
     assert records[0].bol_number == "10001859231-0551"
-    assert records[0].kk_load_number == "1073839"
+    assert records[0].kk_load_number == "1"
+    assert records[0].carrier_pro_number == "1073839"
 
 
-def test_parse_standard_bol_excel_preserves_base_load_number_when_only_load_number_exists() -> None:
+def test_parse_standard_bol_excel_does_not_use_load_number_as_kk_load() -> None:
     row = _standard_load_row()
     row.pop("KK Load")
     row["load#"] = "BASE-LOAD-001"
 
     workbook = _workbook_with_sheet("MAIN LOAD SHEET", [row])
 
-    rows = parse_standard_bol_excel(workbook)
-
-    assert len(rows) == 1
-    assert rows[0].kk_load == "BASE-LOAD-001"
+    with pytest.raises(ValueError, match="kk_load"):
+        parse_standard_bol_excel(workbook)
 
 
 def test_parse_standard_bol_excel_uses_next_load_source_when_dedicated_load_is_blank() -> None:

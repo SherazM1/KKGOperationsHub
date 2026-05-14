@@ -10,6 +10,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from app.services.bol_standard_docx_generator import GeneratedDocxFile
 from app.services.bol_standard_pdf_converter import ConvertedPdfFile
+from app.services.bol_pdf_merge_service import merge_pdf_files
 
 
 DEFAULT_BUNDLE_NAME_PREFIX = "standard_bol"
@@ -33,6 +34,8 @@ class StandardBundleResult:
     docx_bundle: BundleArtifact | None
     pdf_bundle: BundleArtifact | None
     all_files_bundle: BundleArtifact | None
+    combined_pdf: BundleArtifact | None = None
+    combined_pdf_error: str | None = None
 
 
 def _build_zip(zip_path: Path, files: list[tuple[Path, str]]) -> BundleArtifact:
@@ -157,6 +160,36 @@ def _build_multistop_zip(
     )
 
 
+def _build_combined_pdf_artifact(
+    output_root: Path,
+    converted_pdf_files: list[ConvertedPdfFile],
+    prefix: str,
+) -> tuple[BundleArtifact | None, str | None]:
+    existing_pdf_files = [
+        converted_file
+        for converted_file in converted_pdf_files
+        if Path(converted_file.file_path).exists()
+    ]
+    if not existing_pdf_files:
+        return None, None
+
+    destination = output_root / f"{prefix}_combined.pdf"
+    try:
+        merge_pdf_files(existing_pdf_files, destination)
+    except Exception as exc:
+        return None, f"Combined PDF creation failed: {exc}"
+
+    return (
+        BundleArtifact(
+            bundle_type=destination.stem,
+            file_name=destination.name,
+            file_path=str(destination.resolve()),
+            file_count=len(existing_pdf_files),
+        ),
+        None,
+    )
+
+
 def create_multistop_bundles(
     generated_docx_files: list[GeneratedDocxFile],
     converted_pdf_files: list[ConvertedPdfFile] | None = None,
@@ -211,12 +244,19 @@ def create_multistop_bundles(
         if include_all_files_bundle and (existing_docx_files or existing_pdf_files)
         else None
     )
+    combined_pdf, combined_pdf_error = _build_combined_pdf_artifact(
+        output_root,
+        converted_pdf_files,
+        prefix,
+    )
 
     return StandardBundleResult(
         output_dir=str(output_root.resolve()),
         docx_bundle=docx_bundle,
         pdf_bundle=pdf_bundle,
         all_files_bundle=all_files_bundle,
+        combined_pdf=combined_pdf,
+        combined_pdf_error=combined_pdf_error,
     )
 
 
@@ -283,10 +323,17 @@ def create_standard_bundles(
         if include_all_files_bundle and all_entries
         else None
     )
+    combined_pdf, combined_pdf_error = _build_combined_pdf_artifact(
+        output_root,
+        converted_pdf_files,
+        prefix,
+    )
 
     return StandardBundleResult(
         output_dir=str(output_root.resolve()),
         docx_bundle=docx_bundle,
         pdf_bundle=pdf_bundle,
         all_files_bundle=all_bundle,
+        combined_pdf=combined_pdf,
+        combined_pdf_error=combined_pdf_error,
     )

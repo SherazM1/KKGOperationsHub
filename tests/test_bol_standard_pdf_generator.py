@@ -10,6 +10,7 @@ from app.models.bol_standard_record import (
 from app.services.bol_file_bundle_service import create_standard_bundles
 from app.services.bol_standard_docx_generator import GeneratedDocxFile
 from app.services.bol_standard_pdf_converter import StandardPdfConversionResult
+import app.services.bol_standard_pdf_generator as pdf_generator
 from app.services.bol_standard_pdf_generator import generate_standard_pdf_set
 from app.utils.bol_facilities import BOL_FACILITY_LOOKUP, BOL_FACILITY_OPTIONS
 
@@ -19,7 +20,7 @@ def _ready_record() -> BolStandardRecord:
         bol_number="10001859231-0553",
         ship_date="2026-05-13",
         carrier="Test Carrier",
-        kk_load_number="1073839",
+        kk_load_number="1",
         kk_po_number="KKPO-001",
         po_number="10001859231-0553",
         dc_number="0553",
@@ -55,6 +56,7 @@ def _ready_record() -> BolStandardRecord:
         total_skids=2,
         is_ready=True,
         status="Ready",
+        carrier_pro_number="1073839",
         pickup_number="PU-123",
     )
 
@@ -140,3 +142,47 @@ def test_generate_standard_pdf_set_reports_missing_matching_record(tmp_path: Pat
     assert result.converted_count == 0
     assert result.failed_count == 1
     assert "Matching BOL record" in result.failed_conversions[0].error
+
+
+def test_generate_standard_pdf_uses_carrier_pro_and_unsplit_case_type(tmp_path: Path, monkeypatch) -> None:
+    right_fields: list[tuple[str, str]] = []
+    table_values: list[str] = []
+    original_right_field = pdf_generator._draw_right_field
+    original_table_cell = pdf_generator._draw_table_cell_text
+
+    def capture_right_field(canv, row, label, value, **kwargs):
+        right_fields.append((label, value))
+        return original_right_field(canv, row, label, value, **kwargs)
+
+    def capture_table_cell(canv, col_start, col_end, row_start, row_end, text, **kwargs):
+        if col_start == 1 and col_end == 3:
+            table_values.append(text)
+        return original_table_cell(
+            canv,
+            col_start,
+            col_end,
+            row_start,
+            row_end,
+            text,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(pdf_generator, "_draw_right_field", capture_right_field)
+    monkeypatch.setattr(pdf_generator, "_draw_table_cell_text", capture_table_cell)
+
+    result = generate_standard_pdf_set(
+        [_ready_record()],
+        selected_facility=BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]],
+        generated_docx_files=[_generated_docx_file(tmp_path)],
+        mode="Standard",
+        bol_type="CASE",
+        qty_type="PLT",
+        output_dir=tmp_path / "pdf",
+    )
+
+    assert result.failed_count == 0
+    assert ("Carrier Pro #", "1073839") in right_fields
+    assert ("KKG Load #", "1") in right_fields
+    assert "CASE" in table_values
+    assert "C A S E" not in table_values
+    assert "CAS\nE" not in table_values
