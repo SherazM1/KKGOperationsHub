@@ -227,6 +227,13 @@ def test_no_recourse_template_stamper_creates_one_page_pdf_with_missing_optional
     assert "1073839" in text
     assert "CASE" in text
     assert "Case Qty" in text
+    assert "«" not in text
+    assert "SHIP_TO_CITY_STATE_ZIP" not in text
+    assert "QTY_2" not in text
+    assert "TYPE_2" not in text
+    assert "BILL_TO" not in text
+    assert "BILL_TO_ADDRESS" not in text
+    assert "TOTAL_QTY" not in text
 
 
 def test_no_recourse_template_stamper_keeps_long_bol_and_po_values_complete(tmp_path: Path) -> None:
@@ -248,6 +255,45 @@ def test_no_recourse_template_stamper_keeps_long_bol_and_po_values_complete(tmp_
     assert long_value in text
     assert "CASE" in text
     assert "C A S E" not in text
+
+
+def test_no_recourse_template_stamper_removes_placeholders_and_draws_actual_addresses(tmp_path: Path) -> None:
+    docx_file = _docx_file(tmp_path, "no_recourse_bol_10001859231-0553.docx", "10001859231-0553")
+
+    result = stamp_bol_pdf_set(
+        [_standard_record()],
+        selected_facility=BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]],
+        generated_docx_files=[docx_file],
+        mode="No Recourse",
+        bol_type="CASE",
+        qty_type="Case",
+        output_dir=tmp_path / "pdf",
+    )
+
+    assert result.converted_count == 1
+    assert result.failed_count == 0
+    text = _pdf_text(result.converted_files[0].file_path)
+    assert "«" not in text
+    assert "»" not in text
+    for placeholder_name in (
+        "SHIP_TO_CITY_STATE_ZIP",
+        "QTY_2",
+        "TYPE_2",
+        "PO_2",
+        "WEIGHT_2",
+        "BILL_TO",
+        "BILL_TO_ADDRESS",
+        "TOTAL_QTY",
+    ):
+        assert placeholder_name not in text
+    assert "Trident Transport, LLC" in text
+    assert "505 Riverfront Pkwy" in text
+    assert "Chattanooga, TN 37402" in text
+    assert "Dallas, TX 75001" in text
+    assert "CASE" in text
+    assert "C A S E" not in text
+    assert "1073839" in text
+    assert "306" in text
 
 
 def test_multistop_template_stamper_creates_pdf(tmp_path: Path) -> None:

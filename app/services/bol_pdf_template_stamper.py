@@ -9,6 +9,7 @@ from tempfile import mkdtemp
 from typing import Any, Callable
 
 from pypdf import PdfReader, PdfWriter
+from pypdf.generic import ArrayObject, ContentStream, NameObject, TextStringObject
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -154,7 +155,12 @@ def _row_span_bottom(row_start: int, row_end: int) -> float:
 
 
 def _safe_text(value: Any) -> str:
-    return str(value or "").strip()
+    text = str(value or "").strip()
+    if text.startswith("«") and text.endswith("»"):
+        return ""
+    if "«" in text or "»" in text:
+        return ""
+    return text
 
 
 def _box_for_baseline(
@@ -308,6 +314,18 @@ def _no_recourse_fields() -> dict[str, TextBox]:
             "ship_from_city_state_zip": _box_for_baseline(x=115.0, baseline=638.7, width=217.0, font_size=7.8),
             "consignee_company": _box_for_baseline(x=112.5, baseline=590.4, width=210.0, font_size=7.8),
             "consignee_street": _box_for_baseline(x=112.5, baseline=566.4, width=210.0, font_size=7.8),
+            "consignee_city_state_zip": _box_for_baseline(x=112.5, baseline=554.4, width=220.0, font_size=7.8),
+            "bill_to": TextBox(
+                x=398.0,
+                y=506.0,
+                width=176.0,
+                height=34.0,
+                font_size=7.4,
+                min_font_size=5.4,
+                multiline=True,
+                leading=10.0,
+            ),
+            "dc_number": _box_for_baseline(x=48.0, baseline=510.3, width=95.0, font_size=7.8),
         }
     )
     return fields
@@ -344,21 +362,23 @@ NO_RECOURSE_CONFIG = replace(
     template_path=NO_RECOURSE_PDF_TEMPLATE_PATH,
     fields=_no_recourse_fields(),
     item_columns={
-        "qty_header": _box_for_baseline(x=29.0, baseline=398.3, width=60.0, height=10.0, font_size=5.8, min_font_size=4.8, align="center"),
-        "qty": _item_box(0, 1, font_size=7.0, align="center"),
-        "type": _item_box(1, 3, font_size=7.0, align="center"),
-        "po": _item_box(3, 5, font_size=6.8, align="center"),
-        "description": _item_box(5, 11, font_size=6.5),
-        "skids": _item_box(11, 14, font_size=7.0, align="center"),
-        "weight": _item_box(14, 19, font_size=7.0, align="center"),
+        # No Recourse PDF template placeholder map. These boxes intentionally
+        # match the static placeholder regions in no_recourse_pdf_template.pdf.
+        "qty_header": _box_for_baseline(x=35.0, baseline=398.3, width=52.0, height=10.0, font_size=5.8, min_font_size=4.8, align="center"),
+        "qty": TextBox(35.0, 0, 54.0, 0, 7.0, align="center"),
+        "type": TextBox(96.0, 0, 54.0, 0, 7.0, align="center"),
+        "po": TextBox(157.0, 0, 76.0, 0, 6.8, align="center"),
+        "description": TextBox(238.0, 0, 242.0, 0, 6.5, multiline=True, leading=8.4),
+        "skids": TextBox(488.0, 0, 48.0, 0, 7.0, align="center"),
+        "weight": TextBox(542.0, 0, 48.0, 0, 7.0, align="center"),
     },
-    item_row_height=18.0,
+    item_row_height=22.0,
     max_item_rows=4,
     totals={
-        "qty": _box_for_baseline(x=476.0, baseline=195.3, width=72.0, height=12.0, font_size=7.4, bold=True, align="center"),
+        "qty": _box_for_baseline(x=472.0, baseline=195.3, width=76.0, height=12.0, font_size=7.4, bold=True, align="center"),
         "label": _box_for_baseline(x=_col_x(5) + 2, baseline=207.2, width=_col_width(5, 11) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
-        "skids": _box_for_baseline(x=_col_x(11) + 2, baseline=207.2, width=_col_width(11, 14) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
-        "weight": _box_for_baseline(x=_col_x(14) + 2, baseline=207.2, width=_col_width(14, 19) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
+        "skids": _box_for_baseline(x=488.0, baseline=207.2, width=48.0, height=12.0, font_size=7.4, bold=True, align="center"),
+        "weight": _box_for_baseline(x=542.0, baseline=207.2, width=48.0, height=12.0, font_size=7.4, bold=True, align="center"),
     },
     item_row_baselines=(386.3, 364.6, 332.5, 300.5),
 )
@@ -660,21 +680,34 @@ def _draw_standard_overlay(
 
     rendered_type = _normalize_bol_type(bol_type)
     item_lines = _standard_item_lines(record, mode=config.mode)
-    for row_offset, line in enumerate(item_lines[: config.max_item_rows]):
+    row_count = config.max_item_rows if config.mode == "No Recourse" else len(item_lines[: config.max_item_rows])
+    for row_offset in range(row_count):
         row_baseline = (
             config.item_row_baselines[row_offset]
             if row_offset < len(config.item_row_baselines)
             else config.item_start_y - row_offset * config.item_row_height
         )
         row_height = config.item_row_height - 2
-        values = {
-            "qty": line.pallet_qty,
-            "type": rendered_type,
-            "po": line.po_number,
-            "description": _description_value(line),
-            "skids": line.skids,
-            "weight": line.weight_each,
-        }
+        line = item_lines[row_offset] if row_offset < len(item_lines) else None
+        values = (
+            {
+                "qty": line.pallet_qty,
+                "type": rendered_type,
+                "po": line.po_number,
+                "description": _description_value(line),
+                "skids": line.skids,
+                "weight": line.weight_each,
+            }
+            if line is not None
+            else {
+                "qty": "",
+                "type": "",
+                "po": "",
+                "description": "",
+                "skids": "",
+                "weight": "",
+            }
+        )
         for column_name, value in values.items():
             base_box = config.item_columns[column_name]
             box = _box_at_row_baseline(base_box, row_baseline, row_height)
@@ -800,12 +833,51 @@ def _stamp_template_pdf(
     writer.add_page(template_reader.pages[0])
 
     template_page = writer.pages[0]
+    _strip_template_placeholder_text(template_page)
     overlay_buffer = _create_overlay_pdf(template_page, draw_callback)
     overlay_reader = PdfReader(overlay_buffer)
     template_page.merge_page(overlay_reader.pages[0])
 
     with destination_pdf.open("wb") as output_file:
         writer.write(output_file)
+
+
+def _strip_template_placeholder_text(page: Any) -> None:
+    content = page.get_contents()
+    if content is None:
+        return
+
+    content_stream = ContentStream(content, page.pdf)
+    inside_placeholder = False
+    for operands, operator in content_stream.operations:
+        if operator in (b"Tj", b"'", b'"'):
+            if operands:
+                operands[0], inside_placeholder = _strip_placeholder_fragment(
+                    operands[0],
+                    inside_placeholder,
+                )
+        elif operator == b"TJ" and operands:
+            text_array = operands[0]
+            if isinstance(text_array, ArrayObject):
+                for index, value in enumerate(text_array):
+                    text_array[index], inside_placeholder = _strip_placeholder_fragment(
+                        value,
+                        inside_placeholder,
+                    )
+
+    page[NameObject("/Contents")] = content_stream
+
+
+def _strip_placeholder_fragment(value: Any, inside_placeholder: bool) -> tuple[Any, bool]:
+    if not isinstance(value, str):
+        return value, inside_placeholder
+
+    starts_placeholder = "«" in value
+    ends_placeholder = "»" in value
+    if inside_placeholder or starts_placeholder or ends_placeholder:
+        return TextStringObject(""), starts_placeholder or (inside_placeholder and not ends_placeholder)
+
+    return value, inside_placeholder
 
 
 def _records_by_bol(records: list[Any]) -> dict[str, Any]:
