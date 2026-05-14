@@ -166,7 +166,7 @@ def _clear_generated_artifacts(*, delete_files: bool) -> None:
     st.session_state["bol_all_files_bundle_requested"] = False
 
 
-def _clear_review_state(*, delete_files: bool = True) -> None:
+def _clear_review_state(*, delete_files: bool = False) -> None:
     st.session_state["bol_record_comments"] = {}
     st.session_state["bol_record_selection"] = {}
     _clear_generated_artifacts(delete_files=delete_files)
@@ -265,7 +265,7 @@ def _refresh_bundles() -> StandardBundleResult | None:
         return None
 
 
-def _clear_generation_state(*, delete_files: bool = True) -> None:
+def _clear_generation_state(*, delete_files: bool = False) -> None:
     _clear_generated_artifacts(delete_files=delete_files)
     st.session_state["bol_generation_status"] = "Waiting for generation action."
 
