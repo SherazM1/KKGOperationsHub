@@ -12,7 +12,7 @@ from app.models.bol_standard_record import (
 )
 from app.services.bol_file_bundle_service import create_standard_bundles
 from app.services.bol_multistop_docx_generator import MultistopGeneratedDocxFile
-from app.services.bol_pdf_template_stamper import stamp_bol_pdf_set
+from app.services.bol_pdf_template_stamper import NO_RECOURSE_CONFIG, stamp_bol_pdf_set
 from app.services.bol_standard_docx_generator import GeneratedDocxFile, StandardDocxGenerationResult
 from app.services.bol_standard_pdf_converter import StandardPdfConversionResult
 from app.ui import bol_generator
@@ -298,6 +298,17 @@ def test_no_recourse_template_stamper_removes_placeholders_and_draws_actual_addr
     assert "C A S E" not in text
     assert "1073839" in text
     assert "306" in text
+
+
+def test_no_recourse_template_stamper_does_not_configure_whiteout_boxes() -> None:
+    boxes = [
+        *NO_RECOURSE_CONFIG.fields.values(),
+        *NO_RECOURSE_CONFIG.item_columns.values(),
+        *NO_RECOURSE_CONFIG.totals.values(),
+    ]
+
+    assert boxes
+    assert all(not box.whiteout for box in boxes)
 
 
 def test_multistop_template_stamper_creates_pdf(tmp_path: Path) -> None:

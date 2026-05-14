@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import Path
+import re
 from tempfile import mkdtemp
 from typing import Any, Callable
 
@@ -36,6 +37,29 @@ from app.utils.bol_facilities import BolFacilityRecord
 STANDARD_PDF_TEMPLATE_PATH = Path("app/templates/standard_pdf_template.pdf")
 NO_RECOURSE_PDF_TEMPLATE_PATH = Path("app/templates/no_recourse_pdf_template.pdf")
 MULTISTOP_PDF_TEMPLATE_PATH = Path("app/templates/multistop_pdf_template.pdf")
+
+PLACEHOLDER_TEXT_PATTERN = re.compile(r"\u00ab[^\u00bb]+\u00bb")
+KNOWN_PLACEHOLDER_TOKENS = frozenset(
+    {
+        "QTY_2",
+        "QTY_3",
+        "QTY_4",
+        "TYPE_2",
+        "TYPE_3",
+        "TYPE_4",
+        "PO_2",
+        "PO_3",
+        "PO_4",
+        "WEIGHT_2",
+        "WEIGHT_3",
+        "WEIGHT_4",
+        "SHIP_TO_CITY_STATE_ZIP",
+        "BILL_TO",
+        "BILL_TO_ADDRESS",
+        "BILL_TO_CITY_STATE_ZIP",
+        "TOTAL_QTY",
+    }
+)
 
 PAGE_WIDTH, PAGE_HEIGHT = letter
 FONT_NAME = "Helvetica"
@@ -165,6 +189,14 @@ def clean_value(value: Any) -> str:
 
 def _safe_text(value: Any) -> str:
     return clean_value(value)
+
+
+def _without_whiteout(box: TextBox) -> TextBox:
+    return replace(box, whiteout=False)
+
+
+def _without_whiteout_map(boxes: dict[str, TextBox]) -> dict[str, TextBox]:
+    return {name: _without_whiteout(box) for name, box in boxes.items()}
 
 
 def _box_for_baseline(
@@ -364,26 +396,30 @@ NO_RECOURSE_CONFIG = replace(
     STANDARD_CONFIG,
     mode="No Recourse",
     template_path=NO_RECOURSE_PDF_TEMPLATE_PATH,
-    fields=_no_recourse_fields(),
-    item_columns={
-        # No Recourse PDF template placeholder map. These boxes intentionally
-        # match the static placeholder regions in no_recourse_pdf_template.pdf.
-        "qty_header": _box_for_baseline(x=35.0, baseline=398.3, width=52.0, height=10.0, font_size=5.8, min_font_size=4.8, align="center"),
-        "qty": TextBox(35.0, 0, 54.0, 0, 7.0, align="center"),
-        "type": TextBox(96.0, 0, 54.0, 0, 7.0, align="center"),
-        "po": TextBox(157.0, 0, 76.0, 0, 6.8, align="center"),
-        "description": TextBox(238.0, 0, 242.0, 0, 6.5, multiline=True, leading=8.4),
-        "skids": TextBox(488.0, 0, 48.0, 0, 7.0, align="center"),
-        "weight": TextBox(542.0, 0, 48.0, 0, 7.0, align="center"),
-    },
+    fields=_without_whiteout_map(_no_recourse_fields()),
+    item_columns=_without_whiteout_map(
+        {
+            # No Recourse removes template placeholder text objects first, then
+            # draws values only. These boxes must not paint over form borders.
+            "qty_header": _box_for_baseline(x=35.0, baseline=398.3, width=52.0, height=10.0, font_size=5.8, min_font_size=4.8, align="center"),
+            "qty": TextBox(35.0, 0, 54.0, 0, 7.0, align="center"),
+            "type": TextBox(96.0, 0, 54.0, 0, 7.0, align="center"),
+            "po": TextBox(157.0, 0, 76.0, 0, 6.8, align="center"),
+            "description": TextBox(238.0, 0, 242.0, 0, 6.5, multiline=True, leading=8.4),
+            "skids": TextBox(488.0, 0, 48.0, 0, 7.0, align="center"),
+            "weight": TextBox(542.0, 0, 48.0, 0, 7.0, align="center"),
+        }
+    ),
     item_row_height=22.0,
     max_item_rows=4,
-    totals={
-        "qty": _box_for_baseline(x=472.0, baseline=195.3, width=76.0, height=12.0, font_size=7.4, bold=True, align="center"),
-        "label": _box_for_baseline(x=_col_x(5) + 2, baseline=207.2, width=_col_width(5, 11) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
-        "skids": _box_for_baseline(x=488.0, baseline=207.2, width=48.0, height=12.0, font_size=7.4, bold=True, align="center"),
-        "weight": _box_for_baseline(x=542.0, baseline=207.2, width=48.0, height=12.0, font_size=7.4, bold=True, align="center"),
-    },
+    totals=_without_whiteout_map(
+        {
+            "qty": _box_for_baseline(x=472.0, baseline=195.3, width=76.0, height=12.0, font_size=7.4, bold=True, align="center"),
+            "label": _box_for_baseline(x=_col_x(5) + 2, baseline=207.2, width=_col_width(5, 11) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
+            "skids": _box_for_baseline(x=488.0, baseline=207.2, width=48.0, height=12.0, font_size=7.4, bold=True, align="center"),
+            "weight": _box_for_baseline(x=542.0, baseline=207.2, width=48.0, height=12.0, font_size=7.4, bold=True, align="center"),
+        }
+    ),
     item_row_baselines=(386.3, 364.6, 332.5, 300.5),
 )
 
@@ -897,9 +933,16 @@ def _strip_placeholder_fragment(value: Any, inside_placeholder: bool) -> tuple[A
     if not isinstance(value, str):
         return value, inside_placeholder
 
-    starts_placeholder = "«" in value
-    ends_placeholder = "»" in value
-    if inside_placeholder or starts_placeholder or ends_placeholder:
+    starts_placeholder = "\u00ab" in value
+    ends_placeholder = "\u00bb" in value
+    contains_known_token = any(token in value for token in KNOWN_PLACEHOLDER_TOKENS)
+    if (
+        inside_placeholder
+        or starts_placeholder
+        or ends_placeholder
+        or PLACEHOLDER_TEXT_PATTERN.search(value)
+        or contains_known_token
+    ):
         return TextStringObject(""), starts_placeholder or (inside_placeholder and not ends_placeholder)
 
     return value, inside_placeholder
