@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from time import perf_counter
 
 import pandas as pd
 import pytest
@@ -246,6 +247,38 @@ def test_parse_standard_bol_excel_prefers_explicit_pallet_quantity_over_qty() ->
     assert len(rows) == 1
     assert rows[0].unit_qty == "10"
     assert rows[0].plt_qty == "3"
+
+
+def test_parse_standard_bol_excel_prefers_pallet_qty_alias_over_generic_qty() -> None:
+    row = _standard_load_row()
+    row.pop("TOTAL PALLETS")
+    row["Pallet Qty"] = 4
+    row["QTY"] = 10
+
+    workbook = _workbook_with_sheet("LOAD SHEET", [row])
+
+    rows = parse_standard_bol_excel(workbook)
+
+    assert len(rows) == 1
+    assert rows[0].unit_qty == "10"
+    assert rows[0].plt_qty == "4"
+
+
+def test_parse_standard_bol_excel_resolves_qty_fallback_with_wide_headers_quickly() -> None:
+    row = _standard_load_row()
+    row.pop("TOTAL PALLETS")
+    row["QTY"] = 10
+    wide_row = {f"Unused Column {index}": "" for index in range(500)}
+    wide_row.update(row)
+    workbook = _workbook_with_sheet("LOAD SHEET", [wide_row])
+
+    started_at = perf_counter()
+    rows = parse_standard_bol_excel(workbook)
+    elapsed = perf_counter() - started_at
+
+    assert len(rows) == 1
+    assert rows[0].plt_qty == "10"
+    assert elapsed < 2.0
 
 
 def test_parse_standard_bol_excel_accepts_total_weight_alias_and_pickup() -> None:

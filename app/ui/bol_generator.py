@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import pandas as pd
@@ -172,7 +173,7 @@ def _clear_review_state(*, delete_files: bool = True) -> None:
     st.session_state["bol_generation_status"] = "Waiting for generation action."
 
 
-def _clear_input_state() -> None:
+def _clear_input_state(*, delete_files: bool = False) -> None:
     st.session_state["bol_uploaded_filename"] = None
     st.session_state["bol_uploaded_doc_filename"] = None
     st.session_state["bol_doc_upload_parse_result"] = None
@@ -182,7 +183,7 @@ def _clear_input_state() -> None:
     st.session_state["bol_grouped_records"] = []
     st.session_state["bol_batch_comment"] = ""
     st.session_state["bol_batch_comment_textarea"] = ""
-    _clear_review_state()
+    _clear_review_state(delete_files=delete_files)
 
 
 def _refresh_bundles() -> StandardBundleResult | None:
@@ -277,6 +278,12 @@ def _prepare_parse_state() -> None:
     st.session_state["bol_parse_requested"] = True
     st.session_state["bol_parse_error"] = None
     _clear_generation_state_references()
+
+
+def _log_parse_timing(step_name: str, started_at: float) -> float:
+    finished_at = perf_counter()
+    print(f"BOL parse UI timing: {step_name}={(finished_at - started_at) * 1000:.1f}ms")
+    return finished_at
 
 
 def _set_selected_facility(facility_label: str | None) -> None:
@@ -654,12 +661,12 @@ def render_bol_generator_view() -> None:
             st.session_state["bol_uploaded_doc_filename"] = None
             _set_selected_facility(None)
             if previous_doc_filename is not None:
-                _clear_input_state()
+                _clear_input_state(delete_files=False)
         else:
             st.session_state["bol_uploaded_doc_filename"] = uploaded_doc_file.name
             st.success(f"Uploaded file: {uploaded_doc_file.name}")
             if previous_doc_filename != uploaded_doc_file.name:
-                _clear_input_state()
+                _clear_input_state(delete_files=False)
                 st.session_state["bol_uploaded_doc_filename"] = uploaded_doc_file.name
     else:
         st.caption("Accepted file types: .xlsx, .xlsm, .xls")
@@ -679,7 +686,7 @@ def render_bol_generator_view() -> None:
             st.session_state["bol_batch_comment"] = ""
             st.session_state["bol_batch_comment_textarea"] = ""
             _set_selected_facility(None)
-            _clear_review_state()
+            _clear_review_state(delete_files=False)
             st.session_state["bol_parse_error"] = None
             st.session_state["bol_parse_requested"] = False
         else:
@@ -693,7 +700,7 @@ def render_bol_generator_view() -> None:
                 st.session_state["bol_batch_comment_textarea"] = ""
                 default_facility_label = BOL_FACILITY_OPTIONS[0] if BOL_FACILITY_OPTIONS else None
                 _set_selected_facility(default_facility_label)
-                _clear_review_state()
+                _clear_review_state(delete_files=False)
                 st.session_state["bol_parse_error"] = None
                 st.session_state["bol_parse_requested"] = False
 
@@ -760,7 +767,9 @@ def render_bol_generator_view() -> None:
     )
     parse_button_label = "Parse Doc" if input_source == "Doc upload" else "Parse Excel"
     if st.button(parse_button_label, disabled=parse_disabled):
+        parse_started_at = perf_counter()
         _prepare_parse_state()
+        last_parse_step_at = _log_parse_timing("state_clear", parse_started_at)
 
         selected_mode = st.session_state["bol_mode"]
         try:
@@ -768,6 +777,7 @@ def render_bol_generator_view() -> None:
                 if selected_mode not in ("Standard", "No Recourse"):
                     raise ValueError("DOCX upload is only supported for Standard and No Recourse BOLs.")
                 doc_parse_result = parse_bol_doc_upload(uploaded_doc_file)
+                last_parse_step_at = _log_parse_timing("doc_parse", last_parse_step_at)
                 grouped_records = doc_parse_result.records
                 parsed_rows = []
                 st.session_state["bol_record_comments"] = {}
@@ -785,16 +795,22 @@ def render_bol_generator_view() -> None:
                     st.session_state["bol_batch_comment"] = grouped_records[0].comments
             elif selected_mode == "Multistop":
                 parsed_rows = parse_multistop_bol_excel(uploaded_file)
+                last_parse_step_at = _log_parse_timing("excel_parse", last_parse_step_at)
                 grouped_records = map_multistop_rows_to_records(parsed_rows)
+                last_parse_step_at = _log_parse_timing("mapping", last_parse_step_at)
             else:
                 parsed_rows = parse_standard_bol_excel(uploaded_file)
+                last_parse_step_at = _log_parse_timing("excel_parse", last_parse_step_at)
                 grouped_records = map_standard_rows_to_records(parsed_rows)
+                last_parse_step_at = _log_parse_timing("mapping", last_parse_step_at)
 
             if not grouped_records:
                 raise ValueError("No grouped BOL records were created from parsed rows.")
             st.session_state["bol_parsed_rows"] = parsed_rows
             st.session_state["bol_grouped_records"] = grouped_records
             _sync_review_state(st.session_state["bol_grouped_records"])
+            last_parse_step_at = _log_parse_timing("review_sync", last_parse_step_at)
+            _log_parse_timing("total", parse_started_at)
         except ValueError as exc:
             st.session_state["bol_parsed_rows"] = []
             st.session_state["bol_grouped_records"] = []
