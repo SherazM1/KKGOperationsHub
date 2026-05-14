@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +38,16 @@ from app.services.bol_standard_pdf_converter import StandardPdfConversionResult
 from app.services.bol_pdf_template_stamper import stamp_bol_pdf_set
 from app.services.bol_standard_parser import parse_standard_bol_excel
 from app.utils.bol_facilities import BOL_FACILITY_LOOKUP, BOL_FACILITY_OPTIONS, BolFacilityRecord
+
+
+BOL_TEMP_OUTPUT_PREFIXES = (
+    "kkg_standard_bol_docx_",
+    "kkg_multistop_bol_docx_",
+    "kkg_bol_template_pdf_",
+    "kkg_standard_bol_pdf_",
+    "kkg_standard_bol_bundles_",
+    "kkg_multistop_bol_bundles_",
+)
 
 
 def _initialize_bol_state() -> None:
@@ -80,6 +92,8 @@ def _initialize_bol_state() -> None:
         st.session_state["bol_bundle_result"] = None
     if "bol_bundle_error" not in st.session_state:
         st.session_state["bol_bundle_error"] = None
+    if "bol_generation_output_dirs" not in st.session_state:
+        st.session_state["bol_generation_output_dirs"] = []
     if "bol_all_files_bundle_requested" not in st.session_state:
         st.session_state["bol_all_files_bundle_requested"] = False
     if "bol_selected_facility_label" not in st.session_state:
@@ -100,15 +114,61 @@ def _initialize_bol_state() -> None:
         st.session_state["bol_multistop_individual_template_mode"] = "Standard"
 
 
-def _clear_review_state() -> None:
-    st.session_state["bol_record_comments"] = {}
-    st.session_state["bol_record_selection"] = {}
+def _is_safe_bol_temp_output_dir(path: Path) -> bool:
+    try:
+        resolved = path.resolve()
+        temp_root = Path(tempfile.gettempdir()).resolve()
+    except OSError:
+        return False
+
+    return (
+        resolved.parent == temp_root
+        and resolved.is_dir()
+        and any(resolved.name.startswith(prefix) for prefix in BOL_TEMP_OUTPUT_PREFIXES)
+    )
+
+
+def _cleanup_generation_output_dirs() -> None:
+    output_dirs = st.session_state.get("bol_generation_output_dirs", [])
+    if not isinstance(output_dirs, list):
+        st.session_state["bol_generation_output_dirs"] = []
+        return
+
+    for output_dir in output_dirs:
+        path = Path(str(output_dir))
+        if _is_safe_bol_temp_output_dir(path):
+            shutil.rmtree(path, ignore_errors=True)
+    st.session_state["bol_generation_output_dirs"] = []
+
+
+def _remember_generation_output_dir(output_dir: str | None) -> None:
+    if not output_dir:
+        return
+    output_dirs = st.session_state.setdefault("bol_generation_output_dirs", [])
+    if not isinstance(output_dirs, list):
+        output_dirs = []
+        st.session_state["bol_generation_output_dirs"] = output_dirs
+
+    resolved = str(Path(output_dir).resolve())
+    if resolved not in output_dirs:
+        output_dirs.append(resolved)
+
+
+def _clear_generated_artifacts(*, delete_files: bool) -> None:
+    if delete_files:
+        _cleanup_generation_output_dirs()
     st.session_state["bol_docx_result"] = None
     st.session_state["bol_pdf_result"] = None
     st.session_state["bol_pdf_source_signature"] = None
     st.session_state["bol_bundle_result"] = None
     st.session_state["bol_bundle_error"] = None
     st.session_state["bol_all_files_bundle_requested"] = False
+
+
+def _clear_review_state(*, delete_files: bool = True) -> None:
+    st.session_state["bol_record_comments"] = {}
+    st.session_state["bol_record_selection"] = {}
+    _clear_generated_artifacts(delete_files=delete_files)
     st.session_state["bol_generation_status"] = "Waiting for generation action."
 
 
@@ -196,6 +256,7 @@ def _refresh_bundles() -> StandardBundleResult | None:
             st.session_state["bol_bundle_error"] = bundle_result.combined_pdf_error
         else:
             st.session_state["bol_bundle_error"] = None
+        _remember_generation_output_dir(bundle_result.output_dir)
         return bundle_result
     except Exception as exc:
         st.session_state["bol_bundle_result"] = None
@@ -203,14 +264,19 @@ def _refresh_bundles() -> StandardBundleResult | None:
         return None
 
 
-def _clear_generation_state() -> None:
-    st.session_state["bol_docx_result"] = None
-    st.session_state["bol_pdf_result"] = None
-    st.session_state["bol_pdf_source_signature"] = None
-    st.session_state["bol_bundle_result"] = None
-    st.session_state["bol_bundle_error"] = None
-    st.session_state["bol_all_files_bundle_requested"] = False
+def _clear_generation_state(*, delete_files: bool = True) -> None:
+    _clear_generated_artifacts(delete_files=delete_files)
     st.session_state["bol_generation_status"] = "Waiting for generation action."
+
+
+def _clear_generation_state_references() -> None:
+    _clear_generation_state(delete_files=False)
+
+
+def _prepare_parse_state() -> None:
+    st.session_state["bol_parse_requested"] = True
+    st.session_state["bol_parse_error"] = None
+    _clear_generation_state_references()
 
 
 def _set_selected_facility(facility_label: str | None) -> None:
@@ -229,11 +295,43 @@ def _resolve_generation_context() -> tuple[str, Path]:
     return mode, template_path
 
 
-def _read_file_bytes(path: str) -> bytes | None:
+def _artifact_exists(path: str | None) -> bool:
+    if not path:
+        return False
     file_path = Path(path)
-    if not file_path.exists():
-        return None
-    return file_path.read_bytes()
+    return file_path.exists() and file_path.is_file()
+
+
+def _download_artifact_button(
+    *,
+    label: str,
+    artifact: Any | None,
+    fallback_file_name: str,
+    mime: str,
+    disabled: bool = False,
+) -> bool:
+    file_path = Path(artifact.file_path) if artifact is not None else None
+    file_exists = file_path is not None and file_path.exists() and file_path.is_file()
+    if disabled or not file_exists:
+        st.download_button(
+            label,
+            data=b"",
+            file_name=artifact.file_name if artifact is not None else fallback_file_name,
+            mime=mime,
+            disabled=True,
+            use_container_width=True,
+        )
+        return False
+
+    with file_path.open("rb") as download_file:
+        st.download_button(
+            label,
+            data=download_file,
+            file_name=artifact.file_name,
+            mime=mime,
+            use_container_width=True,
+        )
+    return True
 
 
 def _docx_result_signature(docx_result: StandardDocxGenerationResult) -> tuple[tuple[Any, ...], ...]:
@@ -520,7 +618,7 @@ def render_bol_generator_view() -> None:
         "Batch name",
         key="bol_batch_name",
         placeholder="Optional name for download bundles.",
-        on_change=_refresh_bundles,
+        on_change=_clear_generation_state,
     )
 
     st.markdown("---")
@@ -662,9 +760,7 @@ def render_bol_generator_view() -> None:
     )
     parse_button_label = "Parse Doc" if input_source == "Doc upload" else "Parse Excel"
     if st.button(parse_button_label, disabled=parse_disabled):
-        st.session_state["bol_parse_requested"] = True
-        st.session_state["bol_parse_error"] = None
-        _clear_generation_state()
+        _prepare_parse_state()
 
         selected_mode = st.session_state["bol_mode"]
         try:
@@ -703,13 +799,13 @@ def render_bol_generator_view() -> None:
             st.session_state["bol_parsed_rows"] = []
             st.session_state["bol_grouped_records"] = []
             st.session_state["bol_doc_upload_parse_result"] = None
-            _clear_review_state()
+            _clear_review_state(delete_files=False)
             st.session_state["bol_parse_error"] = str(exc)
         except Exception as exc:
             st.session_state["bol_parsed_rows"] = []
             st.session_state["bol_grouped_records"] = []
             st.session_state["bol_doc_upload_parse_result"] = None
-            _clear_review_state()
+            _clear_review_state(delete_files=False)
             st.session_state["bol_parse_error"] = f"Unexpected parse error: {exc}"
 
     if parse_disabled:
@@ -868,6 +964,7 @@ def render_bol_generator_view() -> None:
 
     if st.button("Generate DOCX Set", disabled=generate_docx_disabled, use_container_width=True):
         try:
+            _clear_generated_artifacts(delete_files=True)
             mode = st.session_state["bol_mode"]
             if mode == "Multistop":
                 individual_template_mode = st.session_state.get(
@@ -897,9 +994,7 @@ def render_bol_generator_view() -> None:
                     file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
                 )
             st.session_state["bol_docx_result"] = result
-            st.session_state["bol_pdf_result"] = None
-            st.session_state["bol_pdf_source_signature"] = None
-            st.session_state["bol_all_files_bundle_requested"] = False
+            _remember_generation_output_dir(result.output_dir)
             _refresh_bundles()
             if mode == "Multistop":
                 skip_breakdown = _multistop_skip_breakdown(result)
@@ -918,32 +1013,17 @@ def render_bol_generator_view() -> None:
                 )
         except FileNotFoundError as exc:
             mode = st.session_state["bol_mode"]
-            st.session_state["bol_docx_result"] = None
-            st.session_state["bol_pdf_result"] = None
-            st.session_state["bol_pdf_source_signature"] = None
-            st.session_state["bol_bundle_result"] = None
-            st.session_state["bol_bundle_error"] = None
-            st.session_state["bol_all_files_bundle_requested"] = False
+            _clear_generated_artifacts(delete_files=True)
             st.session_state["bol_generation_status"] = (
                 f"{mode} DOCX generation failed: selected template file was not found ({exc})."
             )
         except ValueError as exc:
             mode = st.session_state["bol_mode"]
-            st.session_state["bol_docx_result"] = None
-            st.session_state["bol_pdf_result"] = None
-            st.session_state["bol_pdf_source_signature"] = None
-            st.session_state["bol_bundle_result"] = None
-            st.session_state["bol_bundle_error"] = None
-            st.session_state["bol_all_files_bundle_requested"] = False
+            _clear_generated_artifacts(delete_files=True)
             st.session_state["bol_generation_status"] = f"{mode} DOCX generation failed: {exc}"
         except Exception as exc:
             mode = st.session_state["bol_mode"]
-            st.session_state["bol_docx_result"] = None
-            st.session_state["bol_pdf_result"] = None
-            st.session_state["bol_pdf_source_signature"] = None
-            st.session_state["bol_bundle_result"] = None
-            st.session_state["bol_bundle_error"] = None
-            st.session_state["bol_all_files_bundle_requested"] = False
+            _clear_generated_artifacts(delete_files=True)
             st.session_state["bol_generation_status"] = (
                 f"Unexpected {mode} DOCX generation error: {exc}"
             )
@@ -972,6 +1052,18 @@ def render_bol_generator_view() -> None:
                 )
                 st.toast("Existing PDFs already match the current DOCX set.")
             else:
+                stale_pdf_result = st.session_state.get("bol_pdf_result")
+                stale_bundle_result = st.session_state.get("bol_bundle_result")
+                for stale_result in (stale_pdf_result, stale_bundle_result):
+                    if isinstance(stale_result, (StandardPdfConversionResult, StandardBundleResult)):
+                        path = Path(stale_result.output_dir)
+                        if _is_safe_bol_temp_output_dir(path):
+                            shutil.rmtree(path, ignore_errors=True)
+                st.session_state["bol_pdf_result"] = None
+                st.session_state["bol_pdf_source_signature"] = None
+                st.session_state["bol_bundle_result"] = None
+                st.session_state["bol_bundle_error"] = None
+                st.session_state["bol_all_files_bundle_requested"] = False
                 progress_bar = st.progress(0)
                 progress_status = st.empty()
 
@@ -994,7 +1086,7 @@ def render_bol_generator_view() -> None:
                 )
                 st.session_state["bol_pdf_result"] = pdf_result
                 st.session_state["bol_pdf_source_signature"] = _docx_result_signature(docx_result)
-                st.session_state["bol_all_files_bundle_requested"] = False
+                _remember_generation_output_dir(pdf_result.output_dir)
                 _refresh_bundles()
                 progress_bar.empty()
                 progress_status.empty()
@@ -1021,6 +1113,7 @@ def render_bol_generator_view() -> None:
     generate_all_disabled = (not generate_all_mode_supported) or generate_docx_disabled
     if st.button("Generate All", disabled=generate_all_disabled, use_container_width=True):
         try:
+            _clear_generated_artifacts(delete_files=True)
             mode = st.session_state["bol_mode"]
             if mode == "Multistop":
                 individual_template_mode = st.session_state.get(
@@ -1050,9 +1143,7 @@ def render_bol_generator_view() -> None:
                     file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
                 )
             st.session_state["bol_docx_result"] = docx_result_all
-            st.session_state["bol_pdf_result"] = None
-            st.session_state["bol_pdf_source_signature"] = None
-            st.session_state["bol_all_files_bundle_requested"] = False
+            _remember_generation_output_dir(docx_result_all.output_dir)
 
             progress_bar = st.progress(0)
             progress_status = st.empty()
@@ -1076,6 +1167,7 @@ def render_bol_generator_view() -> None:
             )
             st.session_state["bol_pdf_result"] = pdf_result_all
             st.session_state["bol_pdf_source_signature"] = _docx_result_signature(docx_result_all)
+            _remember_generation_output_dir(pdf_result_all.output_dir)
             _refresh_bundles()
             progress_bar.empty()
             progress_status.empty()
@@ -1094,6 +1186,7 @@ def render_bol_generator_view() -> None:
                 )
         except Exception as exc:
             mode = st.session_state["bol_mode"]
+            _clear_generated_artifacts(delete_files=True)
             st.session_state["bol_generation_status"] = f"{mode} Generate All failed: {exc}"
 
     if pdf_generation_mode_supported:
@@ -1103,36 +1196,39 @@ def render_bol_generator_view() -> None:
 
     st.subheader("Download")
     bundle_result = st.session_state["bol_bundle_result"]
-    docx_bundle_bytes = None
-    pdf_bundle_bytes = None
-    combined_pdf_bytes = None
-    all_bundle_bytes = None
-
-    if isinstance(bundle_result, StandardBundleResult):
-        if bundle_result.docx_bundle:
-            docx_bundle_bytes = _read_file_bytes(bundle_result.docx_bundle.file_path)
-        if bundle_result.pdf_bundle:
-            pdf_bundle_bytes = _read_file_bytes(bundle_result.pdf_bundle.file_path)
-        if bundle_result.combined_pdf:
-            combined_pdf_bytes = _read_file_bytes(bundle_result.combined_pdf.file_path)
-        if bundle_result.all_files_bundle:
-            all_bundle_bytes = _read_file_bytes(bundle_result.all_files_bundle.file_path)
+    docx_bundle_ready = False
+    pdf_bundle_ready = False
+    combined_pdf_ready = False
+    all_bundle_ready = False
 
     bundle_read_errors: list[str] = []
     if isinstance(bundle_result, StandardBundleResult):
-        if bundle_result.docx_bundle and docx_bundle_bytes is None:
+        docx_bundle_ready = _artifact_exists(
+            bundle_result.docx_bundle.file_path if bundle_result.docx_bundle else None
+        )
+        pdf_bundle_ready = _artifact_exists(
+            bundle_result.pdf_bundle.file_path if bundle_result.pdf_bundle else None
+        )
+        combined_pdf_ready = _artifact_exists(
+            bundle_result.combined_pdf.file_path if bundle_result.combined_pdf else None
+        )
+        all_bundle_ready = _artifact_exists(
+            bundle_result.all_files_bundle.file_path if bundle_result.all_files_bundle else None
+        )
+
+        if bundle_result.docx_bundle and not docx_bundle_ready:
             bundle_read_errors.append(
                 f"DOCX bundle file is missing on disk: {bundle_result.docx_bundle.file_path}"
             )
-        if bundle_result.pdf_bundle and pdf_bundle_bytes is None:
+        if bundle_result.pdf_bundle and not pdf_bundle_ready:
             bundle_read_errors.append(
                 f"PDF bundle file is missing on disk: {bundle_result.pdf_bundle.file_path}"
             )
-        if bundle_result.combined_pdf and combined_pdf_bytes is None:
+        if bundle_result.combined_pdf and not combined_pdf_ready:
             bundle_read_errors.append(
                 f"Combined PDF file is missing on disk: {bundle_result.combined_pdf.file_path}"
             )
-        if bundle_result.all_files_bundle and all_bundle_bytes is None:
+        if bundle_result.all_files_bundle and not all_bundle_ready:
             bundle_read_errors.append(
                 f"Combined bundle file is missing on disk: {bundle_result.all_files_bundle.file_path}"
             )
@@ -1159,64 +1255,67 @@ def render_bol_generator_view() -> None:
         ):
             st.session_state["bol_all_files_bundle_requested"] = True
             bundle_result = _refresh_bundles()
-            all_bundle_bytes = None
             if isinstance(bundle_result, StandardBundleResult):
-                if bundle_result.docx_bundle:
-                    docx_bundle_bytes = _read_file_bytes(bundle_result.docx_bundle.file_path)
-                if bundle_result.pdf_bundle:
-                    pdf_bundle_bytes = _read_file_bytes(bundle_result.pdf_bundle.file_path)
-                if bundle_result.combined_pdf:
-                    combined_pdf_bytes = _read_file_bytes(bundle_result.combined_pdf.file_path)
-                if bundle_result.all_files_bundle:
-                    all_bundle_bytes = _read_file_bytes(bundle_result.all_files_bundle.file_path)
+                docx_bundle_ready = _artifact_exists(
+                    bundle_result.docx_bundle.file_path if bundle_result.docx_bundle else None
+                )
+                pdf_bundle_ready = _artifact_exists(
+                    bundle_result.pdf_bundle.file_path if bundle_result.pdf_bundle else None
+                )
+                combined_pdf_ready = _artifact_exists(
+                    bundle_result.combined_pdf.file_path if bundle_result.combined_pdf else None
+                )
+                all_bundle_ready = _artifact_exists(
+                    bundle_result.all_files_bundle.file_path if bundle_result.all_files_bundle else None
+                )
 
-    st.download_button(
-        "Download DOCX Bundle",
-        data=docx_bundle_bytes or b"",
-        file_name=(
-            bundle_result.docx_bundle.file_name
-            if isinstance(bundle_result, StandardBundleResult) and bundle_result.docx_bundle
-            else f"{st.session_state['bol_mode'].lower().replace(' ', '_')}_bol_docx_bundle.zip"
-        ),
-        mime="application/zip",
-        disabled=docx_bundle_bytes is None,
-        use_container_width=True,
+    mode_prefix = st.session_state["bol_mode"].lower().replace(" ", "_")
+    docx_artifact = (
+        bundle_result.docx_bundle
+        if isinstance(bundle_result, StandardBundleResult)
+        else None
     )
-    st.download_button(
-        "Download PDF Bundle",
-        data=pdf_bundle_bytes or b"",
-        file_name=(
-            bundle_result.pdf_bundle.file_name
-            if isinstance(bundle_result, StandardBundleResult) and bundle_result.pdf_bundle
-            else f"{st.session_state['bol_mode'].lower().replace(' ', '_')}_bol_pdf_bundle.zip"
-        ),
-        mime="application/zip",
-        disabled=pdf_bundle_bytes is None,
-        use_container_width=True,
+    pdf_artifact = (
+        bundle_result.pdf_bundle
+        if isinstance(bundle_result, StandardBundleResult)
+        else None
     )
-    if combined_pdf_bytes is not None:
-        st.download_button(
-            "Download Combined PDF",
-            data=combined_pdf_bytes,
-            file_name=(
-                bundle_result.combined_pdf.file_name
-                if isinstance(bundle_result, StandardBundleResult) and bundle_result.combined_pdf
-                else f"{st.session_state['bol_mode'].lower().replace(' ', '_')}_bol_combined.pdf"
-            ),
+    combined_pdf_artifact = (
+        bundle_result.combined_pdf
+        if isinstance(bundle_result, StandardBundleResult)
+        else None
+    )
+    all_files_artifact = (
+        bundle_result.all_files_bundle
+        if isinstance(bundle_result, StandardBundleResult)
+        else None
+    )
+
+    docx_bundle_ready = _download_artifact_button(
+        label="Download DOCX Bundle",
+        artifact=docx_artifact,
+        fallback_file_name=f"{mode_prefix}_bol_docx_bundle.zip",
+        mime="application/zip",
+    )
+    pdf_bundle_ready = _download_artifact_button(
+        label="Download PDF Bundle",
+        artifact=pdf_artifact,
+        fallback_file_name=f"{mode_prefix}_bol_pdf_bundle.zip",
+        mime="application/zip",
+    )
+    combined_pdf_ready = False
+    if combined_pdf_artifact is not None:
+        combined_pdf_ready = _download_artifact_button(
+            label="Download Combined PDF",
+            artifact=combined_pdf_artifact,
+            fallback_file_name=f"{mode_prefix}_bol_combined.pdf",
             mime="application/pdf",
-            use_container_width=True,
         )
-    st.download_button(
-        "Download All Files",
-        data=all_bundle_bytes or b"",
-        file_name=(
-            bundle_result.all_files_bundle.file_name
-            if isinstance(bundle_result, StandardBundleResult) and bundle_result.all_files_bundle
-            else f"{st.session_state['bol_mode'].lower().replace(' ', '_')}_bol_all_files_bundle.zip"
-        ),
+    all_bundle_ready = _download_artifact_button(
+        label="Download All Files",
+        artifact=all_files_artifact,
+        fallback_file_name=f"{mode_prefix}_bol_all_files_bundle.zip",
         mime="application/zip",
-        disabled=all_bundle_bytes is None,
-        use_container_width=True,
     )
 
     st.markdown("---")
@@ -1301,10 +1400,10 @@ def render_bol_generator_view() -> None:
         if isinstance(bundle_result, StandardBundleResult):
             st.write(
                 {
-                    "docx_bundle_ready": bundle_result.docx_bundle is not None and docx_bundle_bytes is not None,
-                    "pdf_bundle_ready": bundle_result.pdf_bundle is not None and pdf_bundle_bytes is not None,
-                    "combined_pdf_ready": bundle_result.combined_pdf is not None and combined_pdf_bytes is not None,
-                    "combined_bundle_ready": bundle_result.all_files_bundle is not None and all_bundle_bytes is not None,
+                    "docx_bundle_ready": bundle_result.docx_bundle is not None and docx_bundle_ready,
+                    "pdf_bundle_ready": bundle_result.pdf_bundle is not None and pdf_bundle_ready,
+                    "combined_pdf_ready": bundle_result.combined_pdf is not None and combined_pdf_ready,
+                    "combined_bundle_ready": bundle_result.all_files_bundle is not None and all_bundle_ready,
                 }
             )
 

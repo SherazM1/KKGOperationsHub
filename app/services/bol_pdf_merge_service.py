@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Sequence
 
-from pypdf import PdfReader, PdfWriter
+from pypdf import PdfWriter
 
 from app.services.bol_standard_pdf_converter import ConvertedPdfFile
 
@@ -24,9 +24,7 @@ def merge_pdf_files(
     writer = PdfWriter()
 
     for pdf_path in existing_pdf_paths:
-        reader = PdfReader(str(pdf_path))
-        for page in reader.pages:
-            writer.add_page(page)
+        writer.append(pdf_path, import_outline=False)
 
     with output_path.open("wb") as output_file:
         writer.write(output_file)

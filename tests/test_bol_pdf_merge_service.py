@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import fields, is_dataclass
 from pathlib import Path
+from tempfile import mkdtemp
 
 from pypdf import PdfReader
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
+from app.ui import bol_generator
 from app.services.bol_file_bundle_service import create_multistop_bundles, create_standard_bundles
 from app.services.bol_multistop_docx_generator import MultistopGeneratedDocxFile
 from app.services.bol_pdf_merge_service import merge_pdf_files
@@ -79,6 +82,7 @@ def test_standard_bundle_exposes_combined_pdf_and_preserves_pdf_zip(tmp_path: Pa
     assert bundle.combined_pdf is not None
     assert bundle.combined_pdf.file_name == "May_14_Batch_no_recourse_bol_combined.pdf"
     assert Path(bundle.combined_pdf.file_path).exists()
+    assert not any(field.name in {"data", "bytes", "content"} for field in fields(bundle.combined_pdf))
     assert len(PdfReader(bundle.combined_pdf.file_path).pages) == 2
     assert _pdf_text(Path(bundle.combined_pdf.file_path)).index("BOL ONE") < _pdf_text(
         Path(bundle.combined_pdf.file_path)
@@ -129,3 +133,65 @@ def test_multistop_bundle_uses_same_combined_pdf_merge_behavior(tmp_path: Path) 
     assert bundle.combined_pdf.file_name == "Multi_Batch_multistop_bol_combined.pdf"
     text = _pdf_text(Path(bundle.combined_pdf.file_path))
     assert text.index("MULTI ONE") < text.index("MULTI TWO")
+
+
+def test_bundle_artifacts_store_paths_not_payload_bytes(tmp_path: Path) -> None:
+    docx_path = tmp_path / "standard_bol_1.docx"
+    pdf_path = tmp_path / "standard_bol_1.pdf"
+    docx_path.write_bytes(b"docx")
+    _write_pdf(pdf_path, ["BOL ONE"])
+
+    bundle = create_standard_bundles(
+        generated_docx_files=[
+            GeneratedDocxFile(
+                bol_number="BOL-1",
+                file_name=docx_path.name,
+                file_path=str(docx_path),
+            )
+        ],
+        converted_pdf_files=[_converted(pdf_path, "BOL-1")],
+        output_dir=tmp_path / "bundles",
+    )
+
+    for artifact in (
+        bundle.docx_bundle,
+        bundle.pdf_bundle,
+        bundle.all_files_bundle,
+        bundle.combined_pdf,
+    ):
+        assert artifact is not None
+        assert is_dataclass(artifact)
+        assert isinstance(artifact.file_path, str)
+        assert Path(artifact.file_path).exists()
+        assert not any(isinstance(getattr(artifact, field.name), bytes) for field in fields(artifact))
+
+
+def test_clear_generated_artifacts_removes_only_recorded_bol_temp_dirs(tmp_path: Path) -> None:
+    safe_temp_dir = Path(mkdtemp(prefix="kkg_standard_bol_bundles_"))
+    safe_file = safe_temp_dir / "bundle.zip"
+    safe_file.write_bytes(b"zip")
+    unrelated_dir = tmp_path / "user_uploads"
+    unrelated_dir.mkdir()
+    unrelated_file = unrelated_dir / "source.xlsx"
+    unrelated_file.write_bytes(b"input")
+
+    bol_generator.st.session_state["bol_generation_output_dirs"] = [
+        str(safe_temp_dir),
+        str(unrelated_dir),
+    ]
+    bol_generator.st.session_state["bol_docx_result"] = object()
+    bol_generator.st.session_state["bol_pdf_result"] = object()
+    bol_generator.st.session_state["bol_bundle_result"] = object()
+    bol_generator.st.session_state["bol_bundle_error"] = "stale"
+    bol_generator.st.session_state["bol_all_files_bundle_requested"] = True
+
+    bol_generator._clear_generated_artifacts(delete_files=True)
+
+    assert not safe_temp_dir.exists()
+    assert unrelated_file.exists()
+    assert bol_generator.st.session_state["bol_generation_output_dirs"] == []
+    assert bol_generator.st.session_state["bol_docx_result"] is None
+    assert bol_generator.st.session_state["bol_pdf_result"] is None
+    assert bol_generator.st.session_state["bol_bundle_result"] is None
+    assert bol_generator.st.session_state["bol_bundle_error"] is None
+    assert bol_generator.st.session_state["bol_all_files_bundle_requested"] is False
