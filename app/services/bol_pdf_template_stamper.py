@@ -380,13 +380,14 @@ def _no_recourse_fields() -> dict[str, TextBox]:
         "consignee_city_state_zip": _box_for_baseline(x=112.5, baseline=554.4, width=220.0, font_size=8.7, min_font_size=6.5),
         "bill_to": TextBox(
             x=398.0,
-            y=501.0,
+            y=499.0,
             width=176.0,
-            height=42.0,
-            font_size=9.0,
-            min_font_size=7.2,
+            height=45.0,
+            font_size=9.3,
+            min_font_size=7.4,
             multiline=True,
-            leading=11.4,
+            leading=11.8,
+            vertical_align="middle",
         ),
         "dc_number": _box_for_baseline(x=48.0, baseline=510.3, width=95.0, font_size=8.5, min_font_size=6.5),
     }
@@ -427,9 +428,9 @@ NO_RECOURSE_CONFIG = replace(
             # No Recourse removes template placeholder text objects first, then
             # draws values only. These boxes must not paint over form borders.
             "qty_header": _box_for_baseline(x=35.0, baseline=398.3, width=60.0, height=10.0, font_size=7.8, min_font_size=6.2, align="center"),
-            "qty": TextBox(35.0, 0, 54.0, 0, 8.8, min_font_size=6.5, align="center"),
+            "qty": TextBox(37.0, 0, 50.0, 0, 8.8, min_font_size=6.5, align="center"),
             "type": TextBox(96.0, 0, 54.0, 0, 8.8, min_font_size=6.5, align="center"),
-            "po": TextBox(157.0, 0, 76.0, 0, 8.0, min_font_size=6.5, align="center"),
+            "po": TextBox(159.0, 0, 72.0, 0, 8.0, min_font_size=6.5, align="center"),
             "description": TextBox(
                 238.0,
                 0,
@@ -438,10 +439,10 @@ NO_RECOURSE_CONFIG = replace(
                 8.0,
                 min_font_size=6.6,
                 multiline=True,
-                leading=9.6,
+                leading=10.0,
                 vertical_align="middle",
             ),
-            "skids": TextBox(488.0, 0, 48.0, 0, 8.8, min_font_size=6.5, align="center"),
+            "skids": TextBox(490.0, 0, 44.0, 0, 8.8, min_font_size=6.5, align="center"),
             "weight": TextBox(542.0, 0, 48.0, 0, 8.8, min_font_size=6.5, align="center"),
         }
     ),
@@ -449,9 +450,9 @@ NO_RECOURSE_CONFIG = replace(
     max_item_rows=4,
     totals=_without_whiteout_map(
         {
-            "qty": _box_for_baseline(x=472.0, baseline=207.2, width=76.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
+            "qty": _box_for_baseline(x=474.0, baseline=207.2, width=72.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
             "label": _box_for_baseline(x=_col_x(5) + 2, baseline=207.2, width=_col_width(5, 11) - 4, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
-            "skids": _box_for_baseline(x=488.0, baseline=207.2, width=48.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
+            "skids": _box_for_baseline(x=490.0, baseline=207.2, width=44.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
             "weight": _box_for_baseline(x=542.0, baseline=207.2, width=48.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
         }
     ),
@@ -671,6 +672,15 @@ def _no_recourse_record_values(
 ) -> dict[str, str]:
     values = _standard_record_values(record, selected_facility, batch_comment)
     no_recourse_comment = _safe_text(record.comments)
+    no_recourse_bill_to = "\n".join(
+        part
+        for part in (
+            record.bill_to.company,
+            record.bill_to.street,
+            record.bill_to.city_state_zip,
+        )
+        if _safe_text(part)
+    )
     values.update(
         {
             "comments": no_recourse_comment,
@@ -681,6 +691,7 @@ def _no_recourse_record_values(
             "ship_from_company": "Kendal King C/O Shorr",
             "ship_from_street": "975 W Oakdale Road",
             "ship_from_city_state_zip": "Grand Prairie, TX 75050",
+            "bill_to": no_recourse_bill_to,
         }
     )
     return values

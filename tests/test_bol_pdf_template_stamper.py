@@ -295,6 +295,7 @@ def test_no_recourse_template_stamper_removes_placeholders_and_draws_actual_addr
     assert "Trident Transport, LLC" in text
     assert "505 Riverfront Pkwy" in text
     assert "Chattanooga, TN 37402" in text
+    assert text.count("Attn:") == 1
     assert "Kendal King C/O Shorr" in text
     assert "975 W Oakdale Road" in text
     assert "Grand Prairie, TX 75050" in text
