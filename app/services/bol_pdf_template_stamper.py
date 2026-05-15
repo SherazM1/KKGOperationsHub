@@ -432,14 +432,14 @@ NO_RECOURSE_CONFIG = replace(
             "type": TextBox(96.0, 0, 54.0, 0, 8.8, min_font_size=6.5, align="center"),
             "po": TextBox(159.0, 0, 72.0, 0, 8.0, min_font_size=6.5, align="center"),
             "description": TextBox(
-                238.0,
-                0,
                 242.0,
+                0,
+                234.0,
                 0,
                 8.0,
                 min_font_size=6.6,
                 multiline=True,
-                leading=10.0,
+                leading=10.4,
                 vertical_align="middle",
             ),
             "skids": TextBox(490.0, 0, 44.0, 0, 8.8, min_font_size=6.5, align="center"),
@@ -450,7 +450,7 @@ NO_RECOURSE_CONFIG = replace(
     max_item_rows=4,
     totals=_without_whiteout_map(
         {
-            "qty": _box_for_baseline(x=474.0, baseline=207.2, width=72.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
+            "qty": _box_for_baseline(x=37.0, baseline=207.2, width=50.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
             "label": _box_for_baseline(x=_col_x(5) + 2, baseline=207.2, width=_col_width(5, 11) - 4, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
             "skids": _box_for_baseline(x=490.0, baseline=207.2, width=44.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
             "weight": _box_for_baseline(x=542.0, baseline=207.2, width=48.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
