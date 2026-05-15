@@ -160,6 +160,7 @@ class TextBox:
     multiline: bool = False
     leading: float | None = None
     whiteout: bool = True
+    vertical_align: str = "top"
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,13 +380,13 @@ def _no_recourse_fields() -> dict[str, TextBox]:
         "consignee_city_state_zip": _box_for_baseline(x=112.5, baseline=554.4, width=220.0, font_size=8.7, min_font_size=6.5),
         "bill_to": TextBox(
             x=398.0,
-            y=502.0,
+            y=501.0,
             width=176.0,
-            height=40.0,
-            font_size=8.4,
-            min_font_size=6.5,
+            height=42.0,
+            font_size=9.0,
+            min_font_size=7.2,
             multiline=True,
-            leading=11.0,
+            leading=11.4,
         ),
         "dc_number": _box_for_baseline(x=48.0, baseline=510.3, width=95.0, font_size=8.5, min_font_size=6.5),
     }
@@ -429,7 +430,17 @@ NO_RECOURSE_CONFIG = replace(
             "qty": TextBox(35.0, 0, 54.0, 0, 8.8, min_font_size=6.5, align="center"),
             "type": TextBox(96.0, 0, 54.0, 0, 8.8, min_font_size=6.5, align="center"),
             "po": TextBox(157.0, 0, 76.0, 0, 8.0, min_font_size=6.5, align="center"),
-            "description": TextBox(238.0, 0, 242.0, 0, 7.6, min_font_size=6.5, multiline=True, leading=9.2),
+            "description": TextBox(
+                238.0,
+                0,
+                242.0,
+                0,
+                8.0,
+                min_font_size=6.6,
+                multiline=True,
+                leading=9.6,
+                vertical_align="middle",
+            ),
             "skids": TextBox(488.0, 0, 48.0, 0, 8.8, min_font_size=6.5, align="center"),
             "weight": TextBox(542.0, 0, 48.0, 0, 8.8, min_font_size=6.5, align="center"),
         }
@@ -438,7 +449,7 @@ NO_RECOURSE_CONFIG = replace(
     max_item_rows=4,
     totals=_without_whiteout_map(
         {
-            "qty": _box_for_baseline(x=472.0, baseline=195.3, width=76.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
+            "qty": _box_for_baseline(x=472.0, baseline=207.2, width=76.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
             "label": _box_for_baseline(x=_col_x(5) + 2, baseline=207.2, width=_col_width(5, 11) - 4, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
             "skids": _box_for_baseline(x=488.0, baseline=207.2, width=48.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
             "weight": _box_for_baseline(x=542.0, baseline=207.2, width=48.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
@@ -575,9 +586,14 @@ def draw_multiline_text(canv: canvas.Canvas, box: TextBox, value: Any) -> None:
             break
         font_size -= 0.25
 
-    canv.setFont(font_name, max(font_size, box.min_font_size))
-    leading = box.leading or max(font_size, box.min_font_size) + 1.2
-    y = box.y + box.height - max(font_size, box.min_font_size)
+    final_font_size = max(font_size, box.min_font_size)
+    canv.setFont(font_name, final_font_size)
+    leading = box.leading or final_font_size + 1.2
+    text_height = len(lines) * leading
+    if box.vertical_align == "middle":
+        y = box.y + box.height - max((box.height - text_height) / 2, 0) - final_font_size
+    else:
+        y = box.y + box.height - final_font_size
     for line in lines:
         if y < box.y:
             break
@@ -599,7 +615,7 @@ def _draw_box_value(canv: canvas.Canvas, box: TextBox, value: Any) -> None:
 
 def _box_at_row_baseline(base_box: TextBox, baseline: float, height: float) -> TextBox:
     if base_box.multiline:
-        y = baseline - height + base_box.font_size
+        y = baseline - height + base_box.font_size - 1.0
     else:
         y = baseline - max((height - base_box.font_size) / 2, 0) - 1.2
     return replace(base_box, y=y, height=height)
