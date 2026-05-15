@@ -72,6 +72,7 @@ KNOWN_PLACEHOLDER_TOKENS = frozenset(
         "TOTALS",
         "Pallet Qty",
         "Case Qty",
+        "QTY",
         "Pallet",
         "Case",
         "Qty",
@@ -326,7 +327,7 @@ def _standard_fields() -> dict[str, TextBox]:
         "po_number": _top_value_box(694.9),
         "ship_from_company": _box_for_baseline(x=112.5, baseline=666.1, width=220.0, font_size=8.8, min_font_size=6.5),
         "ship_from_street": _box_for_baseline(x=112.5, baseline=629.7, width=220.0, font_size=8.8, min_font_size=6.5),
-        "ship_from_city_state_zip": _box_for_baseline(x=112.5, baseline=616.2, width=220.0, font_size=8.8, min_font_size=6.5),
+        "ship_from_city_state_zip": _box_for_baseline(x=112.5, baseline=615.2, width=220.0, font_size=8.8, min_font_size=6.5),
         "consignee_company": _box_for_baseline(x=112.5, baseline=539.4, width=210.0, font_size=8.8, min_font_size=6.5),
         "consignee_street": _box_for_baseline(x=112.5, baseline=504.3, width=210.0, font_size=8.8, min_font_size=6.5),
         "consignee_city_state_zip": _box_for_baseline(x=112.5, baseline=487.8, width=220.0, font_size=8.8, min_font_size=6.5),
@@ -335,10 +336,10 @@ def _standard_fields() -> dict[str, TextBox]:
             y=425.0,
             width=200.0,
             height=49.0,
-            font_size=8.8,
+            font_size=9.0,
             min_font_size=6.5,
             multiline=True,
-            leading=11.0,
+            leading=11.3,
             vertical_align="middle",
         ),
         "tracker_number": _top_value_box(681.0),
@@ -357,7 +358,7 @@ def _standard_fields() -> dict[str, TextBox]:
         ),
         "seal_number": _top_value_box(573.6),
         "appointment_number": _box_for_baseline(x=112.5, baseline=454.1, width=210.0, font_size=8.5, min_font_size=6.5),
-        "dc_number": _box_for_baseline(x=112.5, baseline=440.0, width=210.0, font_size=8.5, min_font_size=6.5),
+        "dc_number": _box_for_baseline(x=112.5, baseline=442.0, width=210.0, font_size=8.5, min_font_size=6.5),
     }
 
 
@@ -411,8 +412,8 @@ STANDARD_CONFIG = PdfTemplateConfig(
             "qty_header": _box_for_baseline(x=31.0, baseline=278.2, width=56.0, height=10.0, font_size=7.4, min_font_size=6.0, align="center"),
             "qty": TextBox(37.0, 0, 50.0, 0, 9.2, min_font_size=6.8, align="center"),
             "type": _item_box(1, 3, font_size=7.0, align="center"),
-            "po": TextBox(145.0, 0, 72.0, 0, 8.4, min_font_size=6.8, align="center"),
-            "description": TextBox(238.0, 0, 236.0, 0, 8.4, min_font_size=6.8, multiline=True, leading=10.4, vertical_align="middle"),
+            "po": TextBox(144.0, 0, 68.0, 0, 8.4, min_font_size=6.8, align="center"),
+            "description": TextBox(238.0, 0, 236.0, 0, 8.6, min_font_size=7.0, multiline=True, leading=10.6, vertical_align="middle"),
             "skids": TextBox(490.0, 0, 44.0, 0, 9.2, min_font_size=6.8, align="center"),
             "weight": TextBox(542.0, 0, 48.0, 0, 9.2, min_font_size=6.8, align="center"),
         }
@@ -422,10 +423,10 @@ STANDARD_CONFIG = PdfTemplateConfig(
     max_item_rows=8,
     totals=_without_whiteout_map(
         {
-            "qty": _box_for_baseline(x=37.0, baseline=69.9, width=50.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
-            "label": _box_for_baseline(x=_col_x(5) + 2, baseline=69.9, width=_col_width(5, 11) - 4, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
-            "skids": _box_for_baseline(x=490.0, baseline=69.9, width=44.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
-            "weight": _box_for_baseline(x=542.0, baseline=69.9, width=48.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
+            "qty": _box_for_baseline(x=37.0, baseline=69.9, width=50.0, height=12.0, font_size=8.9, min_font_size=6.5, bold=True, align="center"),
+            "label": _box_for_baseline(x=_col_x(5) + 2, baseline=69.9, width=_col_width(5, 11) - 4, height=12.0, font_size=8.9, min_font_size=6.5, bold=True, align="center"),
+            "skids": _box_for_baseline(x=490.0, baseline=69.9, width=44.0, height=12.0, font_size=8.9, min_font_size=6.5, bold=True, align="center"),
+            "weight": _box_for_baseline(x=542.0, baseline=69.9, width=48.0, height=12.0, font_size=8.9, min_font_size=6.5, bold=True, align="center"),
         }
     ),
     item_row_baselines=(264.1, 238.2, 212.3, 186.4, 160.5, 134.6, 108.7, 82.8),
@@ -952,11 +953,11 @@ def _draw_standard_overlay(
                     canv,
                     box,
                     line,
-                    description_size=8.8,
-                    detail_size=7.8,
-                    min_description_size=6.8,
-                    min_detail_size=6.4,
-                    leading=10.0,
+                    description_size=9.0,
+                    detail_size=8.0,
+                    min_description_size=7.0,
+                    min_detail_size=6.6,
+                    leading=10.6,
                 )
                 continue
             _draw_box_value(canv, box, value)
