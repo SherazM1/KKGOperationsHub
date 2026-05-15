@@ -358,7 +358,7 @@ def _standard_fields() -> dict[str, TextBox]:
         ),
         "seal_number": _top_value_box(573.6),
         "appointment_number": _box_for_baseline(x=112.5, baseline=454.1, width=210.0, font_size=8.5, min_font_size=6.5),
-        "dc_number": _box_for_baseline(x=112.5, baseline=440.5, width=210.0, font_size=8.5, min_font_size=6.5),
+        "dc_number": _box_for_baseline(x=112.5, baseline=445.0, width=210.0, font_size=8.5, min_font_size=6.5),
     }
 
 
