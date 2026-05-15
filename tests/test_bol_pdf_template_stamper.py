@@ -211,6 +211,10 @@ def test_standard_template_stamper_creates_pdf_and_bundle(tmp_path: Path) -> Non
     assert "Item #: ITEM1" in text
     assert "UPC #: 000111222333" in text
     assert text.count("TOTALS") == 1
+    assert BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]]["facility_name"] in text
+    assert "505 Riverfront Pkwy" in text
+    assert "Dallas, TX 75001" in text
+    assert text.count("Attn:") == 1
 
     bundle = create_standard_bundles(
         generated_docx_files=[docx_file],

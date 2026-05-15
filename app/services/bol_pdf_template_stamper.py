@@ -318,19 +318,29 @@ def _item_box(col_start: int, col_end: int, *, font_size: float = 6.5, align: st
 
 
 def _standard_fields() -> dict[str, TextBox]:
-    fields = {
+    return {
         "bol_number": _top_value_box(749.4),
         "ship_date": _top_value_box(735.9),
         "carrier": _top_value_box(722.4, width=150.0),
         "carrier_pro_number": _top_value_box(709.3),
         "po_number": _top_value_box(694.9),
-        "ship_from_company": _left_value_box(7),
-        "ship_from_street": _left_value_box(9),
-        "ship_from_city_state_zip": _left_value_box(10),
-        "consignee_company": _left_value_box(14),
-        "consignee_street": _left_value_box(16),
-        "consignee_city_state_zip": _left_value_box(17),
-        "bill_to": _wide_value_box(8, 18, 18, 22),
+        "ship_from_company": _box_for_baseline(x=112.5, baseline=666.1, width=220.0, font_size=8.8, min_font_size=6.5),
+        "ship_from_street": _box_for_baseline(x=112.5, baseline=629.7, width=220.0, font_size=8.8, min_font_size=6.5),
+        "ship_from_city_state_zip": _box_for_baseline(x=112.5, baseline=616.2, width=220.0, font_size=8.8, min_font_size=6.5),
+        "consignee_company": _box_for_baseline(x=112.5, baseline=539.4, width=210.0, font_size=8.8, min_font_size=6.5),
+        "consignee_street": _box_for_baseline(x=112.5, baseline=504.3, width=210.0, font_size=8.8, min_font_size=6.5),
+        "consignee_city_state_zip": _box_for_baseline(x=112.5, baseline=487.8, width=220.0, font_size=8.8, min_font_size=6.5),
+        "bill_to": TextBox(
+            x=365.6,
+            y=425.0,
+            width=200.0,
+            height=49.0,
+            font_size=8.8,
+            min_font_size=6.5,
+            multiline=True,
+            leading=11.0,
+            vertical_align="middle",
+        ),
         "tracker_number": _top_value_box(681.0),
         "kk_po_number": _top_value_box(666.1),
         "kk_load_number": _top_value_box(653.2, width=150.0),
@@ -346,10 +356,9 @@ def _standard_fields() -> dict[str, TextBox]:
             multiline=True,
         ),
         "seal_number": _top_value_box(573.6),
-        "appointment_number": _left_value_box(18),
-        "dc_number": _left_value_box(19),
+        "appointment_number": _box_for_baseline(x=112.5, baseline=454.1, width=210.0, font_size=8.5, min_font_size=6.5),
+        "dc_number": _box_for_baseline(x=112.5, baseline=437.6, width=210.0, font_size=8.5, min_font_size=6.5),
     }
-    return fields
 
 
 def _no_recourse_fields() -> dict[str, TextBox]:
@@ -399,13 +408,13 @@ STANDARD_CONFIG = PdfTemplateConfig(
     fields=_without_whiteout_map(_standard_fields()),
     item_columns=_without_whiteout_map(
         {
-            "qty_header": _box_for_baseline(x=29.0, baseline=278.2, width=60.0, height=10.0, font_size=5.8, min_font_size=4.8, align="center"),
-            "qty": _item_box(0, 1, font_size=7.0, align="center"),
+            "qty_header": _box_for_baseline(x=29.0, baseline=278.2, width=60.0, height=10.0, font_size=7.4, min_font_size=6.0, align="center"),
+            "qty": _item_box(0, 1, font_size=9.0, align="center"),
             "type": _item_box(1, 3, font_size=7.0, align="center"),
-            "po": _item_box(3, 5, font_size=6.8, align="center"),
-            "description": _item_box(5, 11, font_size=6.5),
-            "skids": _item_box(11, 14, font_size=7.0, align="center"),
-            "weight": _item_box(14, 19, font_size=7.0, align="center"),
+            "po": _item_box(3, 5, font_size=8.2, align="center"),
+            "description": replace(_item_box(5, 11, font_size=8.2), multiline=True, min_font_size=6.8, leading=10.2, vertical_align="middle"),
+            "skids": _item_box(11, 14, font_size=9.0, align="center"),
+            "weight": _item_box(14, 19, font_size=9.0, align="center"),
         }
     ),
     item_start_y=0,
@@ -701,6 +710,32 @@ def _no_recourse_record_values(
     return values
 
 
+def _standard_pdf_record_values(
+    record: BolStandardRecord,
+    selected_facility: BolFacilityRecord,
+    batch_comment: str | None,
+) -> dict[str, str]:
+    values = _standard_record_values(record, selected_facility, batch_comment)
+    bill_to_lines = "\n".join(
+        part
+        for part in (
+            record.bill_to.company,
+            record.bill_to.street,
+            record.bill_to.city_state_zip,
+        )
+        if _safe_text(part)
+    )
+    values.update(
+        {
+            "delivery_appt": _safe_text(getattr(record, "pickup_number", "")),
+            "appt_number": "",
+            "appointment_number": "",
+            "bill_to": bill_to_lines,
+        }
+    )
+    return values
+
+
 def _line_has_data(line: BolStandardItemLine) -> bool:
     return any(
         _safe_text(value)
@@ -784,10 +819,16 @@ def _no_recourse_first_row_box(column_name: str, box: TextBox) -> TextBox:
     return box
 
 
-def _draw_no_recourse_first_row_description(
+def _draw_two_line_item_description(
     canv: canvas.Canvas,
     box: TextBox,
     line: BolStandardItemLine,
+    *,
+    description_size: float,
+    detail_size: float,
+    min_description_size: float,
+    min_detail_size: float,
+    leading: float,
 ) -> None:
     description = _safe_text(line.item_description)
     detail_parts: list[str] = []
@@ -802,10 +843,9 @@ def _draw_no_recourse_first_row_description(
         return
 
     line_specs = (
-        (lines[0], 9.0, 7.2),
-        (lines[1], 8.0, 6.8),
-    ) if len(lines) == 2 else ((lines[0], 9.0, 7.2),)
-    leading = 10.8
+        (lines[0], description_size, min_description_size),
+        (lines[1], detail_size, min_detail_size),
+    ) if len(lines) == 2 else ((lines[0], description_size, min_description_size),)
     total_height = len(line_specs) * leading
     baseline = box.y + box.height - max((box.height - total_height) / 2, 0) - line_specs[0][1]
     for text, font_size, min_font_size in line_specs:
@@ -813,6 +853,23 @@ def _draw_no_recourse_first_row_description(
         canv.setFont(FONT_NAME, fitted_size)
         canv.drawString(box.x, baseline, text)
         baseline -= leading
+
+
+def _draw_no_recourse_first_row_description(
+    canv: canvas.Canvas,
+    box: TextBox,
+    line: BolStandardItemLine,
+) -> None:
+    _draw_two_line_item_description(
+        canv,
+        box,
+        line,
+        description_size=9.0,
+        detail_size=8.0,
+        min_description_size=7.2,
+        min_detail_size=6.8,
+        leading=10.8,
+    )
 
 
 def _draw_standard_overlay(
@@ -828,7 +885,7 @@ def _draw_standard_overlay(
     record_values = (
         _no_recourse_record_values(record, selected_facility, batch_comment)
         if config.mode == "No Recourse"
-        else _standard_record_values(record, selected_facility, batch_comment)
+        else _standard_pdf_record_values(record, selected_facility, batch_comment)
     )
     for field_name, box in config.fields.items():
         _draw_box_value(
@@ -878,6 +935,18 @@ def _draw_standard_overlay(
             box = _box_at_row_baseline(base_box, row_baseline, row_height)
             if config.mode == "No Recourse" and row_offset == 0 and column_name == "description" and line is not None:
                 _draw_no_recourse_first_row_description(canv, box, line)
+                continue
+            if config.mode == "Standard" and column_name == "description" and line is not None:
+                _draw_two_line_item_description(
+                    canv,
+                    box,
+                    line,
+                    description_size=8.8,
+                    detail_size=7.8,
+                    min_description_size=6.8,
+                    min_detail_size=6.4,
+                    leading=10.0,
+                )
                 continue
             _draw_box_value(canv, box, value)
 
