@@ -12,7 +12,12 @@ from app.models.bol_standard_record import (
 )
 from app.services.bol_file_bundle_service import create_standard_bundles
 from app.services.bol_multistop_docx_generator import MultistopGeneratedDocxFile
-from app.services.bol_pdf_template_stamper import NO_RECOURSE_CONFIG, stamp_bol_pdf_set
+from app.services.bol_pdf_template_stamper import (
+    MULTISTOP_CONFIG,
+    NO_RECOURSE_CONFIG,
+    STANDARD_CONFIG,
+    stamp_bol_pdf_set,
+)
 from app.services.bol_standard_docx_generator import GeneratedDocxFile, StandardDocxGenerationResult
 from app.services.bol_standard_pdf_converter import StandardPdfConversionResult
 from app.ui import bol_generator
@@ -201,6 +206,11 @@ def test_standard_template_stamper_creates_pdf_and_bundle(tmp_path: Path) -> Non
     assert "Pallet Qty" in text
     assert "C A S E" not in text
     assert "CAS\nE" not in text
+    assert "\u00ab" not in text
+    assert "\u00bb" not in text
+    assert "Item #: ITEM1" in text
+    assert "UPC #: 000111222333" in text
+    assert text.count("TOTALS") == 1
 
     bundle = create_standard_bundles(
         generated_docx_files=[docx_file],
@@ -369,6 +379,17 @@ def test_no_recourse_template_stamper_does_not_configure_whiteout_boxes() -> Non
     assert all(not box.whiteout for box in boxes)
 
 
+def test_standard_template_stamper_does_not_configure_whiteout_boxes() -> None:
+    boxes = [
+        *STANDARD_CONFIG.fields.values(),
+        *STANDARD_CONFIG.item_columns.values(),
+        *STANDARD_CONFIG.totals.values(),
+    ]
+
+    assert boxes
+    assert all(not box.whiteout for box in boxes)
+
+
 def test_multistop_template_stamper_creates_pdf(tmp_path: Path) -> None:
     source = tmp_path / "combined_multistop_bol_MBOL-001_LOAD-001.docx"
     source.write_bytes(b"placeholder")
@@ -395,6 +416,23 @@ def test_multistop_template_stamper_creates_pdf(tmp_path: Path) -> None:
     text = _pdf_text(result.converted_files[0].file_path)
     assert "MBOL-001" in text
     assert "LOAD-001" in text
+    assert "\u00ab" not in text
+    assert "\u00bb" not in text
+    assert "DC 0551" in text
+    assert "PO-0551" in text
+    assert "10" in text
+    assert text.count("TOTALS") == 1
+
+
+def test_multistop_template_stamper_does_not_configure_whiteout_boxes() -> None:
+    boxes = [
+        *MULTISTOP_CONFIG.fields.values(),
+        *MULTISTOP_CONFIG.item_columns.values(),
+        *MULTISTOP_CONFIG.totals.values(),
+    ]
+
+    assert boxes
+    assert all(not box.whiteout for box in boxes)
 
 
 def test_ui_pdf_generation_routes_supported_modes_to_template_stamper(monkeypatch, tmp_path: Path) -> None:

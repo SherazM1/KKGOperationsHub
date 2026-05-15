@@ -396,25 +396,29 @@ def _no_recourse_fields() -> dict[str, TextBox]:
 STANDARD_CONFIG = PdfTemplateConfig(
     mode="Standard",
     template_path=STANDARD_PDF_TEMPLATE_PATH,
-    fields=_standard_fields(),
-    item_columns={
-        "qty_header": _box_for_baseline(x=29.0, baseline=278.2, width=60.0, height=10.0, font_size=5.8, min_font_size=4.8, align="center"),
-        "qty": _item_box(0, 1, font_size=7.0, align="center"),
-        "type": _item_box(1, 3, font_size=7.0, align="center"),
-        "po": _item_box(3, 5, font_size=6.8, align="center"),
-        "description": _item_box(5, 11, font_size=6.5),
-        "skids": _item_box(11, 14, font_size=7.0, align="center"),
-        "weight": _item_box(14, 19, font_size=7.0, align="center"),
-    },
+    fields=_without_whiteout_map(_standard_fields()),
+    item_columns=_without_whiteout_map(
+        {
+            "qty_header": _box_for_baseline(x=29.0, baseline=278.2, width=60.0, height=10.0, font_size=5.8, min_font_size=4.8, align="center"),
+            "qty": _item_box(0, 1, font_size=7.0, align="center"),
+            "type": _item_box(1, 3, font_size=7.0, align="center"),
+            "po": _item_box(3, 5, font_size=6.8, align="center"),
+            "description": _item_box(5, 11, font_size=6.5),
+            "skids": _item_box(11, 14, font_size=7.0, align="center"),
+            "weight": _item_box(14, 19, font_size=7.0, align="center"),
+        }
+    ),
     item_start_y=0,
     item_row_height=18.0,
     max_item_rows=8,
-    totals={
-        "qty": _box_for_baseline(x=_col_x(0) + 2, baseline=69.9, width=_col_width(0, 1) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
-        "label": _box_for_baseline(x=_col_x(5) + 2, baseline=69.9, width=_col_width(5, 11) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
-        "skids": _box_for_baseline(x=_col_x(11) + 2, baseline=69.9, width=_col_width(11, 14) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
-        "weight": _box_for_baseline(x=_col_x(14) + 2, baseline=69.9, width=_col_width(14, 19) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
-    },
+    totals=_without_whiteout_map(
+        {
+            "qty": _box_for_baseline(x=_col_x(0) + 2, baseline=69.9, width=_col_width(0, 1) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
+            "label": _box_for_baseline(x=_col_x(5) + 2, baseline=69.9, width=_col_width(5, 11) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
+            "skids": _box_for_baseline(x=_col_x(11) + 2, baseline=69.9, width=_col_width(11, 14) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
+            "weight": _box_for_baseline(x=_col_x(14) + 2, baseline=69.9, width=_col_width(14, 19) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
+        }
+    ),
     item_row_baselines=(264.1, 238.2, 212.3, 186.4, 160.5, 134.6, 108.7, 82.8),
 )
 
@@ -462,7 +466,7 @@ NO_RECOURSE_CONFIG = replace(
 MULTISTOP_CONFIG = PdfTemplateConfig(
     mode="Multistop",
     template_path=MULTISTOP_PDF_TEMPLATE_PATH,
-    fields={
+    fields=_without_whiteout_map({
         "bol_number": _top_value_box(709.3),
         "ship_date": _top_value_box(694.9),
         "carrier": _top_value_box(681.0, width=150.0),
@@ -480,24 +484,24 @@ MULTISTOP_CONFIG = PdfTemplateConfig(
         "delivery_2_address": _box_for_baseline(x=103.5, baseline=504.9, width=220.0, height=22.0, font_size=7.0, min_font_size=5.0, multiline=True),
         "delivery_3_dc": _box_for_baseline(x=103.5, baseline=487.0, width=145.0, font_size=7.4),
         "delivery_3_address": _box_for_baseline(x=103.5, baseline=467.8, width=220.0, height=22.0, font_size=7.0, min_font_size=5.0, multiline=True),
-    },
-    item_columns={
+    }),
+    item_columns=_without_whiteout_map({
         "dc": TextBox(34, 0, 42, 0, 7.0, align="center"),
         "case": TextBox(78, 0, 46, 0, 7.0, align="center"),
         "po": TextBox(126, 0, 83, 0, 6.6, align="center"),
         "description": TextBox(212, 0, 194, 0, 6.3, multiline=True),
         "pallet": TextBox(408, 0, 66, 0, 7.0, align="center"),
         "weight": TextBox(476, 0, 85, 0, 7.0, align="center"),
-    },
+    }),
     item_start_y=0,
     item_row_height=17.0,
     max_item_rows=3,
-    totals={
+    totals=_without_whiteout_map({
         "case": _box_for_baseline(x=78, baseline=99.9, width=46, height=12.0, font_size=7.4, bold=True, align="center"),
         "label": _box_for_baseline(x=212, baseline=99.9, width=194, height=12.0, font_size=7.4, bold=True, align="center"),
         "pallet": _box_for_baseline(x=408, baseline=99.9, width=66, height=12.0, font_size=7.4, bold=True, align="center"),
         "weight": _box_for_baseline(x=476, baseline=99.9, width=85, height=12.0, font_size=7.4, bold=True, align="center"),
-    },
+    }),
     item_row_baselines=(277.7, 253.3, 229.1),
 )
 
@@ -1167,7 +1171,7 @@ def stamp_bol_pdf_set(
                 _stamp_template_pdf(
                     template_path=config.template_path,
                     destination_pdf=destination_pdf,
-                    strip_known_tokens=config.mode == "No Recourse",
+                    strip_known_tokens=True,
                     draw_callback=lambda canv, record=record: _draw_multistop_overlay(
                         canv,
                         config,
@@ -1183,7 +1187,7 @@ def stamp_bol_pdf_set(
                 _stamp_template_pdf(
                     template_path=config.template_path,
                     destination_pdf=destination_pdf,
-                    strip_known_tokens=config.mode == "No Recourse",
+                    strip_known_tokens=True,
                     draw_callback=lambda canv, record=record: _draw_standard_overlay(
                         canv,
                         config,
