@@ -389,7 +389,7 @@ def _no_recourse_fields() -> dict[str, TextBox]:
             leading=11.8,
             vertical_align="middle",
         ),
-        "dc_number": _box_for_baseline(x=74.0, baseline=510.3, width=69.0, font_size=8.5, min_font_size=6.5),
+        "dc_number": _box_for_baseline(x=112.5, baseline=510.3, width=69.0, font_size=8.5, min_font_size=6.5),
     }
 
 
