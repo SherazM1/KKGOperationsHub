@@ -357,7 +357,7 @@ def _standard_fields() -> dict[str, TextBox]:
         ),
         "seal_number": _top_value_box(573.6),
         "appointment_number": _box_for_baseline(x=112.5, baseline=454.1, width=210.0, font_size=8.5, min_font_size=6.5),
-        "dc_number": _box_for_baseline(x=112.5, baseline=437.6, width=210.0, font_size=8.5, min_font_size=6.5),
+        "dc_number": _box_for_baseline(x=112.5, baseline=440.0, width=210.0, font_size=8.5, min_font_size=6.5),
     }
 
 
@@ -408,13 +408,13 @@ STANDARD_CONFIG = PdfTemplateConfig(
     fields=_without_whiteout_map(_standard_fields()),
     item_columns=_without_whiteout_map(
         {
-            "qty_header": _box_for_baseline(x=29.0, baseline=278.2, width=60.0, height=10.0, font_size=7.4, min_font_size=6.0, align="center"),
-            "qty": _item_box(0, 1, font_size=9.0, align="center"),
+            "qty_header": _box_for_baseline(x=31.0, baseline=278.2, width=56.0, height=10.0, font_size=7.4, min_font_size=6.0, align="center"),
+            "qty": TextBox(37.0, 0, 50.0, 0, 9.2, min_font_size=6.8, align="center"),
             "type": _item_box(1, 3, font_size=7.0, align="center"),
-            "po": _item_box(3, 5, font_size=8.2, align="center"),
-            "description": replace(_item_box(5, 11, font_size=8.2), multiline=True, min_font_size=6.8, leading=10.2, vertical_align="middle"),
-            "skids": _item_box(11, 14, font_size=9.0, align="center"),
-            "weight": _item_box(14, 19, font_size=9.0, align="center"),
+            "po": TextBox(145.0, 0, 72.0, 0, 8.4, min_font_size=6.8, align="center"),
+            "description": TextBox(238.0, 0, 236.0, 0, 8.4, min_font_size=6.8, multiline=True, leading=10.4, vertical_align="middle"),
+            "skids": TextBox(490.0, 0, 44.0, 0, 9.2, min_font_size=6.8, align="center"),
+            "weight": TextBox(542.0, 0, 48.0, 0, 9.2, min_font_size=6.8, align="center"),
         }
     ),
     item_start_y=0,
@@ -422,10 +422,10 @@ STANDARD_CONFIG = PdfTemplateConfig(
     max_item_rows=8,
     totals=_without_whiteout_map(
         {
-            "qty": _box_for_baseline(x=_col_x(0) + 2, baseline=69.9, width=_col_width(0, 1) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
-            "label": _box_for_baseline(x=_col_x(5) + 2, baseline=69.9, width=_col_width(5, 11) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
-            "skids": _box_for_baseline(x=_col_x(11) + 2, baseline=69.9, width=_col_width(11, 14) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
-            "weight": _box_for_baseline(x=_col_x(14) + 2, baseline=69.9, width=_col_width(14, 19) - 4, height=12.0, font_size=7.4, bold=True, align="center"),
+            "qty": _box_for_baseline(x=37.0, baseline=69.9, width=50.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
+            "label": _box_for_baseline(x=_col_x(5) + 2, baseline=69.9, width=_col_width(5, 11) - 4, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
+            "skids": _box_for_baseline(x=490.0, baseline=69.9, width=44.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
+            "weight": _box_for_baseline(x=542.0, baseline=69.9, width=48.0, height=12.0, font_size=8.6, min_font_size=6.5, bold=True, align="center"),
         }
     ),
     item_row_baselines=(264.1, 238.2, 212.3, 186.4, 160.5, 134.6, 108.7, 82.8),
@@ -716,6 +716,16 @@ def _standard_pdf_record_values(
     batch_comment: str | None,
 ) -> dict[str, str]:
     values = _standard_record_values(record, selected_facility, batch_comment)
+    ship_from_street = _safe_text(selected_facility["address"])
+    ship_from_location = _safe_text(selected_facility["location"])
+    location_suffixes = {
+        ship_from_location,
+        ship_from_location.replace(",", ", "),
+    }
+    for suffix in sorted(location_suffixes, key=len, reverse=True):
+        if suffix and ship_from_street.lower().endswith(suffix.lower()):
+            ship_from_street = ship_from_street[: -len(suffix)].rstrip(" ,")
+            break
     bill_to_lines = "\n".join(
         part
         for part in (
@@ -730,6 +740,7 @@ def _standard_pdf_record_values(
             "delivery_appt": _safe_text(getattr(record, "pickup_number", "")),
             "appt_number": "",
             "appointment_number": "",
+            "ship_from_street": ship_from_street,
             "bill_to": bill_to_lines,
         }
     )
