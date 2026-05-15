@@ -770,6 +770,16 @@ def _description_value(line: BolStandardItemLine) -> str:
     return _safe_text(line.item_description) or detail_line
 
 
+def _no_recourse_first_row_box(column_name: str, box: TextBox) -> TextBox:
+    if column_name in {"qty", "skids", "weight"}:
+        return replace(box, font_size=9.2, min_font_size=6.8)
+    if column_name == "po":
+        return replace(box, font_size=8.5, min_font_size=6.8)
+    if column_name == "description":
+        return replace(box, font_size=8.6, min_font_size=7.2, leading=10.8)
+    return box
+
+
 def _draw_standard_overlay(
     canv: canvas.Canvas,
     config: PdfTemplateConfig,
@@ -828,6 +838,8 @@ def _draw_standard_overlay(
         )
         for column_name, value in values.items():
             base_box = config.item_columns[column_name]
+            if config.mode == "No Recourse" and row_offset == 0:
+                base_box = _no_recourse_first_row_box(column_name, base_box)
             box = _box_at_row_baseline(base_box, row_baseline, row_height)
             _draw_box_value(canv, box, value)
 
