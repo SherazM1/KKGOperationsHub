@@ -389,7 +389,7 @@ def _no_recourse_fields() -> dict[str, TextBox]:
             leading=11.8,
             vertical_align="middle",
         ),
-        "dc_number": _box_for_baseline(x=48.0, baseline=510.3, width=95.0, font_size=8.5, min_font_size=6.5),
+        "dc_number": _box_for_baseline(x=74.0, baseline=510.3, width=69.0, font_size=8.5, min_font_size=6.5),
     }
 
 
@@ -780,6 +780,37 @@ def _no_recourse_first_row_box(column_name: str, box: TextBox) -> TextBox:
     return box
 
 
+def _draw_no_recourse_first_row_description(
+    canv: canvas.Canvas,
+    box: TextBox,
+    line: BolStandardItemLine,
+) -> None:
+    description = _safe_text(line.item_description)
+    detail_parts: list[str] = []
+    if _safe_text(line.item_number):
+        detail_parts.append(f"Item #: {_safe_text(line.item_number)}")
+    if _safe_text(line.upc):
+        detail_parts.append(f"UPC #: {_safe_text(line.upc)}")
+    detail_line = "     ".join(detail_parts)
+
+    lines = [value for value in (description, detail_line) if value]
+    if not lines:
+        return
+
+    line_specs = (
+        (lines[0], 9.0, 7.2),
+        (lines[1], 8.0, 6.8),
+    ) if len(lines) == 2 else ((lines[0], 9.0, 7.2),)
+    leading = 10.8
+    total_height = len(line_specs) * leading
+    baseline = box.y + box.height - max((box.height - total_height) / 2, 0) - line_specs[0][1]
+    for text, font_size, min_font_size in line_specs:
+        fitted_size = _fit_font_size(canv, text, FONT_NAME, font_size, box.width, min_font_size)
+        canv.setFont(FONT_NAME, fitted_size)
+        canv.drawString(box.x, baseline, text)
+        baseline -= leading
+
+
 def _draw_standard_overlay(
     canv: canvas.Canvas,
     config: PdfTemplateConfig,
@@ -841,6 +872,9 @@ def _draw_standard_overlay(
             if config.mode == "No Recourse" and row_offset == 0:
                 base_box = _no_recourse_first_row_box(column_name, base_box)
             box = _box_at_row_baseline(base_box, row_baseline, row_height)
+            if config.mode == "No Recourse" and row_offset == 0 and column_name == "description" and line is not None:
+                _draw_no_recourse_first_row_description(canv, box, line)
+                continue
             _draw_box_value(canv, box, value)
 
     total_qty, total_skids, total_weight = _standard_totals(record, item_lines, mode=config.mode)
