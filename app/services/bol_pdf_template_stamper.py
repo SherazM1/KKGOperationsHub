@@ -841,6 +841,7 @@ def _draw_two_line_item_description(
     min_description_size: float,
     min_detail_size: float,
     leading: float,
+    second_line_y_offset: float = 0.0,
 ) -> None:
     description = _safe_text(line.item_description)
     detail_parts: list[str] = []
@@ -860,10 +861,11 @@ def _draw_two_line_item_description(
     ) if len(lines) == 2 else ((lines[0], description_size, min_description_size),)
     total_height = len(line_specs) * leading
     baseline = box.y + box.height - max((box.height - total_height) / 2, 0) - line_specs[0][1]
-    for text, font_size, min_font_size in line_specs:
+    for line_index, (text, font_size, min_font_size) in enumerate(line_specs):
         fitted_size = _fit_font_size(canv, text, FONT_NAME, font_size, box.width, min_font_size)
         canv.setFont(FONT_NAME, fitted_size)
-        canv.drawString(box.x, baseline, text)
+        draw_y = baseline + (second_line_y_offset if line_index == 1 else 0.0)
+        canv.drawString(box.x, draw_y, text)
         baseline -= leading
 
 
@@ -949,8 +951,6 @@ def _draw_standard_overlay(
                 _draw_no_recourse_first_row_description(canv, box, line)
                 continue
             if config.mode == "Standard" and column_name == "description" and line is not None:
-                if row_offset == 0:
-                    box = replace(box, y=box.y + 3.0)
                 _draw_two_line_item_description(
                     canv,
                     box,
@@ -960,6 +960,7 @@ def _draw_standard_overlay(
                     min_description_size=7.0,
                     min_detail_size=6.6,
                     leading=10.6,
+                    second_line_y_offset=5.0 if row_offset == 0 else 0.0,
                 )
                 continue
             _draw_box_value(canv, box, value)
