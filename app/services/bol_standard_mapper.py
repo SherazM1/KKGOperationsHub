@@ -10,6 +10,7 @@ from app.models.bol_standard_record import (
     BolStandardRecord,
 )
 from app.models.bol_standard_row import BolStandardRow
+from app.utils.bol_facilities import BolFacilityRecord, facility_to_ship_from
 
 
 def _first_non_empty(rows: list[BolStandardRow], attr_name: str) -> str:
@@ -123,17 +124,24 @@ def _inconsistent_shipment_warnings(bol_rows: list[BolStandardRow]) -> list[str]
     return warnings
 
 
-def map_standard_rows_to_records(rows: list[BolStandardRow]) -> list[BolStandardRecord]:
+def map_standard_rows_to_records(
+    rows: list[BolStandardRow],
+    selected_facility: BolFacilityRecord | None = None,
+) -> list[BolStandardRecord]:
     grouped_rows: dict[str, list[BolStandardRow]] = defaultdict(list)
 
     for row in rows:
         grouped_rows[row.bol_number.strip()].append(row)
 
-    ship_from = BolAddressBlock(
-        company="Kendal King C/O Shorr",
-        street="981 W Oakdale Rd",
-        city_state_zip="Grand Prairie, TX 75056",
-        attn="",
+    ship_from = (
+        facility_to_ship_from(selected_facility)
+        if selected_facility is not None
+        else BolAddressBlock(
+            company="Kendal King C/O Shorr",
+            street="981 W Oakdale Rd",
+            city_state_zip="Grand Prairie, TX 75056",
+            attn="",
+        )
     )
     bill_to = BolAddressBlock(
         company="Trident Transport, LLC",

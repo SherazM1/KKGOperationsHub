@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from typing import TypedDict
+
+from app.models.bol_standard_record import BolAddressBlock
 
 
 class BolFacilityRecord(TypedDict):
@@ -148,3 +151,32 @@ BOL_FACILITY_OPTIONS: tuple[str, ...] = tuple(
 BOL_FACILITY_LOOKUP: dict[str, BolFacilityRecord] = {
     facility_record["facility"]: facility_record for facility_record in BOL_FACILITY_RECORDS
 }
+
+
+def _normalized_location(location: str) -> str:
+    return re.sub(r",\s*", ", ", location.strip())
+
+
+def facility_to_ship_from(facility: BolFacilityRecord) -> BolAddressBlock:
+    location = _normalized_location(facility["location"])
+    address = facility["address"].strip()
+    zip_match = re.search(r"\s+(\d{5}(?:-\d{4})?)$", address)
+    zip_code = zip_match.group(1) if zip_match else ""
+    address_without_zip = address[: zip_match.start()].rstrip() if zip_match else address
+
+    location_variants = {
+        facility["location"].strip(),
+        location,
+    }
+    street = address_without_zip
+    for suffix in sorted(location_variants, key=len, reverse=True):
+        if suffix and street.lower().endswith(suffix.lower()):
+            street = street[: -len(suffix)].rstrip(" ,")
+            break
+
+    city_state_zip = " ".join(part for part in (location, zip_code) if part)
+    return BolAddressBlock(
+        company=facility["facility_name"],
+        street=street,
+        city_state_zip=city_state_zip,
+    )

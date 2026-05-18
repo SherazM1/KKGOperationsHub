@@ -4,6 +4,7 @@ import importlib
 import sys
 from types import SimpleNamespace
 
+from app.models.bol_standard_record import BolAddressBlock
 from app.ui import bol_generator
 
 
@@ -141,6 +142,37 @@ def test_pdf_generation_uses_grouped_records_from_selected_parse(monkeypatch) ->
 
     assert result == "pdf-result"
     assert captured["records"] is selected_parse_records
+
+
+def test_changing_selected_facility_updates_grouped_records_and_clears_generated_state() -> None:
+    record = SimpleNamespace(
+        ship_from=BolAddressBlock(
+            company="Old",
+            street="Old",
+            city_state_zip="Old",
+        )
+    )
+    bol_generator.st.session_state["bol_selected_facility_label"] = "SHORR"
+    bol_generator.st.session_state["bol_selected_facility"] = None
+    bol_generator.st.session_state["bol_grouped_records"] = [record]
+    bol_generator.st.session_state["bol_docx_result"] = object()
+    bol_generator.st.session_state["bol_pdf_result"] = object()
+    bol_generator.st.session_state["bol_pdf_source_signature"] = object()
+    bol_generator.st.session_state["bol_bundle_result"] = object()
+    bol_generator.st.session_state["bol_bundle_error"] = "old"
+    bol_generator.st.session_state["bol_all_files_bundle_requested"] = True
+
+    bol_generator._set_selected_facility("PRODUCTIV-ESTERS")
+
+    assert record.ship_from.company == "Kendal King C/O Productiv"
+    assert record.ship_from.street == "2450 Esters BLVD Suite 100"
+    assert record.ship_from.city_state_zip == "Grapevine, TX 76051"
+    assert bol_generator.st.session_state["bol_docx_result"] is None
+    assert bol_generator.st.session_state["bol_pdf_result"] is None
+    assert bol_generator.st.session_state["bol_pdf_source_signature"] is None
+    assert bol_generator.st.session_state["bol_bundle_result"] is None
+    assert bol_generator.st.session_state["bol_bundle_error"] is None
+    assert bol_generator.st.session_state["bol_all_files_bundle_requested"] is False
 
 
 def test_importing_bol_generator_does_not_create_pdf_readers(monkeypatch) -> None:

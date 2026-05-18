@@ -17,7 +17,7 @@ from docx.shared import Pt
 from docx.table import Table
 
 from app.models.bol_standard_record import BolStandardItemLine, BolStandardRecord
-from app.utils.bol_facilities import BolFacilityRecord
+from app.utils.bol_facilities import BolFacilityRecord, facility_to_ship_from
 
 
 STANDARD_TEMPLATE_PATH = Path("app/templates/standard_bol_template.docx")
@@ -955,8 +955,8 @@ def _apply_template_record_values(
         _tok("TRACKER_"): "",
         # Suppress competing mergefield comment box; visible "Comments:" label is authoritative.
         _tok("COMMENTS"): "",
-        _tok("SHIP_FROM"): selected_facility["facility_name"],
-        _tok("SHIP_FROM_ADDRESS"): selected_facility["address"],
+        _tok("SHIP_FROM"): record.ship_from.company,
+        _tok("SHIP_FROM_ADDRESS"): record.ship_from.street,
         _tok("SHIP_FROM_CITY_STATE_ZIP"): "" if has_explicit_pickup_token else record.pickup_number,
         _tok("SHIP_TO_NAME"): record.consignee_company,
         _tok("SHIP_TO_ADDRESS"): record.consignee_street,
@@ -983,7 +983,7 @@ def _apply_template_record_values(
         },
         include_xml_tree=compact_standard_item_area,
     )
-    _suppress_duplicate_ship_from_city_state_line(doc, selected_facility["location"])
+    _suppress_duplicate_ship_from_city_state_line(doc, record.ship_from.city_state_zip)
     _override_consignee_street(doc, record.consignee_street)
 
     last_error: Exception | None = None
@@ -1025,6 +1025,9 @@ def generate_standard_docx_set(
         raise ValueError(
             "No ship-from facility is selected. Select a facility in BOL Generator before DOCX generation."
         )
+    selected_ship_from = facility_to_ship_from(selected_facility)
+    for record in records:
+        record.ship_from = selected_ship_from
 
     resolved_template = template_path or DEFAULT_TEMPLATE_PATH
     if not resolved_template.exists():

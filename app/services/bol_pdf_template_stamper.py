@@ -31,7 +31,7 @@ from app.services.bol_standard_pdf_converter import (
     FailedPdfConversion,
     StandardPdfConversionResult,
 )
-from app.utils.bol_facilities import BolFacilityRecord
+from app.utils.bol_facilities import BolFacilityRecord, facility_to_ship_from
 
 
 STANDARD_PDF_TEMPLATE_PATH = Path("app/templates/standard_pdf_template.pdf")
@@ -668,9 +668,9 @@ def _standard_record_values(
         "appointment_number": pickup_number,
         "tracker_number": "",
         "comments": comment,
-        "ship_from_company": selected_facility["facility_name"],
-        "ship_from_street": selected_facility["address"],
-        "ship_from_city_state_zip": selected_facility["location"],
+        "ship_from_company": record.ship_from.company,
+        "ship_from_street": record.ship_from.street,
+        "ship_from_city_state_zip": record.ship_from.city_state_zip,
         "consignee_company": record.consignee_company,
         "consignee_street": record.consignee_street,
         "consignee_city_state_zip": record.consignee_city_state_zip,
@@ -702,9 +702,6 @@ def _no_recourse_record_values(
             "appt_number": "",
             "appointment_number": "",
             "tracker_number": "",
-            "ship_from_company": "Kendal King C/O Shorr",
-            "ship_from_street": "975 W Oakdale Road",
-            "ship_from_city_state_zip": "Grand Prairie, TX 75050",
             "bill_to": no_recourse_bill_to,
         }
     )
@@ -717,8 +714,8 @@ def _standard_pdf_record_values(
     batch_comment: str | None,
 ) -> dict[str, str]:
     values = _standard_record_values(record, selected_facility, batch_comment)
-    ship_from_street = _safe_text(selected_facility["address"])
-    ship_from_location = _safe_text(selected_facility["location"])
+    ship_from_street = _safe_text(record.ship_from.street)
+    ship_from_location = _safe_text(record.ship_from.city_state_zip)
     location_suffixes = {
         ship_from_location,
         ship_from_location.replace(",", ", "),
@@ -1221,6 +1218,10 @@ def stamp_bol_pdf_set(
 
     if selected_facility is None:
         raise ValueError("No ship-from facility is selected. Select a facility before PDF generation.")
+    selected_ship_from = facility_to_ship_from(selected_facility)
+    for record in records:
+        if hasattr(record, "ship_from"):
+            record.ship_from = selected_ship_from
     if not generated_docx_files:
         raise ValueError("No generated DOCX files were provided for PDF naming.")
 

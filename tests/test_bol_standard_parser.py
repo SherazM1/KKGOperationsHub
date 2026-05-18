@@ -9,6 +9,7 @@ from openpyxl import load_workbook
 
 from app.services.bol_standard_parser import get_excel_sheet_names, parse_standard_bol_excel
 from app.services.bol_standard_mapper import map_standard_rows_to_records
+from app.utils.bol_facilities import BOL_FACILITY_LOOKUP
 
 
 def _standard_load_row() -> dict[str, object]:
@@ -443,3 +444,17 @@ def test_standard_bol_mapping_preserves_total_weight_and_first_pickup() -> None:
     assert len(records) == 1
     assert records[0].pickup_number == "PU-001"
     assert records[0].item_lines[0].total_weight == "306 lbs."
+
+
+def test_standard_bol_mapping_applies_selected_facility_ship_from() -> None:
+    workbook = _workbook_with_sheet("LOAD SHEET", [_standard_load_row()])
+    rows = parse_standard_bol_excel(workbook)
+
+    records = map_standard_rows_to_records(
+        rows,
+        selected_facility=BOL_FACILITY_LOOKUP["PRODUCTIV-ESTERS"],
+    )
+
+    assert records[0].ship_from.company == "Kendal King C/O Productiv"
+    assert records[0].ship_from.street == "2450 Esters BLVD Suite 100"
+    assert records[0].ship_from.city_state_zip == "Grapevine, TX 76051"

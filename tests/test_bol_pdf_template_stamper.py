@@ -26,6 +26,7 @@ from app.services.bol_standard_docx_generator import GeneratedDocxFile, Standard
 from app.services.bol_standard_pdf_converter import StandardPdfConversionResult
 from app.ui import bol_generator
 from app.utils.bol_facilities import BOL_FACILITY_LOOKUP, BOL_FACILITY_OPTIONS
+from app.utils.bol_facilities import facility_to_ship_from
 
 
 def _address(company: str = "Trident Transport, LLC") -> BolAddressBlock:
@@ -318,6 +319,50 @@ def test_no_recourse_template_stamper_creates_one_page_pdf_with_missing_optional
     assert "BILL_TO" not in text
     assert "BILL_TO_ADDRESS" not in text
     assert "TOTAL_QTY" not in text
+
+
+def test_pdf_stamper_uses_record_ship_from_from_selected_facility(tmp_path: Path) -> None:
+    selected_facility = BOL_FACILITY_LOOKUP["PRODUCTIV-ESTERS"]
+    record = _standard_record()
+    record.ship_from = facility_to_ship_from(selected_facility)
+    docx_file = _docx_file(tmp_path, "standard_bol_facility.docx", record.bol_number)
+
+    result = stamp_bol_pdf_set(
+        [record],
+        selected_facility=selected_facility,
+        generated_docx_files=[docx_file],
+        mode="Standard",
+        bol_type="PLT",
+        qty_type="PLT",
+        output_dir=tmp_path / "pdf",
+    )
+    text = _pdf_text(result.converted_files[0].file_path)
+
+    assert "Kendal King C/O Productiv" in text
+    assert "2450 Esters BLVD Suite 100" in text
+    assert "Grapevine, TX 76051" in text
+
+
+def test_no_recourse_pdf_stamper_uses_record_ship_from_from_selected_facility(tmp_path: Path) -> None:
+    selected_facility = BOL_FACILITY_LOOKUP["PRODUCTIV-ESTERS"]
+    record = _standard_record(optional_fields=False)
+    record.ship_from = facility_to_ship_from(selected_facility)
+    docx_file = _docx_file(tmp_path, "no_recourse_facility.docx", record.bol_number)
+
+    result = stamp_bol_pdf_set(
+        [record],
+        selected_facility=selected_facility,
+        generated_docx_files=[docx_file],
+        mode="No Recourse",
+        bol_type="PLT",
+        qty_type="PLT",
+        output_dir=tmp_path / "pdf",
+    )
+    text = _pdf_text(result.converted_files[0].file_path)
+
+    assert "Kendal King C/O Productiv" in text
+    assert "2450 Esters BLVD Suite 100" in text
+    assert "Grapevine, TX 76051" in text
 
 
 def test_no_recourse_template_stamper_keeps_long_bol_and_po_values_complete(tmp_path: Path) -> None:

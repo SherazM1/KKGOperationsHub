@@ -15,6 +15,7 @@ from app.services.bol_standard_docx_generator import (
     resolve_template_path_for_mode,
 )
 from app.utils.bol_facilities import BOL_FACILITY_LOOKUP, BOL_FACILITY_OPTIONS
+from app.utils.bol_facilities import facility_to_ship_from
 
 
 def _ready_record() -> BolStandardRecord:
@@ -160,6 +161,27 @@ def test_standard_docx_type_case_has_no_inserted_spaces_or_line_breaks(tmp_path:
     type_value = _first_item_type_value(doc)
 
     assert type_value == "CASE"
+
+
+def test_standard_docx_uses_record_ship_from_from_selected_facility(tmp_path: Path) -> None:
+    record = _ready_record()
+    selected_facility = BOL_FACILITY_LOOKUP["PRODUCTIV-ESTERS"]
+    record.ship_from = facility_to_ship_from(selected_facility)
+
+    result = generate_standard_docx_set(
+        [record],
+        selected_facility=selected_facility,
+        bol_type="PLT",
+        qty_type="PLT",
+        template_path=resolve_template_path_for_mode("Standard"),
+        output_dir=tmp_path,
+        file_name_prefix=resolve_output_filename_prefix_for_mode("Standard"),
+    )
+    doc = Document(result.generated_files[0].file_path)
+    text = _document_text(doc)
+
+    assert "Kendal King C/O Productiv" in text
+    assert "2450 Esters BLVD Suite 100" in text
     assert "C A S E" not in _document_text(doc)
     assert "CAS\nE" not in _document_text(doc)
 

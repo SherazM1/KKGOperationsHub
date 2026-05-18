@@ -38,7 +38,12 @@ from app.services.bol_standard_mapper import map_standard_rows_to_records
 from app.services.bol_standard_pdf_converter import StandardPdfConversionResult
 from app.services.bol_pdf_template_stamper import stamp_bol_pdf_set
 from app.services.bol_standard_parser import get_excel_sheet_names, parse_standard_bol_excel
-from app.utils.bol_facilities import BOL_FACILITY_LOOKUP, BOL_FACILITY_OPTIONS, BolFacilityRecord
+from app.utils.bol_facilities import (
+    BOL_FACILITY_LOOKUP,
+    BOL_FACILITY_OPTIONS,
+    BolFacilityRecord,
+    facility_to_ship_from,
+)
 
 
 BOL_TEMP_OUTPUT_PREFIXES = (
@@ -340,6 +345,7 @@ def _log_parse_timing(step_name: str, started_at: float) -> float:
 
 
 def _set_selected_facility(facility_label: str | None) -> None:
+    previous_label = st.session_state.get("bol_selected_facility_label")
     if facility_label is None or facility_label not in BOL_FACILITY_LOOKUP:
         st.session_state["bol_selected_facility_label"] = None
         st.session_state["bol_selected_facility"] = None
@@ -347,6 +353,21 @@ def _set_selected_facility(facility_label: str | None) -> None:
 
     st.session_state["bol_selected_facility_label"] = facility_label
     st.session_state["bol_selected_facility"] = BOL_FACILITY_LOOKUP[facility_label].copy()
+    if previous_label != facility_label:
+        _apply_selected_facility_to_grouped_records()
+        _clear_generation_state_references()
+
+
+def _apply_selected_facility_to_grouped_records() -> None:
+    selected_facility = st.session_state.get("bol_selected_facility")
+    grouped_records = st.session_state.get("bol_grouped_records", [])
+    if not selected_facility or not isinstance(grouped_records, list):
+        return
+
+    ship_from = facility_to_ship_from(selected_facility)
+    for record in grouped_records:
+        if hasattr(record, "ship_from"):
+            record.ship_from = ship_from
 
 
 def _resolve_generation_context() -> tuple[str, Path]:
@@ -893,7 +914,10 @@ def render_bol_generator_view() -> None:
                     worksheet_name=selected_worksheet,
                 )
                 last_parse_step_at = _log_parse_timing("excel_parse", last_parse_step_at)
-                grouped_records = map_standard_rows_to_records(parsed_rows)
+                grouped_records = map_standard_rows_to_records(
+                    parsed_rows,
+                    selected_facility=st.session_state.get("bol_selected_facility"),
+                )
                 last_parse_step_at = _log_parse_timing("mapping", last_parse_step_at)
 
             if not grouped_records:
