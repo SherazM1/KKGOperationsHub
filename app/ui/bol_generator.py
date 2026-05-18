@@ -229,9 +229,13 @@ def _default_worksheet_selection(
 
 def _summary_worksheet_label(input_source: str, mode: str) -> str:
     if input_source == "Doc upload":
-        return "DOCX Shipment Request Form"
+        return "N/A"
     if mode in ("Standard", "No Recourse"):
-        return str(st.session_state.get("bol_parsed_worksheet") or "")
+        return str(
+            st.session_state.get("bol_parsed_worksheet")
+            or st.session_state.get("bol_selected_worksheet")
+            or ""
+        )
     return "MAIN LOAD SHEET"
 
 
@@ -943,7 +947,10 @@ def render_bol_generator_view() -> None:
                 ),
                 "mode": st.session_state["bol_mode"],
                 "input_source": input_source,
-                "worksheet": _summary_worksheet_label(input_source, selected_mode),
+                "worksheet": _summary_worksheet_label(
+                    input_source,
+                    st.session_state.get("bol_mode", "Standard"),
+                ),
                 "rows_parsed": (
                     len(grouped_records) if input_source == "Doc upload" else len(parsed_rows)
                 ),

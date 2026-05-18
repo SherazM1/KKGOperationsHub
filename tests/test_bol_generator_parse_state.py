@@ -109,6 +109,14 @@ def test_parse_summary_reports_selected_standard_worksheet() -> None:
     )
 
 
+def test_summary_worksheet_label_handles_missing_state_without_parse_local() -> None:
+    bol_generator.st.session_state.pop("bol_parsed_worksheet", None)
+    bol_generator.st.session_state["bol_selected_worksheet"] = "Load Sheet"
+
+    assert bol_generator._summary_worksheet_label("Excel upload", "Standard") == "Load Sheet"
+    assert bol_generator._summary_worksheet_label("Doc upload", "Standard") == "N/A"
+
+
 def test_pdf_generation_uses_grouped_records_from_selected_parse(monkeypatch) -> None:
     selected_parse_records = [object()]
     captured: dict[str, object] = {}
