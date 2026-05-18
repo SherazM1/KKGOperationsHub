@@ -273,7 +273,7 @@ def test_standard_pdf_item_detail_line_can_be_raised_without_moving_description(
     )
 
     assert fake_canvas.drawn_strings[0][2] == "Test pallet"
-    assert fake_canvas.drawn_strings[1][2] == "Item #: ITEM1     UPC #: 000111222333"
+    assert fake_canvas.drawn_strings[1][2] == "Item #: ITEM1        UPC #: 000111222333"
     assert fake_canvas.drawn_strings[1][1] > fake_canvas.drawn_strings[0][1] - 1.0
 
 
@@ -285,8 +285,8 @@ def test_no_recourse_first_row_description_raises_detail_line() -> None:
     _draw_no_recourse_first_row_description(fake_canvas, description_box, line)
 
     assert fake_canvas.drawn_strings[0][2] == "Test pallet"
-    assert fake_canvas.drawn_strings[1][2] == "Item #: ITEM1     UPC #: 000111222333"
-    assert fake_canvas.drawn_strings[1][1] > fake_canvas.drawn_strings[0][1] - 5.0
+    assert fake_canvas.drawn_strings[1][2] == "Item #: ITEM1        UPC #: 000111222333"
+    assert fake_canvas.drawn_strings[1][1] == fake_canvas.drawn_strings[0][1] - 7.3
 
 
 def test_no_recourse_template_stamper_creates_one_page_pdf_with_missing_optional_fields(tmp_path: Path) -> None:

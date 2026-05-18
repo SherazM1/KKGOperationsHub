@@ -819,7 +819,7 @@ def _description_value(line: BolStandardItemLine) -> str:
         detail_parts.append(f"Item #: {_safe_text(line.item_number)}")
     if _safe_text(line.upc):
         detail_parts.append(f"UPC #: {_safe_text(line.upc)}")
-    detail_line = "     ".join(detail_parts)
+    detail_line = "        ".join(detail_parts)
     if detail_line and _safe_text(line.item_description):
         return f"{_safe_text(line.item_description)}\n{detail_line}"
     return _safe_text(line.item_description) or detail_line
@@ -853,7 +853,7 @@ def _draw_two_line_item_description(
         detail_parts.append(f"Item #: {_safe_text(line.item_number)}")
     if _safe_text(line.upc):
         detail_parts.append(f"UPC #: {_safe_text(line.upc)}")
-    detail_line = "     ".join(detail_parts)
+    detail_line = "        ".join(detail_parts)
 
     lines = [value for value in (description, detail_line) if value]
     if not lines:
@@ -887,7 +887,7 @@ def _draw_no_recourse_first_row_description(
         min_description_size=7.2,
         min_detail_size=6.8,
         leading=10.8,
-        second_line_y_offset=6.0,
+        second_line_y_offset=3.5,
     )
 
 
