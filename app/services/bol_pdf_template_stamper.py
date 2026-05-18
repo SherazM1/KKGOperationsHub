@@ -960,7 +960,7 @@ def _draw_standard_overlay(
                     min_description_size=7.0,
                     min_detail_size=6.6,
                     leading=10.6,
-                    second_line_y_offset=5.0 if row_offset == 0 else 0.0,
+                    second_line_y_offset=8.0 if row_offset == 0 else 0.0,
                 )
                 continue
             _draw_box_value(canv, box, value)
