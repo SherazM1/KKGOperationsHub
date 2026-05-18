@@ -393,6 +393,45 @@ def _resolve_openpyxl_load_sheet_name(workbook: Any) -> str:
     raise ValueError(LOAD_SHEET_NOT_FOUND_MESSAGE)
 
 
+def _missing_worksheet_error(worksheet_name: str, available_sheets: list[str]) -> ValueError:
+    available_text = ", ".join(available_sheets) if available_sheets else "(none)"
+    return ValueError(
+        f"Worksheet '{worksheet_name}' was not found. Available worksheets: {available_text}."
+    )
+
+
+def get_excel_sheet_names(file: Any) -> list[str]:
+    """Return visible worksheet names in workbook order without consuming the upload stream."""
+    if file is None:
+        raise ValueError("No file uploaded. Upload an Excel file to inspect worksheets.")
+
+    try:
+        file.seek(0)
+        workbook = load_workbook(file, read_only=True, data_only=True)
+        try:
+            return [
+                str(worksheet.title)
+                for worksheet in workbook.worksheets
+                if worksheet.sheet_state == "visible"
+            ]
+        finally:
+            workbook.close()
+    except (InvalidFileException, OSError, KeyError, ValueError):
+        try:
+            file.seek(0)
+            workbook = pd.ExcelFile(file)
+            return [str(sheet_name) for sheet_name in workbook.sheet_names]
+        except Exception as exc:
+            raise ValueError(
+                "Could not read Excel worksheets. Upload a valid Excel workbook."
+            ) from exc
+    finally:
+        try:
+            file.seek(0)
+        except Exception:
+            pass
+
+
 def _coerce_to_string(value: Any) -> str:
     if pd.isna(value):
         return ""
@@ -531,7 +570,10 @@ def _combine_city_state_zip_from_values(row_values: dict[str, str]) -> str:
     return " ".join(part for part in (city_state, zip_code) if part)
 
 
-def _parse_standard_bol_excel_openpyxl(file: Any) -> list[BolStandardRow]:
+def _parse_standard_bol_excel_openpyxl(
+    file: Any,
+    worksheet_name: str | None = None,
+) -> list[BolStandardRow]:
     started_at = perf_counter()
     file.seek(0)
     workbook = load_workbook(file, read_only=True, data_only=True)
@@ -542,7 +584,17 @@ def _parse_standard_bol_excel_openpyxl(file: Any) -> list[BolStandardRow]:
     )
 
     try:
-        resolved_sheet_name = _resolve_openpyxl_load_sheet_name(workbook)
+        visible_sheet_names = [
+            str(worksheet.title)
+            for worksheet in workbook.worksheets
+            if worksheet.sheet_state == "visible"
+        ]
+        if worksheet_name is not None:
+            if worksheet_name not in visible_sheet_names:
+                raise _missing_worksheet_error(worksheet_name, visible_sheet_names)
+            resolved_sheet_name = worksheet_name
+        else:
+            resolved_sheet_name = _resolve_openpyxl_load_sheet_name(workbook)
         sheet_resolved_at = perf_counter()
         print(
             "BOL parse timing: sheet_detection_openpyxl="
@@ -587,12 +639,15 @@ def _parse_standard_bol_excel_openpyxl(file: Any) -> list[BolStandardRow]:
         workbook.close()
 
 
-def parse_standard_bol_excel(file: Any) -> list[BolStandardRow]:
+def parse_standard_bol_excel(
+    file: Any,
+    worksheet_name: str | None = None,
+) -> list[BolStandardRow]:
     if file is None:
         raise ValueError("No file uploaded. Upload an Excel file to parse.")
 
     try:
-        return _parse_standard_bol_excel_openpyxl(file)
+        return _parse_standard_bol_excel_openpyxl(file, worksheet_name=worksheet_name)
     except (InvalidFileException, OSError, KeyError):
         file.seek(0)
 
@@ -605,7 +660,13 @@ def parse_standard_bol_excel(file: Any) -> list[BolStandardRow]:
         f"{workbook_loaded_at - started_at:.3f}s sheets={len(workbook.sheet_names)}"
     )
 
-    resolved_sheet_name = _resolve_load_sheet_name(workbook)
+    available_sheet_names = [str(sheet_name) for sheet_name in workbook.sheet_names]
+    if worksheet_name is not None:
+        if worksheet_name not in available_sheet_names:
+            raise _missing_worksheet_error(worksheet_name, available_sheet_names)
+        resolved_sheet_name = worksheet_name
+    else:
+        resolved_sheet_name = _resolve_load_sheet_name(workbook)
     sheet_resolved_at = perf_counter()
     print(
         "BOL parse timing: sheet_detection="

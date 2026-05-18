@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from types import SimpleNamespace
 
 from app.ui import bol_generator
 
@@ -33,6 +34,105 @@ def test_prepare_parse_state_only_clears_artifact_references(monkeypatch) -> Non
     assert bol_generator.st.session_state["bol_bundle_result"] is None
     assert bol_generator.st.session_state["bol_bundle_error"] is None
     assert bol_generator.st.session_state["bol_all_files_bundle_requested"] is False
+
+
+def test_initialize_bol_state_stores_selected_worksheet() -> None:
+    bol_generator.st.session_state.clear()
+
+    bol_generator._initialize_bol_state()
+
+    assert bol_generator.st.session_state["bol_selected_worksheet"] is None
+    assert bol_generator.st.session_state["bol_parsed_worksheet"] is None
+
+
+def test_default_worksheet_selection_prefers_previous_then_named_defaults() -> None:
+    sheet_names = ["Tracker Info", "Revised LS", "Load Sheet"]
+
+    assert (
+        bol_generator._default_worksheet_selection(sheet_names, "Load Sheet")
+        == "Load Sheet"
+    )
+    assert bol_generator._default_worksheet_selection(sheet_names, "Missing") == "Revised LS"
+    assert (
+        bol_generator._default_worksheet_selection(["Tracker Info", "Load Sheet"], None)
+        == "Load Sheet"
+    )
+    assert bol_generator._default_worksheet_selection(["Rates"], None) == "Rates"
+
+
+def test_clear_worksheet_dependent_state_clears_parsed_and_generated_state_cheaply(
+    monkeypatch,
+) -> None:
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("Worksheet changes must not recursively delete generated files.")
+
+    monkeypatch.setattr(bol_generator, "_cleanup_generation_output_dirs", fail_if_called)
+
+    bol_generator.st.session_state["bol_parse_requested"] = True
+    bol_generator.st.session_state["bol_parse_error"] = "old error"
+    bol_generator.st.session_state["bol_parsed_rows"] = [object()]
+    bol_generator.st.session_state["bol_grouped_records"] = [object()]
+    bol_generator.st.session_state["bol_parsed_worksheet"] = "Load Sheet"
+    bol_generator.st.session_state["bol_record_comments"] = {"BOL-1": "comment"}
+    bol_generator.st.session_state["bol_record_selection"] = {"BOL-1": True}
+    bol_generator.st.session_state["bol_docx_result"] = object()
+    bol_generator.st.session_state["bol_pdf_result"] = object()
+    bol_generator.st.session_state["bol_pdf_source_signature"] = object()
+    bol_generator.st.session_state["bol_bundle_result"] = object()
+    bol_generator.st.session_state["bol_bundle_error"] = "old bundle error"
+    bol_generator.st.session_state["bol_all_files_bundle_requested"] = True
+
+    bol_generator._clear_worksheet_dependent_state()
+
+    assert bol_generator.st.session_state["bol_parse_requested"] is False
+    assert bol_generator.st.session_state["bol_parse_error"] is None
+    assert bol_generator.st.session_state["bol_parsed_rows"] == []
+    assert bol_generator.st.session_state["bol_grouped_records"] == []
+    assert bol_generator.st.session_state["bol_parsed_worksheet"] is None
+    assert bol_generator.st.session_state["bol_record_comments"] == {}
+    assert bol_generator.st.session_state["bol_record_selection"] == {}
+    assert bol_generator.st.session_state["bol_docx_result"] is None
+    assert bol_generator.st.session_state["bol_pdf_result"] is None
+    assert bol_generator.st.session_state["bol_pdf_source_signature"] is None
+    assert bol_generator.st.session_state["bol_bundle_result"] is None
+    assert bol_generator.st.session_state["bol_bundle_error"] is None
+    assert bol_generator.st.session_state["bol_all_files_bundle_requested"] is False
+
+
+def test_parse_summary_reports_selected_standard_worksheet() -> None:
+    bol_generator.st.session_state["bol_parsed_worksheet"] = "Revised LS"
+
+    assert bol_generator._summary_worksheet_label("Excel upload", "Standard") == "Revised LS"
+    assert (
+        bol_generator._summary_worksheet_label("Excel upload", "No Recourse")
+        == "Revised LS"
+    )
+
+
+def test_pdf_generation_uses_grouped_records_from_selected_parse(monkeypatch) -> None:
+    selected_parse_records = [object()]
+    captured: dict[str, object] = {}
+
+    def fake_stamp_bol_pdf_set(records, **kwargs):
+        captured["records"] = records
+        captured["kwargs"] = kwargs
+        return "pdf-result"
+
+    monkeypatch.setattr(bol_generator, "stamp_bol_pdf_set", fake_stamp_bol_pdf_set)
+    bol_generator.st.session_state["bol_selected_facility"] = {"facility": "TEST"}
+    bol_generator.st.session_state["bol_type_selector"] = "PLT"
+    bol_generator.st.session_state["bol_qty_type_selector"] = "PLT"
+    bol_generator.st.session_state["bol_batch_comment_textarea"] = ""
+
+    result = bol_generator._generate_pdf_result(
+        mode="Standard",
+        docx_result=SimpleNamespace(generated_files=[]),
+        grouped_records=selected_parse_records,
+        progress_callback=None,
+    )
+
+    assert result == "pdf-result"
+    assert captured["records"] is selected_parse_records
 
 
 def test_importing_bol_generator_does_not_create_pdf_readers(monkeypatch) -> None:

@@ -5,8 +5,9 @@ from time import perf_counter
 
 import pandas as pd
 import pytest
+from openpyxl import load_workbook
 
-from app.services.bol_standard_parser import parse_standard_bol_excel
+from app.services.bol_standard_parser import get_excel_sheet_names, parse_standard_bol_excel
 from app.services.bol_standard_mapper import map_standard_rows_to_records
 
 
@@ -41,6 +42,35 @@ def _workbook_with_sheet(sheet_name: str, rows: list[dict[str, object]]) -> Byte
         pd.DataFrame(rows).to_excel(writer, sheet_name=sheet_name, index=False)
     output.seek(0)
     return output
+
+
+def _workbook_with_sheets(sheets: list[tuple[str, list[dict[str, object]]]]) -> BytesIO:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for sheet_name, rows in sheets:
+            pd.DataFrame(rows).to_excel(writer, sheet_name=sheet_name, index=False)
+    output.seek(0)
+    return output
+
+
+def test_get_excel_sheet_names_returns_visible_sheets_in_workbook_order() -> None:
+    workbook = _workbook_with_sheets(
+        [
+            ("Revised LS", [_standard_load_row()]),
+            ("Load Sheet", [_standard_load_row()]),
+            ("Rates", [{"Rate": "1.00"}]),
+        ]
+    )
+    excel_workbook = load_workbook(workbook)
+    excel_workbook["Rates"].sheet_state = "hidden"
+    workbook = BytesIO()
+    excel_workbook.save(workbook)
+    workbook.seek(0)
+
+    sheet_names = get_excel_sheet_names(workbook)
+
+    assert sheet_names == ["Revised LS", "Load Sheet"]
+    assert workbook.tell() == 0
 
 
 def test_parse_standard_bol_excel_accepts_normalized_main_load_sheet_name() -> None:
@@ -83,6 +113,71 @@ def test_parse_standard_bol_excel_falls_back_to_header_based_sheet_detection() -
 
     assert len(rows) == 1
     assert rows[0].kk_load == "KL-001"
+
+
+def test_parse_standard_bol_excel_can_parse_explicit_worksheet() -> None:
+    selected_row = _standard_load_row()
+    selected_row["BOL #"] = "BOL-REVISED"
+    workbook = _workbook_with_sheets(
+        [
+            ("Load Sheet", [_standard_load_row()]),
+            ("Revised LS", [selected_row]),
+        ]
+    )
+
+    rows = parse_standard_bol_excel(workbook, worksheet_name="Revised LS")
+
+    assert len(rows) == 1
+    assert rows[0].bol_number == "BOL-REVISED"
+
+
+def test_parse_standard_bol_excel_explicit_worksheet_overrides_auto_detect() -> None:
+    load_sheet_row = _standard_load_row()
+    load_sheet_row["BOL #"] = "BOL-AUTO"
+    revised_row = _standard_load_row()
+    revised_row["BOL #"] = "BOL-SELECTED"
+    workbook = _workbook_with_sheets(
+        [
+            ("Load Sheet", [load_sheet_row]),
+            ("Revised LS", [revised_row]),
+        ]
+    )
+
+    rows = parse_standard_bol_excel(workbook, worksheet_name="Revised LS")
+
+    assert [row.bol_number for row in rows] == ["BOL-SELECTED"]
+
+
+def test_parse_standard_bol_excel_missing_explicit_worksheet_lists_available_sheets() -> None:
+    workbook = _workbook_with_sheets(
+        [
+            ("Revised LS", [_standard_load_row()]),
+            ("Load Sheet", [_standard_load_row()]),
+        ]
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"Worksheet 'Missing' was not found\. Available worksheets: Revised LS, Load Sheet\.",
+    ):
+        parse_standard_bol_excel(workbook, worksheet_name="Missing")
+
+
+def test_parse_standard_bol_excel_keeps_auto_detect_when_worksheet_is_none() -> None:
+    auto_row = _standard_load_row()
+    auto_row["BOL #"] = "BOL-AUTO"
+    revised_row = _standard_load_row()
+    revised_row["BOL #"] = "BOL-REVISED"
+    workbook = _workbook_with_sheets(
+        [
+            ("Load Sheet", [auto_row]),
+            ("Revised LS", [revised_row]),
+        ]
+    )
+
+    rows = parse_standard_bol_excel(workbook, worksheet_name=None)
+
+    assert [row.bol_number for row in rows] == ["BOL-AUTO"]
 
 
 def test_parse_standard_bol_excel_normalizes_line_break_headers() -> None:

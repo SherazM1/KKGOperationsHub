@@ -37,7 +37,7 @@ from app.services.bol_standard_docx_generator import (
 from app.services.bol_standard_mapper import map_standard_rows_to_records
 from app.services.bol_standard_pdf_converter import StandardPdfConversionResult
 from app.services.bol_pdf_template_stamper import stamp_bol_pdf_set
-from app.services.bol_standard_parser import parse_standard_bol_excel
+from app.services.bol_standard_parser import get_excel_sheet_names, parse_standard_bol_excel
 from app.utils.bol_facilities import BOL_FACILITY_LOOKUP, BOL_FACILITY_OPTIONS, BolFacilityRecord
 
 
@@ -63,6 +63,12 @@ def _initialize_bol_state() -> None:
         st.session_state["bol_mode"] = "Standard"
     if "bol_uploaded_filename" not in st.session_state:
         st.session_state["bol_uploaded_filename"] = None
+    if "bol_uploaded_file_signature" not in st.session_state:
+        st.session_state["bol_uploaded_file_signature"] = None
+    if "bol_selected_worksheet" not in st.session_state:
+        st.session_state["bol_selected_worksheet"] = None
+    if "bol_parsed_worksheet" not in st.session_state:
+        st.session_state["bol_parsed_worksheet"] = None
     if "bol_uploaded_doc_filename" not in st.session_state:
         st.session_state["bol_uploaded_doc_filename"] = None
     if "bol_doc_upload_parse_result" not in st.session_state:
@@ -175,6 +181,9 @@ def _clear_review_state(*, delete_files: bool = False) -> None:
 
 def _clear_input_state(*, delete_files: bool = False) -> None:
     st.session_state["bol_uploaded_filename"] = None
+    st.session_state["bol_uploaded_file_signature"] = None
+    st.session_state["bol_selected_worksheet"] = None
+    st.session_state["bol_parsed_worksheet"] = None
     st.session_state["bol_uploaded_doc_filename"] = None
     st.session_state["bol_doc_upload_parse_result"] = None
     st.session_state["bol_parse_requested"] = False
@@ -184,6 +193,46 @@ def _clear_input_state(*, delete_files: bool = False) -> None:
     st.session_state["bol_batch_comment"] = ""
     st.session_state["bol_batch_comment_textarea"] = ""
     _clear_review_state(delete_files=delete_files)
+
+
+def _clear_worksheet_dependent_state() -> None:
+    st.session_state["bol_parse_requested"] = False
+    st.session_state["bol_parse_error"] = None
+    st.session_state["bol_parsed_rows"] = []
+    st.session_state["bol_grouped_records"] = []
+    st.session_state["bol_parsed_worksheet"] = None
+    _clear_review_state(delete_files=False)
+
+
+def _uploaded_file_signature(uploaded_file: Any) -> tuple[Any, ...] | None:
+    if uploaded_file is None:
+        return None
+
+    return (
+        getattr(uploaded_file, "file_id", None),
+        getattr(uploaded_file, "name", None),
+        getattr(uploaded_file, "size", None),
+    )
+
+
+def _default_worksheet_selection(
+    sheet_names: list[str],
+    previous_selection: str | None,
+) -> str | None:
+    if not sheet_names:
+        return None
+    for candidate in (previous_selection, "Revised LS", "Load Sheet"):
+        if candidate in sheet_names:
+            return candidate
+    return sheet_names[0]
+
+
+def _summary_worksheet_label(input_source: str, mode: str) -> str:
+    if input_source == "Doc upload":
+        return "DOCX Shipment Request Form"
+    if mode in ("Standard", "No Recourse"):
+        return str(st.session_state.get("bol_parsed_worksheet") or "")
+    return "MAIN LOAD SHEET"
 
 
 def _refresh_bundles() -> StandardBundleResult | None:
@@ -677,9 +726,14 @@ def render_bol_generator_view() -> None:
         )
 
         previous_filename = st.session_state["bol_uploaded_filename"]
+        previous_file_signature = st.session_state["bol_uploaded_file_signature"]
         if uploaded_file is None:
             st.info("No Excel file uploaded yet.")
             st.session_state["bol_uploaded_filename"] = None
+            st.session_state["bol_uploaded_file_signature"] = None
+            st.session_state["bol_selected_worksheet"] = None
+            st.session_state["bol_parsed_worksheet"] = None
+            st.session_state.pop("bol_selected_worksheet_selectbox", None)
             st.session_state["bol_doc_upload_parse_result"] = None
             st.session_state["bol_parsed_rows"] = []
             st.session_state["bol_grouped_records"] = []
@@ -691,11 +745,14 @@ def render_bol_generator_view() -> None:
             st.session_state["bol_parse_requested"] = False
         else:
             st.session_state["bol_uploaded_filename"] = uploaded_file.name
+            current_file_signature = _uploaded_file_signature(uploaded_file)
+            st.session_state["bol_uploaded_file_signature"] = current_file_signature
             st.success(f"Uploaded file: {uploaded_file.name}")
-            if previous_filename != uploaded_file.name:
+            if previous_file_signature != current_file_signature:
                 st.session_state["bol_parsed_rows"] = []
                 st.session_state["bol_grouped_records"] = []
                 st.session_state["bol_doc_upload_parse_result"] = None
+                st.session_state["bol_parsed_worksheet"] = None
                 st.session_state["bol_batch_comment"] = ""
                 st.session_state["bol_batch_comment_textarea"] = ""
                 default_facility_label = BOL_FACILITY_OPTIONS[0] if BOL_FACILITY_OPTIONS else None
@@ -703,6 +760,33 @@ def render_bol_generator_view() -> None:
                 _clear_review_state(delete_files=False)
                 st.session_state["bol_parse_error"] = None
                 st.session_state["bol_parse_requested"] = False
+                st.session_state["bol_selected_worksheet"] = None
+                st.session_state.pop("bol_selected_worksheet_selectbox", None)
+
+            if st.session_state["bol_mode"] in ("Standard", "No Recourse"):
+                try:
+                    sheet_names = get_excel_sheet_names(uploaded_file)
+                except ValueError as exc:
+                    st.error(str(exc))
+                    sheet_names = []
+
+                if sheet_names:
+                    previous_selection = st.session_state.get("bol_selected_worksheet")
+                    default_selection = _default_worksheet_selection(
+                        sheet_names,
+                        previous_selection,
+                    )
+                    selected_worksheet = st.selectbox(
+                        "Select worksheet",
+                        options=sheet_names,
+                        index=sheet_names.index(default_selection),
+                        key="bol_selected_worksheet_selectbox",
+                    )
+                    if previous_selection != selected_worksheet:
+                        st.session_state["bol_selected_worksheet"] = selected_worksheet
+                        _clear_worksheet_dependent_state()
+                    else:
+                        st.session_state["bol_selected_worksheet"] = selected_worksheet
 
     st.markdown("---")
 
@@ -799,7 +883,11 @@ def render_bol_generator_view() -> None:
                 grouped_records = map_multistop_rows_to_records(parsed_rows)
                 last_parse_step_at = _log_parse_timing("mapping", last_parse_step_at)
             else:
-                parsed_rows = parse_standard_bol_excel(uploaded_file)
+                selected_worksheet = st.session_state.get("bol_selected_worksheet")
+                parsed_rows = parse_standard_bol_excel(
+                    uploaded_file,
+                    worksheet_name=selected_worksheet,
+                )
                 last_parse_step_at = _log_parse_timing("excel_parse", last_parse_step_at)
                 grouped_records = map_standard_rows_to_records(parsed_rows)
                 last_parse_step_at = _log_parse_timing("mapping", last_parse_step_at)
@@ -808,6 +896,11 @@ def render_bol_generator_view() -> None:
                 raise ValueError("No grouped BOL records were created from parsed rows.")
             st.session_state["bol_parsed_rows"] = parsed_rows
             st.session_state["bol_grouped_records"] = grouped_records
+            st.session_state["bol_parsed_worksheet"] = (
+                None
+                if input_source == "Doc upload" or selected_mode == "Multistop"
+                else st.session_state.get("bol_selected_worksheet")
+            )
             _sync_review_state(st.session_state["bol_grouped_records"])
             last_parse_step_at = _log_parse_timing("review_sync", last_parse_step_at)
             _log_parse_timing("total", parse_started_at)
@@ -850,7 +943,7 @@ def render_bol_generator_view() -> None:
                 ),
                 "mode": st.session_state["bol_mode"],
                 "input_source": input_source,
-                "worksheet": "DOCX Shipment Request Form" if input_source == "Doc upload" else "MAIN LOAD SHEET",
+                "worksheet": _summary_worksheet_label(input_source, selected_mode),
                 "rows_parsed": (
                     len(grouped_records) if input_source == "Doc upload" else len(parsed_rows)
                 ),
