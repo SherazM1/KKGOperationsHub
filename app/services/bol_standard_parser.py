@@ -258,7 +258,31 @@ def _resolve_plt_qty_column(
     return _resolve_column_name(lookups, "QTY", PLT_QTY_GENERIC_ALIASES[1:])
 
 
-def _resolve_columns_with_missing(columns: list[str]) -> tuple[dict[str, str], list[str]]:
+def _resolve_total_weight_column(
+    lookups: tuple[dict[str, str], dict[str, str], dict[str, str]],
+    worksheet_name: str,
+) -> str | None:
+    if _normalize_sheet_name(worksheet_name) == "revised ls":
+        revised_ls_weight = _resolve_column_name(
+            lookups,
+            "Weight",
+            ("WEIGHT", "Total Weight", "TOTAL WEIGHT"),
+        )
+        if revised_ls_weight is not None:
+            return revised_ls_weight
+
+    spec = OPTIONAL_COLUMN_SPECS["total_weight"]
+    return _resolve_column_name(
+        lookups,
+        str(spec["primary"]),
+        [str(alias) for alias in spec["fallback_aliases"]],
+    )
+
+
+def _resolve_columns_with_missing(
+    columns: list[str],
+    worksheet_name: str,
+) -> tuple[dict[str, str], list[str]]:
     resolved_columns = [str(col) for col in columns]
     lookups = _build_column_lookups(resolved_columns)
 
@@ -295,7 +319,10 @@ def _resolve_columns_with_missing(columns: list[str]) -> tuple[dict[str, str], l
     for logical_name, spec in OPTIONAL_COLUMN_SPECS.items():
         primary = str(spec["primary"])
         fallback_aliases = [str(alias) for alias in spec["fallback_aliases"]]
-        resolved_name = _resolve_column_name(lookups, primary, fallback_aliases)
+        if logical_name == "total_weight":
+            resolved_name = _resolve_total_weight_column(lookups, worksheet_name)
+        else:
+            resolved_name = _resolve_column_name(lookups, primary, fallback_aliases)
         if resolved_name is not None:
             resolved[logical_name] = resolved_name
 
@@ -303,7 +330,7 @@ def _resolve_columns_with_missing(columns: list[str]) -> tuple[dict[str, str], l
 
 
 def _resolve_columns(columns: list[str], worksheet_name: str) -> dict[str, str]:
-    resolved, missing = _resolve_columns_with_missing(columns)
+    resolved, missing = _resolve_columns_with_missing(columns, worksheet_name)
     if missing:
         raise ValueError(
             f"Missing required columns in '{worksheet_name}': "

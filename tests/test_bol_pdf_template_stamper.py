@@ -16,6 +16,8 @@ from app.services.bol_pdf_template_stamper import (
     MULTISTOP_CONFIG,
     NO_RECOURSE_CONFIG,
     STANDARD_CONFIG,
+    _display_weight,
+    _draw_two_line_item_description,
     stamp_bol_pdf_set,
 )
 from app.services.bol_standard_docx_generator import GeneratedDocxFile, StandardDocxGenerationResult
@@ -78,6 +80,20 @@ def _standard_record(
         carrier_pro_number="1073839",
         pickup_number=resolved_pickup,
     )
+
+
+class _FakeCanvas:
+    def __init__(self) -> None:
+        self.drawn_strings: list[tuple[float, float, str]] = []
+
+    def stringWidth(self, text: str, font_name: str, font_size: float) -> float:
+        return len(text) * font_size
+
+    def setFont(self, font_name: str, font_size: float) -> None:
+        return None
+
+    def drawString(self, x: float, y: float, text: str) -> None:
+        self.drawn_strings.append((x, y, text))
 
 
 def _multistop_record() -> BolMultistopRecord:
@@ -223,6 +239,34 @@ def test_standard_template_stamper_creates_pdf_and_bundle(tmp_path: Path) -> Non
     )
     assert bundle.pdf_bundle is not None
     assert bundle.pdf_bundle.file_count == 1
+
+
+def test_standard_pdf_prefers_total_weight_for_display_when_present() -> None:
+    line = _standard_record().item_lines[0]
+
+    assert _display_weight(line) == "306"
+
+
+def test_standard_pdf_item_detail_line_can_be_raised_without_moving_description() -> None:
+    fake_canvas = _FakeCanvas()
+    line = _standard_record().item_lines[0]
+    description_box = STANDARD_CONFIG.item_columns["description"]
+
+    _draw_two_line_item_description(
+        fake_canvas,
+        description_box,
+        line,
+        description_size=9.0,
+        detail_size=8.0,
+        min_description_size=7.0,
+        min_detail_size=6.6,
+        leading=10.6,
+        second_line_y_offset=10.0,
+    )
+
+    assert fake_canvas.drawn_strings[0][2] == "Test pallet"
+    assert fake_canvas.drawn_strings[1][2] == "Item #: ITEM1     UPC #: 000111222333"
+    assert fake_canvas.drawn_strings[1][1] > fake_canvas.drawn_strings[0][1] - 1.0
 
 
 def test_no_recourse_template_stamper_creates_one_page_pdf_with_missing_optional_fields(tmp_path: Path) -> None:

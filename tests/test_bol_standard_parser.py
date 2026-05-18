@@ -390,6 +390,33 @@ def test_parse_standard_bol_excel_accepts_total_weight_alias_and_pickup() -> Non
     assert rows[0].pickup_number == "APPT-123"
 
 
+def test_parse_revised_ls_prefers_weight_as_total_line_weight() -> None:
+    row = _standard_load_row()
+    row["Weight"] = 5040
+    row["weight each"] = 112
+    row.pop("Total Weight")
+    workbook = _workbook_with_sheet("Revised LS", [row])
+
+    rows = parse_standard_bol_excel(workbook, worksheet_name="Revised LS")
+
+    assert len(rows) == 1
+    assert rows[0].weight_each == "112"
+    assert rows[0].total_weight == "5040"
+
+
+def test_parse_revised_ls_without_weight_falls_back_safely() -> None:
+    row = _standard_load_row()
+    row["weight each"] = 112
+    row.pop("Total Weight")
+    workbook = _workbook_with_sheet("Revised LS", [row])
+
+    rows = parse_standard_bol_excel(workbook, worksheet_name="Revised LS")
+
+    assert len(rows) == 1
+    assert rows[0].weight_each == "112"
+    assert rows[0].total_weight == ""
+
+
 def test_parse_standard_bol_excel_allows_missing_optional_total_weight_and_pickup() -> None:
     row = _standard_load_row()
     row.pop("Total Weight")

@@ -741,7 +741,7 @@ def _populate_item_table(
                     row_cells[col_idx].text = rendered_type
             for col_idx in weight_col_indexes:
                 if col_idx < len(row_cells):
-                    row_cells[col_idx].text = line.weight_each
+                    row_cells[col_idx].text = line.total_weight or line.weight_each
 
     total_pallet_qty_value = 0.0
     total_skids_value = 0.0
