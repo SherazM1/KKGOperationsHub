@@ -950,7 +950,7 @@ def _draw_standard_overlay(
                 continue
             if config.mode == "Standard" and column_name == "description" and line is not None:
                 if row_offset == 0:
-                    box = replace(box, y=box.y + 1.5)
+                    box = replace(box, y=box.y + 3.0)
                 _draw_two_line_item_description(
                     canv,
                     box,
