@@ -771,7 +771,7 @@ def _standard_item_lines(record: BolStandardRecord, *, mode: str) -> list[BolSta
 
 
 def _display_weight(line: BolStandardItemLine) -> str:
-    return _safe_text(getattr(line, "total_weight", "")) or line.weight_each
+    return _safe_text(getattr(line, "weight_each", ""))
 
 
 def _standard_totals(record: BolStandardRecord, item_lines: list[BolStandardItemLine], *, mode: str) -> tuple[str, str, str]:
@@ -887,6 +887,7 @@ def _draw_no_recourse_first_row_description(
         min_description_size=7.2,
         min_detail_size=6.8,
         leading=10.8,
+        second_line_y_offset=6.0,
     )
 
 

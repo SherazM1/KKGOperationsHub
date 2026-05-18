@@ -17,7 +17,9 @@ from app.services.bol_pdf_template_stamper import (
     NO_RECOURSE_CONFIG,
     STANDARD_CONFIG,
     _display_weight,
+    _draw_no_recourse_first_row_description,
     _draw_two_line_item_description,
+    _standard_totals,
     stamp_bol_pdf_set,
 )
 from app.services.bol_standard_docx_generator import GeneratedDocxFile, StandardDocxGenerationResult
@@ -241,10 +243,16 @@ def test_standard_template_stamper_creates_pdf_and_bundle(tmp_path: Path) -> Non
     assert bundle.pdf_bundle.file_count == 1
 
 
-def test_standard_pdf_prefers_total_weight_for_display_when_present() -> None:
+def test_standard_pdf_item_row_weight_uses_weight_each_when_total_weight_exists() -> None:
     line = _standard_record().item_lines[0]
 
-    assert _display_weight(line) == "306"
+    assert _display_weight(line) == "100"
+
+
+def test_standard_pdf_totals_still_use_total_weight_when_present() -> None:
+    record = _standard_record()
+
+    assert _standard_totals(record, record.item_lines, mode="Standard") == ("2", "2", "306")
 
 
 def test_standard_pdf_item_detail_line_can_be_raised_without_moving_description() -> None:
@@ -267,6 +275,18 @@ def test_standard_pdf_item_detail_line_can_be_raised_without_moving_description(
     assert fake_canvas.drawn_strings[0][2] == "Test pallet"
     assert fake_canvas.drawn_strings[1][2] == "Item #: ITEM1     UPC #: 000111222333"
     assert fake_canvas.drawn_strings[1][1] > fake_canvas.drawn_strings[0][1] - 1.0
+
+
+def test_no_recourse_first_row_description_raises_detail_line() -> None:
+    fake_canvas = _FakeCanvas()
+    line = _standard_record().item_lines[0]
+    description_box = NO_RECOURSE_CONFIG.item_columns["description"]
+
+    _draw_no_recourse_first_row_description(fake_canvas, description_box, line)
+
+    assert fake_canvas.drawn_strings[0][2] == "Test pallet"
+    assert fake_canvas.drawn_strings[1][2] == "Item #: ITEM1     UPC #: 000111222333"
+    assert fake_canvas.drawn_strings[1][1] > fake_canvas.drawn_strings[0][1] - 5.0
 
 
 def test_no_recourse_template_stamper_creates_one_page_pdf_with_missing_optional_fields(tmp_path: Path) -> None:
