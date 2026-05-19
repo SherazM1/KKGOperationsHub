@@ -244,6 +244,42 @@ def test_standard_template_stamper_creates_pdf_and_bundle(tmp_path: Path) -> Non
     assert bundle.pdf_bundle.file_count == 1
 
 
+def test_standard_pdf_can_suppress_pickup_number_without_changing_record(tmp_path: Path) -> None:
+    record = _standard_record()
+    docx_file = _docx_file(tmp_path, "standard_bol_10001859231-0553.docx", "10001859231-0553")
+
+    result = stamp_bol_pdf_set(
+        [record],
+        selected_facility=BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]],
+        generated_docx_files=[docx_file],
+        mode="Standard",
+        bol_type="CASE",
+        qty_type="PLT",
+        render_pickup_number=False,
+        output_dir=tmp_path / "pdf",
+    )
+
+    assert record.pickup_number == "PU-123"
+    assert "PU-123" not in _pdf_text(result.converted_files[0].file_path)
+
+
+def test_standard_pdf_renders_pickup_number_by_default(tmp_path: Path) -> None:
+    record = _standard_record()
+    docx_file = _docx_file(tmp_path, "standard_bol_10001859231-0553.docx", "10001859231-0553")
+
+    result = stamp_bol_pdf_set(
+        [record],
+        selected_facility=BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]],
+        generated_docx_files=[docx_file],
+        mode="Standard",
+        bol_type="CASE",
+        qty_type="PLT",
+        output_dir=tmp_path / "pdf",
+    )
+
+    assert "PU-123" in _pdf_text(result.converted_files[0].file_path)
+
+
 def test_standard_pdf_item_row_weight_uses_weight_each_when_total_weight_exists() -> None:
     line = _standard_record().item_lines[0]
 
@@ -419,9 +455,9 @@ def test_no_recourse_template_stamper_removes_placeholders_and_draws_actual_addr
     assert "505 Riverfront Pkwy" in text
     assert "Chattanooga, TN 37402" in text
     assert text.count("Attn:") == 1
-    assert "Kendal King C/O Shorr" in text
-    assert "975 W Oakdale Road" in text
-    assert "Grand Prairie, TX 75050" in text
+    assert "Kendal King C/O Productiv" in text
+    assert "4255 Patriot Drive Suite 400" in text
+    assert "Grapevine, TX" in text
     assert "Dallas, TX 75001" in text
     assert "CASE" in text
     assert "C A S E" not in text

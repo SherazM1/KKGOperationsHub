@@ -44,6 +44,7 @@ def test_initialize_bol_state_stores_selected_worksheet() -> None:
 
     assert bol_generator.st.session_state["bol_selected_worksheet"] is None
     assert bol_generator.st.session_state["bol_parsed_worksheet"] is None
+    assert bol_generator.st.session_state["bol_render_pickup_number"] == "Yes"
 
 
 def test_default_worksheet_selection_prefers_previous_then_named_defaults() -> None:
@@ -132,6 +133,7 @@ def test_pdf_generation_uses_grouped_records_from_selected_parse(monkeypatch) ->
     bol_generator.st.session_state["bol_type_selector"] = "PLT"
     bol_generator.st.session_state["bol_qty_type_selector"] = "PLT"
     bol_generator.st.session_state["bol_batch_comment_textarea"] = ""
+    bol_generator.st.session_state["bol_render_pickup_number"] = "No"
 
     result = bol_generator._generate_pdf_result(
         mode="Standard",
@@ -142,6 +144,7 @@ def test_pdf_generation_uses_grouped_records_from_selected_parse(monkeypatch) ->
 
     assert result == "pdf-result"
     assert captured["records"] is selected_parse_records
+    assert captured["kwargs"]["render_pickup_number"] is False
 
 
 def test_changing_selected_facility_updates_grouped_records_and_clears_generated_state() -> None:

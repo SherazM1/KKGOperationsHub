@@ -938,11 +938,13 @@ def _apply_template_record_values(
     *,
     bol_type: str | None = None,
     qty_type: str = "PLT",
+    render_pickup_number: bool = True,
     compact_standard_item_area: bool = False,
     filter_blank_item_lines: bool = False,
 ) -> list[str]:
     notices: list[str] = []
     has_explicit_pickup_token = _document_contains_token(doc, _tok("Pick_Up_"))
+    pickup_number = record.pickup_number if render_pickup_number else ""
     replacements = {
         _tok("BOL"): record.bol_number,
         _tok("SHIP_DATE"): _format_ship_date_for_template(record.ship_date),
@@ -951,13 +953,13 @@ def _apply_template_record_values(
         _tok("HOST_PO"): record.po_number,
         _tok("KKG_PO"): record.kk_po_number,
         _tok("KKG_LOAD_"): record.kk_load_number,
-        _tok("Pick_Up_"): record.pickup_number,
+        _tok("Pick_Up_"): pickup_number,
         _tok("TRACKER_"): "",
         # Suppress competing mergefield comment box; visible "Comments:" label is authoritative.
         _tok("COMMENTS"): "",
         _tok("SHIP_FROM"): record.ship_from.company,
         _tok("SHIP_FROM_ADDRESS"): record.ship_from.street,
-        _tok("SHIP_FROM_CITY_STATE_ZIP"): "" if has_explicit_pickup_token else record.pickup_number,
+        _tok("SHIP_FROM_CITY_STATE_ZIP"): "" if has_explicit_pickup_token else pickup_number,
         _tok("SHIP_TO_NAME"): record.consignee_company,
         _tok("SHIP_TO_ADDRESS"): record.consignee_street,
         _tok("SHIP_TO_CITY_STATE_ZIP"): record.consignee_city_state_zip,
@@ -1017,6 +1019,7 @@ def generate_standard_docx_set(
     batch_comment: str | None = None,
     bol_type: str | None = None,
     qty_type: str = "PLT",
+    render_pickup_number: bool = True,
     template_path: Path | None = None,
     output_dir: Path | None = None,
     file_name_prefix: str = "standard_bol",
@@ -1071,6 +1074,7 @@ def generate_standard_docx_set(
                 batch_comment,
                 bol_type=bol_type,
                 qty_type=qty_type,
+                render_pickup_number=render_pickup_number,
                 compact_standard_item_area=is_standard_template or is_no_recourse_template,
                 filter_blank_item_lines=is_no_recourse_template,
             )

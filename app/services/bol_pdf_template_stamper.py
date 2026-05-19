@@ -640,6 +640,8 @@ def _standard_record_values(
     record: BolStandardRecord,
     selected_facility: BolFacilityRecord,
     batch_comment: str | None,
+    *,
+    render_pickup_number: bool = True,
 ) -> dict[str, str]:
     comment = _safe_text(record.comments) or _safe_text(batch_comment)
     bill_to_lines = "\n".join(
@@ -652,7 +654,11 @@ def _standard_record_values(
         )
         if _safe_text(part)
     )
-    pickup_number = _safe_text(getattr(record, "pickup_number", ""))
+    pickup_number = (
+        _safe_text(getattr(record, "pickup_number", ""))
+        if render_pickup_number
+        else ""
+    )
     return {
         "bol_number": record.bol_number,
         "ship_date": _format_ship_date_for_template(record.ship_date),
@@ -683,8 +689,15 @@ def _no_recourse_record_values(
     record: BolStandardRecord,
     selected_facility: BolFacilityRecord,
     batch_comment: str | None,
+    *,
+    render_pickup_number: bool = True,
 ) -> dict[str, str]:
-    values = _standard_record_values(record, selected_facility, batch_comment)
+    values = _standard_record_values(
+        record,
+        selected_facility,
+        batch_comment,
+        render_pickup_number=render_pickup_number,
+    )
     no_recourse_comment = _safe_text(record.comments)
     no_recourse_bill_to = "\n".join(
         part
@@ -712,8 +725,15 @@ def _standard_pdf_record_values(
     record: BolStandardRecord,
     selected_facility: BolFacilityRecord,
     batch_comment: str | None,
+    *,
+    render_pickup_number: bool = True,
 ) -> dict[str, str]:
-    values = _standard_record_values(record, selected_facility, batch_comment)
+    values = _standard_record_values(
+        record,
+        selected_facility,
+        batch_comment,
+        render_pickup_number=render_pickup_number,
+    )
     ship_from_street = _safe_text(record.ship_from.street)
     ship_from_location = _safe_text(record.ship_from.city_state_zip)
     location_suffixes = {
@@ -735,7 +755,11 @@ def _standard_pdf_record_values(
     )
     values.update(
         {
-            "delivery_appt": _safe_text(getattr(record, "pickup_number", "")),
+            "delivery_appt": (
+                _safe_text(getattr(record, "pickup_number", ""))
+                if render_pickup_number
+                else ""
+            ),
             "appt_number": "",
             "appointment_number": "",
             "ship_from_street": ship_from_street,
@@ -897,11 +921,22 @@ def _draw_standard_overlay(
     bol_type: str | None,
     qty_type: str,
     batch_comment: str | None,
+    render_pickup_number: bool = True,
 ) -> None:
     record_values = (
-        _no_recourse_record_values(record, selected_facility, batch_comment)
+        _no_recourse_record_values(
+            record,
+            selected_facility,
+            batch_comment,
+            render_pickup_number=render_pickup_number,
+        )
         if config.mode == "No Recourse"
-        else _standard_pdf_record_values(record, selected_facility, batch_comment)
+        else _standard_pdf_record_values(
+            record,
+            selected_facility,
+            batch_comment,
+            render_pickup_number=render_pickup_number,
+        )
     )
     for field_name, box in config.fields.items():
         _draw_box_value(
@@ -1211,6 +1246,7 @@ def stamp_bol_pdf_set(
     bol_type: str | None = None,
     qty_type: str = "PLT",
     batch_comment: str | None = None,
+    render_pickup_number: bool = True,
     output_dir: Path | None = None,
     progress_callback: Callable[[int, int, GeneratedDocxFile], None] | None = None,
 ) -> StandardPdfConversionResult:
@@ -1286,6 +1322,7 @@ def stamp_bol_pdf_set(
                         bol_type=bol_type,
                         qty_type=qty_type,
                         batch_comment=batch_comment,
+                        render_pickup_number=render_pickup_number,
                     ),
                 )
 

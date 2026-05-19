@@ -120,6 +120,8 @@ def _initialize_bol_state() -> None:
         st.session_state["bol_type_selector"] = "PLT"
     if "bol_qty_type_selector" not in st.session_state:
         st.session_state["bol_qty_type_selector"] = "PLT"
+    if "bol_render_pickup_number" not in st.session_state:
+        st.session_state["bol_render_pickup_number"] = "Yes"
     if "bol_batch_name" not in st.session_state:
         st.session_state["bol_batch_name"] = ""
     if "bol_multistop_individual_template_mode" not in st.session_state:
@@ -470,6 +472,7 @@ def _generate_pdf_result(
         bol_type=st.session_state.get("bol_type_selector", "PLT"),
         qty_type=st.session_state.get("bol_qty_type_selector", "PLT"),
         batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
+        render_pickup_number=st.session_state.get("bol_render_pickup_number", "Yes") == "Yes",
         progress_callback=progress_callback,
     )
 
@@ -693,6 +696,18 @@ def render_bol_generator_view() -> None:
         options=["PLT", "Case"],
         index=["PLT", "Case"].index(current_qty_type),
         key="bol_qty_type_selector",
+        on_change=_clear_generation_state,
+    )
+    current_pickup_setting = st.session_state.get("bol_render_pickup_number", "Yes")
+    if current_pickup_setting not in ("Yes", "No"):
+        current_pickup_setting = "Yes"
+        st.session_state["bol_render_pickup_number"] = current_pickup_setting
+    st.radio(
+        "Pick up number",
+        options=["Yes", "No"],
+        horizontal=True,
+        key="bol_render_pickup_number",
+        index=["Yes", "No"].index(current_pickup_setting),
         on_change=_clear_generation_state,
     )
     st.text_input(
@@ -1130,6 +1145,8 @@ def render_bol_generator_view() -> None:
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
                     bol_type=st.session_state.get("bol_type_selector", "PLT"),
                     qty_type=st.session_state.get("bol_qty_type_selector", "PLT"),
+                    render_pickup_number=st.session_state.get("bol_render_pickup_number", "Yes")
+                    == "Yes",
                     template_path=template_path,
                     file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
                 )
@@ -1279,6 +1296,8 @@ def render_bol_generator_view() -> None:
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
                     bol_type=st.session_state.get("bol_type_selector", "PLT"),
                     qty_type=st.session_state.get("bol_qty_type_selector", "PLT"),
+                    render_pickup_number=st.session_state.get("bol_render_pickup_number", "Yes")
+                    == "Yes",
                     template_path=template_path,
                     file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
                 )

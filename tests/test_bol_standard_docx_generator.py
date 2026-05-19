@@ -148,6 +148,26 @@ def test_standard_docx_totals_prefer_total_weight_and_pickup_renders(tmp_path: P
     assert "306" in _totals_row_text(doc)
 
 
+def test_standard_docx_can_suppress_pickup_number_without_changing_record(tmp_path: Path) -> None:
+    record = _ready_record()
+
+    result = generate_standard_docx_set(
+        [record],
+        selected_facility=BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]],
+        bol_type="PLT",
+        qty_type="PLT",
+        render_pickup_number=False,
+        template_path=resolve_template_path_for_mode("Standard"),
+        output_dir=tmp_path,
+        file_name_prefix=resolve_output_filename_prefix_for_mode("Standard"),
+    )
+    doc = Document(result.generated_files[0].file_path)
+
+    assert record.pickup_number == "PU-123"
+    assert "PU-123" not in _document_text(doc)
+    assert "306" in _totals_row_text(doc)
+
+
 def test_standard_docx_renders_carrier_pro_from_load_number_not_kk_load(tmp_path: Path) -> None:
     doc = _generated_docx("Standard", tmp_path, bol_type="PLT", qty_type="PLT")
     text = _document_text(doc)
