@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from openpyxl import load_workbook
 import pandas as pd
 
 from app.models.andersons_label import AndersonsLabel
@@ -162,8 +163,81 @@ def _clean_excel_value(value: Any) -> str:
     return text[:-2] if text.endswith(".0") else text
 
 
-def read_excel_andersons(file: Any) -> list[AndersonsLabel]:
-    df = pd.read_excel(file, dtype=str, sheet_name=0)
+def _reset_file_pointer(file: Any, position: int | None) -> None:
+    if position is not None and hasattr(file, "seek"):
+        file.seek(position)
+
+
+def _current_file_position(file: Any) -> int | None:
+    if not hasattr(file, "tell"):
+        return None
+    try:
+        return file.tell()
+    except Exception:
+        return None
+
+
+def get_excel_sheet_names(uploaded_file: Any) -> list[str]:
+    """Return visible worksheet names in workbook order without consuming the upload."""
+    if uploaded_file is None:
+        raise ValueError("No file uploaded. Upload an Excel file to inspect worksheets.")
+
+    position = _current_file_position(uploaded_file)
+    try:
+        if hasattr(uploaded_file, "seek"):
+            uploaded_file.seek(0)
+        try:
+            workbook = load_workbook(uploaded_file, read_only=True, data_only=True)
+            return [
+                str(worksheet.title)
+                for worksheet in workbook.worksheets
+                if worksheet.sheet_state == "visible"
+            ]
+        except Exception:
+            _reset_file_pointer(uploaded_file, position)
+            try:
+                if hasattr(uploaded_file, "seek"):
+                    uploaded_file.seek(0)
+                workbook = pd.ExcelFile(uploaded_file)
+                return [str(sheet_name) for sheet_name in workbook.sheet_names]
+            except Exception as exc:
+                raise ValueError(
+                    "Could not read Excel worksheets. Upload a valid Excel workbook."
+                ) from exc
+    finally:
+        _reset_file_pointer(uploaded_file, position)
+
+
+def _missing_worksheet_error(
+    worksheet_name: str,
+    available_sheets: list[str],
+) -> ValueError:
+    available_text = ", ".join(available_sheets) if available_sheets else "(none)"
+    return ValueError(
+        f"Worksheet '{worksheet_name}' was not found. Available worksheets: {available_text}."
+    )
+
+
+def parse_andersons_excel(
+    file: Any,
+    worksheet_name: str | None = None,
+) -> list[AndersonsLabel]:
+    position = _current_file_position(file)
+    if worksheet_name is not None:
+        available_sheet_names = get_excel_sheet_names(file)
+        if worksheet_name not in available_sheet_names:
+            raise _missing_worksheet_error(worksheet_name, available_sheet_names)
+
+    try:
+        if hasattr(file, "seek"):
+            file.seek(0)
+        df = pd.read_excel(
+            file,
+            dtype=str,
+            sheet_name=worksheet_name if worksheet_name is not None else 0,
+        )
+    finally:
+        _reset_file_pointer(file, position)
 
     if df.empty:
         raise ValueError("Excel file contains no rows.")
@@ -231,3 +305,9 @@ def read_excel_andersons(file: Any) -> list[AndersonsLabel]:
 
     return labels
 
+
+def read_excel_andersons(
+    file: Any,
+    worksheet_name: str | None = None,
+) -> list[AndersonsLabel]:
+    return parse_andersons_excel(file, worksheet_name=worksheet_name)

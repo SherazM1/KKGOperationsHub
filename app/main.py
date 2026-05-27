@@ -10,6 +10,7 @@ from app.services.excel_reader import read_excel
 from app.services.excel_reader_albertsons import read_excel_albertsons
 from app.services.excel_reader_andersons import (
     ANDERSONS_SHIP_FROM_OPTIONS,
+    get_excel_sheet_names as get_andersons_excel_sheet_names,
     read_excel_andersons,
 )
 from app.services.excel_reader_sams import read_excel_sams
@@ -24,6 +25,66 @@ from app.services.pdf_generator_sams_gci import generate_sams_gci_pdf
 from app.services.pdf_generator_skid_tags import generate_skid_tags_pdf
 from app.ui.bol_generator import render_bol_generator_view
 from app.ui.truck_inventory import render_truck_inventory_view
+
+
+def _uploaded_file_signature(uploaded_file: object) -> tuple[object, ...] | None:
+    if uploaded_file is None:
+        return None
+
+    return (
+        getattr(uploaded_file, "file_id", None),
+        getattr(uploaded_file, "name", None),
+        getattr(uploaded_file, "size", None),
+    )
+
+
+def _default_andersons_worksheet_selection(
+    sheet_names: list[str],
+    previous_selection: str | None,
+) -> str | None:
+    if not sheet_names:
+        return None
+    for candidate in (previous_selection, "Revised LS", "Load Sheet"):
+        if candidate in sheet_names:
+            return candidate
+    return sheet_names[0]
+
+
+def _initialize_andersons_state() -> None:
+    st.session_state.setdefault("andersons_uploaded_file_signature", None)
+    st.session_state.setdefault("andersons_selected_worksheet", None)
+    st.session_state.setdefault("andersons_parsed_worksheet", None)
+    st.session_state.setdefault("andersons_labels", [])
+    st.session_state.setdefault("andersons_parse_error", None)
+    st.session_state.setdefault("andersons_pdf_bytes", None)
+
+
+def _clear_andersons_generated_state() -> None:
+    st.session_state["andersons_pdf_bytes"] = None
+
+
+def _clear_andersons_parsed_state() -> None:
+    st.session_state["andersons_labels"] = []
+    st.session_state["andersons_parsed_worksheet"] = None
+    st.session_state["andersons_parse_error"] = None
+    _clear_andersons_generated_state()
+
+
+def _handle_andersons_file_change(uploaded_file: object) -> None:
+    signature = _uploaded_file_signature(uploaded_file)
+    if st.session_state.get("andersons_uploaded_file_signature") != signature:
+        st.session_state["andersons_uploaded_file_signature"] = signature
+        st.session_state["andersons_selected_worksheet"] = None
+        st.session_state.pop("andersons_selected_worksheet_selectbox", None)
+        _clear_andersons_parsed_state()
+
+
+def _handle_andersons_worksheet_change(selected_worksheet: str) -> None:
+    if st.session_state.get("andersons_selected_worksheet") != selected_worksheet:
+        st.session_state["andersons_selected_worksheet"] = selected_worksheet
+        _clear_andersons_parsed_state()
+    else:
+        st.session_state["andersons_selected_worksheet"] = selected_worksheet
 
 
 def _apply_theme_styles() -> None:
@@ -359,6 +420,8 @@ def render_albertsons_mode() -> None:
 
 def render_andersons_mode() -> None:
     try:
+        _initialize_andersons_state()
+
         st.title("Andersons Label Generator")
         st.write("Upload Andersons Excel to generate one label per parsed row.")
 
@@ -389,11 +452,62 @@ def render_andersons_mode() -> None:
             st.info("Upload an Excel file to begin.")
             return
 
-        labels = read_excel_andersons(uploaded_file)
-        st.success(f"Parsed {len(labels)} Andersons label rows.")
+        _handle_andersons_file_change(uploaded_file)
 
-        if st.button("Generate Andersons PDF", type="primary", key="generate_andersons_pdf"):
-            pdf_bytes = generate_andersons_pdf(labels, ship_from)
+        try:
+            sheet_names = get_andersons_excel_sheet_names(uploaded_file)
+        except ValueError as exc:
+            st.error(f"Validation error: {exc}")
+            return
+
+        selected_worksheet = None
+        if sheet_names:
+            previous_selection = st.session_state.get("andersons_selected_worksheet")
+            default_selection = _default_andersons_worksheet_selection(
+                sheet_names,
+                previous_selection,
+            )
+            selected_worksheet = st.selectbox(
+                "Select worksheet",
+                options=sheet_names,
+                index=sheet_names.index(default_selection),
+                key="andersons_selected_worksheet_selectbox",
+            )
+            _handle_andersons_worksheet_change(selected_worksheet)
+
+        if st.button("Parse Andersons Excel", type="primary", key="parse_andersons_excel"):
+            try:
+                labels = read_excel_andersons(
+                    uploaded_file,
+                    worksheet_name=st.session_state.get("andersons_selected_worksheet"),
+                )
+                st.session_state["andersons_labels"] = labels
+                st.session_state["andersons_parsed_worksheet"] = selected_worksheet
+                st.session_state["andersons_parse_error"] = None
+                _clear_andersons_generated_state()
+            except ValueError as exc:
+                _clear_andersons_parsed_state()
+                st.session_state["andersons_parse_error"] = str(exc)
+
+        if st.session_state.get("andersons_parse_error"):
+            st.error(f"Validation error: {st.session_state['andersons_parse_error']}")
+            return
+
+        labels = st.session_state.get("andersons_labels", [])
+        if labels:
+            parsed_worksheet = st.session_state.get("andersons_parsed_worksheet") or "first worksheet"
+            st.success(
+                f"Parsed {len(labels)} Andersons label rows from worksheet '{parsed_worksheet}'."
+            )
+        else:
+            st.info("Select a worksheet, then parse the Andersons Excel file.")
+            return
+
+        if st.button("Generate Andersons PDF", key="generate_andersons_pdf"):
+            st.session_state["andersons_pdf_bytes"] = generate_andersons_pdf(labels, ship_from)
+
+        pdf_bytes = st.session_state.get("andersons_pdf_bytes")
+        if pdf_bytes:
             st.download_button(
                 label="Download Andersons Labels PDF",
                 data=pdf_bytes,
