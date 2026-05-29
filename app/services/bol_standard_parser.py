@@ -50,6 +50,11 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
         "fallback_aliases": [
             "WM PO#",
             "WM PO",
+            "wm_po",
+            "WM_PO",
+            "wm po",
+            "WMPONumber",
+            "WM_PO_Number",
             "WM PO Number",
             "WM PO No",
             "WM PO No.",
@@ -80,15 +85,24 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
             "PO #",
             "PO#",
             "PO",
+            "P.O.",
+            "P.O. #",
             "PO Number",
+            "P.O. Number",
+            "PONumber",
+            "PO_Number",
             "PO No",
             "PO No.",
+            "P.O. No.",
             "Purchase Order",
             "Purchase Order #",
             "Purchase Order Number",
+            "PurchaseOrderNumber",
+            "Purchase_Order_Number",
             "Customer PO",
             "Customer PO #",
             "Customer PO Number",
+            "Customer P.O. Number",
             "Customer Purchase Order",
             "Customer Purchase Order #",
         ],
@@ -227,7 +241,7 @@ def _normalize_sheet_name(sheet_name: str) -> str:
 
 
 def _normalize_header_compact(header: str) -> str:
-    return _normalize_header(header).replace(" ", "")
+    return re.sub(r"[^A-Z0-9#]+", "", _normalize_header(header))
 
 
 def _build_column_lookups(

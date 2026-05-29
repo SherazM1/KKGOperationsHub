@@ -120,10 +120,14 @@ def test_parse_standard_bol_excel_accepts_csv_upload() -> None:
     ("po_header", "po_value"),
     [
         ("PO Number", "PO-NUMBER-001"),
+        ("wm_po", "WM-SNAKE-001"),
         ("Purchase Order #", "PURCHASE-ORDER-001"),
         ("Customer PO Number", "CUSTOMER-PO-001"),
         ("Target Purchase Order", "TARGET-PO-001"),
         ("Walmart PO No.", "WALMART-PO-001"),
+        ("P.O. Number", "PERIOD-PO-001"),
+        ("PO_Number", "UNDERSCORE-PO-001"),
+        ("PurchaseOrderNumber", "COMPACT-PO-001"),
     ],
 )
 def test_parse_standard_bol_excel_accepts_expanded_po_aliases(
