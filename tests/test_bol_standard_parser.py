@@ -116,6 +116,34 @@ def test_parse_standard_bol_excel_accepts_csv_upload() -> None:
     assert csv_file.tell() == 0
 
 
+@pytest.mark.parametrize(
+    ("po_header", "po_value"),
+    [
+        ("PO Number", "PO-NUMBER-001"),
+        ("Purchase Order #", "PURCHASE-ORDER-001"),
+        ("Customer PO Number", "CUSTOMER-PO-001"),
+        ("Target Purchase Order", "TARGET-PO-001"),
+        ("Walmart PO No.", "WALMART-PO-001"),
+    ],
+)
+def test_parse_standard_bol_excel_accepts_expanded_po_aliases(
+    po_header: str,
+    po_value: str,
+) -> None:
+    row = _standard_load_row()
+    row[po_header] = row.pop("TGT PO #")
+    row[po_header] = po_value
+    row["BOL #"] = ""
+
+    csv_file = _csv_with_rows([row])
+
+    rows = parse_standard_bol_excel(csv_file)
+
+    assert len(rows) == 1
+    assert rows[0].wm_po == po_value
+    assert rows[0].bol_number == po_value
+
+
 def test_parse_standard_bol_excel_falls_back_to_header_based_sheet_detection() -> None:
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
