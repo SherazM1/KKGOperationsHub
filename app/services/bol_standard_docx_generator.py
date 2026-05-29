@@ -1023,6 +1023,7 @@ def generate_standard_docx_set(
     template_path: Path | None = None,
     output_dir: Path | None = None,
     file_name_prefix: str = "standard_bol",
+    allow_incomplete_records: bool = False,
 ) -> StandardDocxGenerationResult:
     if selected_facility is None:
         raise ValueError(
@@ -1052,7 +1053,7 @@ def generate_standard_docx_set(
             record.generation_skip_reason = reason
             skipped.append(SkippedDocxRecord(bol_number=bol_label, reason=reason))
             continue
-        if not record.is_ready:
+        if not record.is_ready and not allow_incomplete_records:
             reason = "Record is not ready for DOCX generation."
             if record.missing_required_fields:
                 reason = "Missing required data: " + ", ".join(record.missing_required_fields)
@@ -1112,6 +1113,8 @@ def generate_standard_docx_set(
             failed.append(FailedDocxRecord(bol_number=bol_label, error=str(exc)))
 
     if not generated and not failed:
+        if allow_incomplete_records:
+            raise ValueError("No selected records are available for DOCX generation.")
         raise ValueError("No selected and ready records are available for DOCX generation.")
 
     return StandardDocxGenerationResult(

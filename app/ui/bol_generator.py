@@ -1059,7 +1059,7 @@ def render_bol_generator_view() -> None:
         selected_records = sum(
             1
             for record in grouped_records
-            if record.selected_for_generation and record.is_ready
+            if record.selected_for_generation
         )
 
         metric_cols = st.columns(4)
@@ -1078,16 +1078,13 @@ def render_bol_generator_view() -> None:
 
     st.subheader("Generate")
     selected_records_total = sum(1 for record in grouped_records if record.selected_for_generation)
-    selected_ready_records = sum(
-        1
-        for record in grouped_records
-        if record.selected_for_generation and record.is_ready
-    )
 
     if grouped_records and selected_records_total == 0:
         st.warning("No records are selected for generation.")
-    elif grouped_records and selected_records_total > 0 and selected_ready_records == 0:
-        st.warning("Selected records exist, but none are ready for generation. Resolve missing data first.")
+    elif grouped_records and any(
+        record.selected_for_generation and not record.is_ready for record in grouped_records
+    ):
+        st.warning("Selected records include missing data. Generation will continue with blanks.")
 
     docx_generation_mode_supported = st.session_state["bol_mode"] in (
         "Standard",
@@ -1106,7 +1103,7 @@ def render_bol_generator_view() -> None:
     )
 
     generate_docx_disabled = (not docx_generation_mode_supported) or not any(
-        record.selected_for_generation and record.is_ready for record in grouped_records
+        record.selected_for_generation for record in grouped_records
     )
 
     if st.session_state["bol_mode"] == "Multistop":
@@ -1146,6 +1143,7 @@ def render_bol_generator_view() -> None:
                         individual_template_mode
                     ),
                     file_name_prefix="multistop_bol",
+                    allow_incomplete_records=True,
                 )
             else:
                 _, template_path = _resolve_generation_context()
@@ -1159,6 +1157,7 @@ def render_bol_generator_view() -> None:
                     == "Yes",
                     template_path=template_path,
                     file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
+                    allow_incomplete_records=True,
                 )
             st.session_state["bol_docx_result"] = result
             _remember_generation_output_dir(result.output_dir)
@@ -1297,6 +1296,7 @@ def render_bol_generator_view() -> None:
                         individual_template_mode
                     ),
                     file_name_prefix="multistop_bol",
+                    allow_incomplete_records=True,
                 )
             else:
                 _, template_path = _resolve_generation_context()
@@ -1310,6 +1310,7 @@ def render_bol_generator_view() -> None:
                     == "Yes",
                     template_path=template_path,
                     file_name_prefix=resolve_output_filename_prefix_for_mode(mode),
+                    allow_incomplete_records=True,
                 )
             st.session_state["bol_docx_result"] = docx_result_all
             _remember_generation_output_dir(docx_result_all.output_dir)
@@ -1524,7 +1525,6 @@ def render_bol_generator_view() -> None:
                 "docx_generation_failures": docx_result.failed_count,
                 "docx_generation_notices": len(docx_result.notices),
                 "selected_records_total": selected_records_total,
-                "selected_ready_records": selected_ready_records,
                 "selected_facility": st.session_state["bol_selected_facility"],
             }
         )
