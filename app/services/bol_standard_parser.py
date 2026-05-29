@@ -27,6 +27,7 @@ LOAD_SHEET_NOT_FOUND_MESSAGE = (
     "Carrier, DC #, TGT PO #, UPC, and Total Weight."
 )
 STREAMING_BLANK_ROW_LIMIT = 100
+CSV_WORKSHEET_NAME = "CSV"
 
 REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
     "bol_number": {"primary": "BOL #", "fallback_aliases": []},
@@ -427,6 +428,16 @@ def _missing_worksheet_error(worksheet_name: str, available_sheets: list[str]) -
     )
 
 
+def is_csv_upload(file: Any) -> bool:
+    """Return True when the uploaded BOL source appears to be a CSV file."""
+    filename = str(getattr(file, "name", "") or "")
+    content_type = str(getattr(file, "type", "") or getattr(file, "content_type", "") or "")
+    return filename.lower().endswith(".csv") or content_type.lower() in {
+        "text/csv",
+        "application/csv",
+    }
+
+
 def get_excel_sheet_names(file: Any) -> list[str]:
     """Return visible worksheet names in workbook order without consuming the upload stream."""
     if file is None:
@@ -666,12 +677,106 @@ def _parse_standard_bol_excel_openpyxl(
         workbook.close()
 
 
+def _parse_standard_dataframe_rows(
+    df: pd.DataFrame,
+    column_map: dict[str, str],
+    kk_load_columns: list[str],
+) -> list[BolStandardRow]:
+    parsed_rows: list[BolStandardRow] = []
+
+    for index, row in df.iterrows():
+        row_number = int(index) + 2  # Source row with header on row 1.
+
+        row_values = {
+            key: _coerce_to_string(row[source_column])
+            for key, source_column in column_map.items()
+        }
+
+        if not any(row_values.values()):
+            continue
+
+        parsed_rows.append(
+            BolStandardRow(
+                source_row_number=row_number,
+                bol_number=_effective_bol_number(row_values),
+                ship_date=row_values["ship_date"],
+                carrier=row_values["carrier"],
+                kk_load=_effective_kk_load(row, kk_load_columns),
+                kk_po=row_values["kk_po"],
+                wm_po=row_values["wm_po"],
+                dc_number=row_values["dc_number"],
+                dc_name=row_values["dc_name"],
+                dc_street=row_values["dc_street"],
+                dc_city_state_zip=_combine_city_state_zip(row, column_map),
+                item_number=row_values["item_number"],
+                upc=row_values["upc"],
+                item_description=row_values["item_description"],
+                unit_qty=row_values["unit_qty"],
+                plt_qty=row_values["plt_qty"],
+                weight_each=row_values["weight_each"],
+                total_weight=row_values.get("total_weight", ""),
+                pickup_number=row_values.get("pickup_number", ""),
+                carrier_pro_number=row_values.get("carrier_pro_number", ""),
+            )
+        )
+
+    return parsed_rows
+
+
+def _parse_standard_bol_csv(file: Any) -> list[BolStandardRow]:
+    started_at = perf_counter()
+    file.seek(0)
+    try:
+        df = pd.read_csv(file, dtype=object)
+    except UnicodeDecodeError:
+        file.seek(0)
+        df = pd.read_csv(file, dtype=object, encoding="utf-8-sig")
+    csv_loaded_at = perf_counter()
+    print(
+        "BOL parse timing: csv_load="
+        f"{csv_loaded_at - started_at:.3f}s rows={len(df)} columns={len(df.columns)}"
+    )
+
+    if df.empty:
+        raise ValueError("CSV file contains no rows.")
+
+    column_map = _resolve_columns(df.columns.tolist(), worksheet_name=CSV_WORKSHEET_NAME)
+    header_resolved_at = perf_counter()
+    print(
+        "BOL parse timing: csv_header_resolution="
+        f"{header_resolved_at - csv_loaded_at:.3f}s"
+    )
+
+    kk_load_columns = _resolve_kk_load_columns(df.columns.tolist())
+    parsed_rows = _parse_standard_dataframe_rows(
+        df,
+        column_map=column_map,
+        kk_load_columns=kk_load_columns,
+    )
+
+    if not parsed_rows:
+        raise ValueError("No non-empty data rows found in CSV file.")
+
+    rows_parsed_at = perf_counter()
+    print(
+        "BOL parse timing: csv_row_parse="
+        f"{rows_parsed_at - header_resolved_at:.3f}s parsed_rows={len(parsed_rows)} "
+        f"total={rows_parsed_at - started_at:.3f}s"
+    )
+
+    file.seek(0)
+    return parsed_rows
+
+
 def parse_standard_bol_excel(
     file: Any,
     worksheet_name: str | None = None,
 ) -> list[BolStandardRow]:
     if file is None:
-        raise ValueError("No file uploaded. Upload an Excel file to parse.")
+        raise ValueError("No file uploaded. Upload an Excel or CSV file to parse.")
+
+    if is_csv_upload(file):
+        return _parse_standard_bol_csv(file)
 
     try:
         return _parse_standard_bol_excel_openpyxl(file, worksheet_name=worksheet_name)
@@ -719,43 +824,11 @@ def parse_standard_bol_excel(
 
     kk_load_columns = _resolve_kk_load_columns(df.columns.tolist())
 
-    parsed_rows: list[BolStandardRow] = []
-
-    for index, row in df.iterrows():
-        row_number = index + 2  # Excel row with header on row 1.
-
-        row_values = {
-            key: _coerce_to_string(row[source_column])
-            for key, source_column in column_map.items()
-        }
-
-        if not any(row_values.values()):
-            continue
-
-        parsed_rows.append(
-            BolStandardRow(
-                source_row_number=row_number,
-                bol_number=_effective_bol_number(row_values),
-                ship_date=row_values["ship_date"],
-                carrier=row_values["carrier"],
-                kk_load=_effective_kk_load(row, kk_load_columns),
-                kk_po=row_values["kk_po"],
-                wm_po=row_values["wm_po"],
-                dc_number=row_values["dc_number"],
-                dc_name=row_values["dc_name"],
-                dc_street=row_values["dc_street"],
-                dc_city_state_zip=_combine_city_state_zip(row, column_map),
-                item_number=row_values["item_number"],
-                upc=row_values["upc"],
-                item_description=row_values["item_description"],
-                unit_qty=row_values["unit_qty"],
-                plt_qty=row_values["plt_qty"],
-                weight_each=row_values["weight_each"],
-                total_weight=row_values.get("total_weight", ""),
-                pickup_number=row_values.get("pickup_number", ""),
-                carrier_pro_number=row_values.get("carrier_pro_number", ""),
-            )
-        )
+    parsed_rows = _parse_standard_dataframe_rows(
+        df,
+        column_map=column_map,
+        kk_load_columns=kk_load_columns,
+    )
 
     if not parsed_rows:
         raise ValueError(f"No non-empty data rows found in '{resolved_sheet_name}'.")

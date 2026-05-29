@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 from app.models.bol_multistop_row import BolMultistopRow
+from app.services.bol_standard_parser import is_csv_upload
 
 
 MULTISTOP_SHEET_NAME_VARIANTS: tuple[str, ...] = (
@@ -51,6 +52,7 @@ REQUIRED_COLUMN_SPECS: dict[str, str] = {
 OPTIONAL_COLUMN_SPECS: dict[str, tuple[str, ...]] = {
     "item_number": ("ITEM #", "Item #", "ITEM#", "Item#", "Item Number", "ITEM NUMBER"),
 }
+CSV_WORKSHEET_NAME = "CSV"
 
 
 def _normalize_header(header: str) -> str:
@@ -227,24 +229,14 @@ def _parse_stop_number(value: str) -> int | None:
     return int(parsed)
 
 
-def parse_multistop_bol_excel(file: Any) -> list[BolMultistopRow]:
-    if file is None:
-        raise ValueError("No file uploaded. Upload an Excel file to parse.")
-
-    resolved_sheet_name = _resolve_multistop_sheet_name(file)
-    file.seek(0)
-    df = pd.read_excel(file, sheet_name=resolved_sheet_name, dtype=object)
-
-    if df.empty:
-        raise ValueError(f"Worksheet '{resolved_sheet_name}' contains no rows.")
-
-    columns = df.columns.tolist()
-    column_map = _resolve_columns(columns, worksheet_name=resolved_sheet_name)
-    optional_column_map = _resolve_optional_columns(columns)
-
+def _parse_multistop_dataframe_rows(
+    df: pd.DataFrame,
+    column_map: dict[str, str],
+    optional_column_map: dict[str, str],
+) -> list[BolMultistopRow]:
     parsed_rows: list[BolMultistopRow] = []
     for index, row in df.iterrows():
-        row_number = index + 2
+        row_number = int(index) + 2
         row_values = {
             key: _coerce_to_string(row[source_column])
             for key, source_column in column_map.items()
@@ -289,6 +281,60 @@ def parse_multistop_bol_excel(file: Any) -> list[BolMultistopRow]:
                 weight=row_values["weight"],
             )
         )
+
+    return parsed_rows
+
+
+def _parse_multistop_bol_csv(file: Any) -> list[BolMultistopRow]:
+    file.seek(0)
+    try:
+        df = pd.read_csv(file, dtype=object)
+    except UnicodeDecodeError:
+        file.seek(0)
+        df = pd.read_csv(file, dtype=object, encoding="utf-8-sig")
+
+    if df.empty:
+        raise ValueError("CSV file contains no rows.")
+
+    columns = df.columns.tolist()
+    column_map = _resolve_columns(columns, worksheet_name=CSV_WORKSHEET_NAME)
+    optional_column_map = _resolve_optional_columns(columns)
+    parsed_rows = _parse_multistop_dataframe_rows(
+        df,
+        column_map=column_map,
+        optional_column_map=optional_column_map,
+    )
+
+    if not parsed_rows:
+        raise ValueError("No non-empty data rows found in CSV file.")
+
+    file.seek(0)
+    return parsed_rows
+
+
+def parse_multistop_bol_excel(file: Any) -> list[BolMultistopRow]:
+    if file is None:
+        raise ValueError("No file uploaded. Upload an Excel or CSV file to parse.")
+
+    if is_csv_upload(file):
+        return _parse_multistop_bol_csv(file)
+
+    resolved_sheet_name = _resolve_multistop_sheet_name(file)
+    file.seek(0)
+    df = pd.read_excel(file, sheet_name=resolved_sheet_name, dtype=object)
+
+    if df.empty:
+        raise ValueError(f"Worksheet '{resolved_sheet_name}' contains no rows.")
+
+    columns = df.columns.tolist()
+    column_map = _resolve_columns(columns, worksheet_name=resolved_sheet_name)
+    optional_column_map = _resolve_optional_columns(columns)
+
+    parsed_rows = _parse_multistop_dataframe_rows(
+        df,
+        column_map=column_map,
+        optional_column_map=optional_column_map,
+    )
 
     if not parsed_rows:
         raise ValueError(f"No non-empty data rows found in '{resolved_sheet_name}'.")

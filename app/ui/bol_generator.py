@@ -37,7 +37,11 @@ from app.services.bol_standard_docx_generator import (
 from app.services.bol_standard_mapper import map_standard_rows_to_records
 from app.services.bol_standard_pdf_converter import StandardPdfConversionResult
 from app.services.bol_pdf_template_stamper import stamp_bol_pdf_set
-from app.services.bol_standard_parser import get_excel_sheet_names, parse_standard_bol_excel
+from app.services.bol_standard_parser import (
+    get_excel_sheet_names,
+    is_csv_upload,
+    parse_standard_bol_excel,
+)
 from app.utils.bol_facilities import (
     BOL_FACILITY_LOOKUP,
     BOL_FACILITY_OPTIONS,
@@ -758,17 +762,17 @@ def render_bol_generator_view() -> None:
                 _clear_input_state(delete_files=False)
                 st.session_state["bol_uploaded_doc_filename"] = uploaded_doc_file.name
     else:
-        st.caption("Accepted file types: .xlsx, .xlsm, .xls")
+        st.caption("Accepted file types: .xlsx, .xlsm, .xls, .csv")
         uploaded_file = st.file_uploader(
-            "Upload Excel input",
-            type=["xlsx", "xlsm", "xls"],
+            "Upload Excel or CSV input",
+            type=["xlsx", "xlsm", "xls", "csv"],
             key="bol_excel_uploader",
         )
 
         previous_filename = st.session_state["bol_uploaded_filename"]
         previous_file_signature = st.session_state["bol_uploaded_file_signature"]
         if uploaded_file is None:
-            st.info("No Excel file uploaded yet.")
+            st.info("No Excel or CSV file uploaded yet.")
             st.session_state["bol_uploaded_filename"] = None
             st.session_state["bol_uploaded_file_signature"] = None
             st.session_state["bol_selected_worksheet"] = None
@@ -788,6 +792,7 @@ def render_bol_generator_view() -> None:
             current_file_signature = _uploaded_file_signature(uploaded_file)
             st.session_state["bol_uploaded_file_signature"] = current_file_signature
             st.success(f"Uploaded file: {uploaded_file.name}")
+            uploaded_file_is_csv = is_csv_upload(uploaded_file)
             if previous_file_signature != current_file_signature:
                 st.session_state["bol_parsed_rows"] = []
                 st.session_state["bol_grouped_records"] = []
@@ -803,7 +808,10 @@ def render_bol_generator_view() -> None:
                 st.session_state["bol_selected_worksheet"] = None
                 st.session_state.pop("bol_selected_worksheet_selectbox", None)
 
-            if st.session_state["bol_mode"] in ("Standard", "No Recourse"):
+            if uploaded_file_is_csv:
+                st.session_state["bol_selected_worksheet"] = None
+                st.session_state.pop("bol_selected_worksheet_selectbox", None)
+            elif st.session_state["bol_mode"] in ("Standard", "No Recourse"):
                 try:
                     sheet_names = get_excel_sheet_names(uploaded_file)
                 except ValueError as exc:
@@ -847,7 +855,7 @@ def render_bol_generator_view() -> None:
         st.caption("Choose one ship-from facility for the current uploaded batch.")
 
         if uploaded_file is None:
-            st.info("Upload an Excel file to select a facility for this batch.")
+            st.info("Upload an Excel or CSV file to select a facility for this batch.")
         else:
             current_label = st.session_state.get("bol_selected_facility_label")
             if current_label not in BOL_FACILITY_LOOKUP:
@@ -889,7 +897,7 @@ def render_bol_generator_view() -> None:
         if input_source == "Doc upload"
         else st.session_state["bol_uploaded_filename"] is None
     )
-    parse_button_label = "Parse Doc" if input_source == "Doc upload" else "Parse Excel"
+    parse_button_label = "Parse Doc" if input_source == "Doc upload" else "Parse File"
     if st.button(parse_button_label, disabled=parse_disabled):
         parse_started_at = perf_counter()
         _prepare_parse_state()
@@ -942,6 +950,8 @@ def render_bol_generator_view() -> None:
             st.session_state["bol_parsed_worksheet"] = (
                 None
                 if input_source == "Doc upload" or selected_mode == "Multistop"
+                else "CSV"
+                if uploaded_file is not None and is_csv_upload(uploaded_file)
                 else st.session_state.get("bol_selected_worksheet")
             )
             _sync_review_state(st.session_state["bol_grouped_records"])

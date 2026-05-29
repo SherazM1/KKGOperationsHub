@@ -54,6 +54,14 @@ def _workbook_with_sheets(sheets: list[tuple[str, list[dict[str, object]]]]) -> 
     return output
 
 
+def _csv_with_rows(rows: list[dict[str, object]], name: str = "load-sheet.csv") -> BytesIO:
+    output = BytesIO()
+    output.write(pd.DataFrame(rows).to_csv(index=False).encode("utf-8"))
+    output.seek(0)
+    output.name = name
+    return output
+
+
 def test_get_excel_sheet_names_returns_visible_sheets_in_workbook_order() -> None:
     workbook = _workbook_with_sheets(
         [
@@ -93,6 +101,19 @@ def test_parse_standard_bol_excel_accepts_load_sheet_with_trailing_space() -> No
     assert len(rows) == 1
     assert rows[0].wm_po == "TGT-001"
     assert rows[0].dc_city_state_zip == "Dallas, TX 75001"
+
+
+def test_parse_standard_bol_excel_accepts_csv_upload() -> None:
+    csv_file = _csv_with_rows([_standard_load_row()])
+
+    rows = parse_standard_bol_excel(csv_file)
+
+    assert len(rows) == 1
+    assert rows[0].bol_number == "BOL-001"
+    assert rows[0].upc == "000111222333"
+    assert rows[0].total_weight == "100"
+    assert rows[0].carrier_pro_number == "LOAD-001"
+    assert csv_file.tell() == 0
 
 
 def test_parse_standard_bol_excel_falls_back_to_header_based_sheet_detection() -> None:
