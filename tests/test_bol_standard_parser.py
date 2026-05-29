@@ -128,6 +128,8 @@ def test_parse_standard_bol_excel_accepts_csv_upload() -> None:
         ("P.O. Number", "PERIOD-PO-001"),
         ("PO_Number", "UNDERSCORE-PO-001"),
         ("PurchaseOrderNumber", "COMPACT-PO-001"),
+        ("Cust_Order_PO_Value", "GENERIC-PO-001"),
+        ("RETAILER", "RETAILER-001"),
     ],
 )
 def test_parse_standard_bol_excel_accepts_expanded_po_aliases(
@@ -146,6 +148,22 @@ def test_parse_standard_bol_excel_accepts_expanded_po_aliases(
     assert len(rows) == 1
     assert rows[0].wm_po == po_value
     assert rows[0].bol_number == po_value
+
+
+def test_parse_standard_bol_excel_allows_missing_wm_po_column() -> None:
+    row = _standard_load_row()
+    row.pop("TGT PO #")
+    row["BOL #"] = ""
+
+    csv_file = _csv_with_rows([row])
+
+    rows = parse_standard_bol_excel(csv_file)
+    records = map_standard_rows_to_records(rows)
+
+    assert len(rows) == 1
+    assert rows[0].wm_po == ""
+    assert records[0].bol_number == ""
+    assert "WM PO #" in records[0].missing_required_fields
 
 
 def test_parse_standard_bol_excel_falls_back_to_header_based_sheet_detection() -> None:

@@ -60,6 +60,12 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
             "WM PO No.",
             "WM Purchase Order",
             "WM Purchase Order #",
+            "RETAILER",
+            "Retailer",
+            "retailer",
+            "Retailer #",
+            "Retailer Number",
+            "Retailer Name",
             "Walmart PO #",
             "Walmart PO#",
             "Walmart PO",
@@ -309,6 +315,61 @@ def _resolve_plt_qty_column(
     return _resolve_column_name(lookups, "QTY", PLT_QTY_GENERIC_ALIASES[1:])
 
 
+def _is_generic_wm_po_candidate(column: str) -> bool:
+    normalized = _normalize_header(column)
+    compact = _normalize_header_compact(column)
+
+    if compact in {
+        "KKPO",
+        "KKPO#",
+        "KKPONUMBER",
+        "KKPURCHASEORDER",
+        "KKPURCHASEORDER#",
+        "BOL",
+        "BOL#",
+        "BOLNUMBER",
+    }:
+        return False
+
+    if "PO" not in compact and "PURCHASEORDER" not in compact and compact != "RETAILER":
+        return False
+
+    return any(
+        marker in normalized or marker in compact
+        for marker in (
+            "PO",
+            "P.O",
+            "PURCHASE ORDER",
+            "PURCHASEORDER",
+            "WM",
+            "WALMART",
+            "TGT",
+            "TARGET",
+            "CUSTOMER",
+            "CUST",
+            "ORDER",
+            "RETAILER",
+        )
+    )
+
+
+def _resolve_wm_po_column(
+    columns: list[str],
+    lookups: tuple[dict[str, str], dict[str, str], dict[str, str]],
+    primary: str,
+    aliases: list[str],
+) -> str | None:
+    resolved_name = _resolve_column_name(lookups, primary, aliases)
+    if resolved_name is not None:
+        return resolved_name
+
+    for column in columns:
+        if _is_generic_wm_po_candidate(column):
+            return column
+
+    return None
+
+
 def _resolve_total_weight_column(
     lookups: tuple[dict[str, str], dict[str, str], dict[str, str]],
     worksheet_name: str,
@@ -346,12 +407,21 @@ def _resolve_columns_with_missing(
         if logical_name == "kk_load":
             kk_load_columns = _resolve_kk_load_columns(resolved_columns, lookups)
             resolved_name = kk_load_columns[0] if kk_load_columns else None
+        elif logical_name == "wm_po":
+            resolved_name = _resolve_wm_po_column(
+                resolved_columns,
+                lookups,
+                primary,
+                fallback_aliases,
+            )
         elif logical_name == "plt_qty":
             resolved_name = _resolve_plt_qty_column(lookups)
         else:
             resolved_name = _resolve_column_name(lookups, primary, fallback_aliases)
 
         if resolved_name is None:
+            if logical_name == "wm_po":
+                continue
             if logical_name == "dc_city_state_zip":
                 component_columns = _resolve_dc_city_state_zip_components(lookups)
                 if len(component_columns) == len(DC_CITY_STATE_ZIP_COMPONENT_SPECS):
@@ -383,9 +453,11 @@ def _resolve_columns_with_missing(
 def _resolve_columns(columns: list[str], worksheet_name: str) -> dict[str, str]:
     resolved, missing = _resolve_columns_with_missing(columns, worksheet_name)
     if missing:
+        detected_headers = ", ".join(str(col) for col in columns)
         raise ValueError(
             f"Missing required columns in '{worksheet_name}': "
             + "; ".join(missing)
+            + f". Detected headers: [{detected_headers}]"
         )
 
     return resolved
@@ -605,6 +677,7 @@ def _iter_openpyxl_standard_rows(
             row_values[f"kk_load::{source_column}"] = _coerce_to_string(
                 values[index] if index < len(values) else None
             )
+        row_values.setdefault("wm_po", "")
 
         if not any(row_values.values()):
             if found_data:
@@ -741,6 +814,7 @@ def _parse_standard_dataframe_rows(
             key: _coerce_to_string(row[source_column])
             for key, source_column in column_map.items()
         }
+        row_values.setdefault("wm_po", "")
 
         if not any(row_values.values()):
             continue
