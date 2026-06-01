@@ -21,6 +21,18 @@ COLUMN_MAP = {
     "upc": ["UPC #", "UPC#", "UPC", "Upc", "upc #", "upc"],
     "description": ["Description"],
     "quantity": ["Quantity", "Qty", "QTY", "Qty."],
+    "dc_value": [
+        "DC CODE",
+        "DC Code",
+        "DC code",
+        "DCCODE",
+        "DC_CODE",
+        "DC #",
+        "DC#",
+        "DC",
+        "Distribution Center Code",
+        "Distribution Center",
+    ],
 }
 
 REQUIRED_LOGICAL_COLUMNS = {
@@ -134,6 +146,11 @@ def read_excel_albertsons(
             if "quantity" in column_map
             else ""
         )
+        dc_value = (
+            _coerce_to_string(row[column_map["dc_value"]])
+            if "dc_value" in column_map
+            else "WNCA"
+        )
 
         if not any(
             [
@@ -170,7 +187,7 @@ def read_excel_albertsons(
                 description=description,
                 quantity=quantity,
                 dc_label="DC#",
-                dc_value="WNCA",
+                dc_value=dc_value or "WNCA",
                 carton_number="1",
             )
         )

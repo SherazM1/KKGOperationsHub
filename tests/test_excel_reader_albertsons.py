@@ -52,6 +52,26 @@ def test_read_excel_albertsons_preserves_text_upc_leading_zeroes() -> None:
     assert labels[0].upc == "003980000000"
 
 
+def test_read_excel_albertsons_reads_dc_code_column() -> None:
+    labels = read_excel_albertsons(_excel_file([_base_row(**{"DC CODE": "SWCA"})]))
+
+    assert labels[0].dc_label == "DC#"
+    assert labels[0].dc_value == "SWCA"
+
+
+@pytest.mark.parametrize("dc_header", ["DC#", "DC_CODE", "Distribution Center Code"])
+def test_read_excel_albertsons_reads_dc_code_aliases(dc_header: str) -> None:
+    labels = read_excel_albertsons(_excel_file([_base_row(**{dc_header: "NWCA"})]))
+
+    assert labels[0].dc_value == "NWCA"
+
+
+def test_read_excel_albertsons_defaults_dc_value_when_column_missing() -> None:
+    labels = read_excel_albertsons(_excel_file([_base_row()]))
+
+    assert labels[0].dc_value == "WNCA"
+
+
 def test_read_excel_albertsons_upc_mode_requires_upc_column() -> None:
     with pytest.raises(
         ValueError,
