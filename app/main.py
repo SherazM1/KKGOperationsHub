@@ -23,6 +23,7 @@ from app.services.pdf_generator import generate_label_pdf
 from app.services.pdf_generator_sams import generate_sams_pdf
 from app.services.pdf_generator_sams_gci import generate_sams_gci_pdf
 from app.services.pdf_generator_skid_tags import generate_skid_tags_pdf
+from app.spec_sheet_extractor.page import render_spec_sheet_extractor_view
 from app.ui.bol_generator import render_bol_generator_view
 from app.ui.truck_inventory import render_truck_inventory_view
 
@@ -558,6 +559,9 @@ def render_home() -> None:
     if st.button("Truck Inventory", use_container_width=True):
         st.session_state["page"] = "inventory"
 
+    if st.button("Spec Sheet Extractor", use_container_width=True):
+        st.session_state["page"] = "spec_sheet_extractor"
+
 
 def render_label_maker() -> None:
     if st.button("← Back to Home"):
@@ -690,6 +694,10 @@ def main() -> None:
         _apply_theme_styles()
         render_hub_header()
         render_truck_inventory_view()
+    elif st.session_state["page"] == "spec_sheet_extractor":
+        _apply_theme_styles()
+        render_hub_header()
+        render_spec_sheet_extractor_view()
 
 
 if __name__ == "__main__":
