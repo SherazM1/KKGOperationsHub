@@ -2,11 +2,66 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 import streamlit as st
+
+from app.spec_sheet_extractor.extractor import inventory_pdf_uploads
+from app.spec_sheet_extractor.models import PdfFileInventoryResult, PdfPageInventoryRecord
+
+
+def _clear_inventory_state() -> None:
+    st.session_state["spec_sheet_extractor_uploaded_files"] = []
+    st.session_state["spec_sheet_extractor_upload_signature"] = None
+    st.session_state["spec_sheet_extractor_file_results"] = []
+    st.session_state["spec_sheet_extractor_page_inventory"] = []
+
+
+def _upload_signature(uploaded_files: list[object]) -> tuple[tuple[object, ...], ...]:
+    return tuple(
+        (
+            getattr(uploaded_file, "file_id", None),
+            getattr(uploaded_file, "name", None),
+            getattr(uploaded_file, "size", None),
+        )
+        for uploaded_file in uploaded_files
+    )
+
+
+def _initialize_spec_sheet_extractor_state() -> None:
+    st.session_state.setdefault("spec_sheet_extractor_uploaded_files", [])
+    st.session_state.setdefault("spec_sheet_extractor_upload_signature", None)
+    st.session_state.setdefault("spec_sheet_extractor_file_results", [])
+    st.session_state.setdefault("spec_sheet_extractor_page_inventory", [])
+
+
+def _file_summary_rows(file_results: list[PdfFileInventoryResult]) -> list[dict[str, object]]:
+    return [
+        {
+            "Filename": result.source_filename,
+            "Page Count": result.page_count,
+            "Status": result.status,
+            "Error": result.error_message or "",
+        }
+        for result in file_results
+    ]
+
+
+def _page_preview_rows(page_inventory: list[PdfPageInventoryRecord]) -> list[dict[str, object]]:
+    return [
+        {
+            "Source File": record.source_filename,
+            "Page Number": record.page_number,
+            "Status": record.status,
+        }
+        for record in page_inventory
+    ]
 
 
 def render_spec_sheet_extractor_view() -> None:
     """Render the initial placeholder page for the Spec Sheet Extractor."""
+    _initialize_spec_sheet_extractor_state()
+
     if st.button("<- Back to Home", key="spec_sheet_extractor_back_button"):
         st.session_state["page"] = "home"
         st.stop()
@@ -16,12 +71,62 @@ def render_spec_sheet_extractor_view() -> None:
         "Upload one or more Kendal King spec-sheet PDFs and export one Excel "
         "row per PDF page."
     )
+    st.info("Each PDF page will become one Excel row in the final export.")
 
-    st.file_uploader(
+    uploaded_files = st.file_uploader(
         "Upload spec-sheet PDFs",
         type=["pdf"],
         accept_multiple_files=True,
-        disabled=True,
-        key="spec_sheet_extractor_pdf_uploader",
+        key="spec_sheet_extractor_pdf_uploads",
     )
-    st.info("PDF extraction and Excel export will be added in a future step.")
+
+    if not uploaded_files:
+        _clear_inventory_state()
+        st.info("Upload one or more PDF files to inventory pages.")
+        return
+
+    signature = _upload_signature(uploaded_files)
+    if st.session_state.get("spec_sheet_extractor_upload_signature") != signature:
+        file_results, page_inventory = inventory_pdf_uploads(uploaded_files)
+        st.session_state["spec_sheet_extractor_uploaded_files"] = [
+            uploaded_file.name for uploaded_file in uploaded_files
+        ]
+        st.session_state["spec_sheet_extractor_upload_signature"] = signature
+        st.session_state["spec_sheet_extractor_file_results"] = [
+            asdict(result) for result in file_results
+        ]
+        st.session_state["spec_sheet_extractor_page_inventory"] = [
+            asdict(record) for record in page_inventory
+        ]
+
+    file_results = [
+        PdfFileInventoryResult(**result)
+        for result in st.session_state["spec_sheet_extractor_file_results"]
+    ]
+    page_inventory = [
+        PdfPageInventoryRecord(**record)
+        for record in st.session_state["spec_sheet_extractor_page_inventory"]
+    ]
+
+    uploaded_count = len(uploaded_files)
+    valid_count = sum(1 for result in file_results if result.status == "Ready")
+    failed_count = sum(1 for result in file_results if result.status == "Failed")
+    total_pages = sum(result.page_count for result in file_results if result.status == "Ready")
+
+    summary_columns = st.columns(4)
+    summary_columns[0].metric("Uploaded Files", uploaded_count)
+    summary_columns[1].metric("Valid PDFs", valid_count)
+    summary_columns[2].metric("Total Pages", total_pages)
+    summary_columns[3].metric("Failed PDFs", failed_count)
+
+    if failed_count:
+        st.warning(f"{failed_count} PDF file(s) could not be read.")
+
+    st.subheader("File Inventory")
+    st.dataframe(_file_summary_rows(file_results), use_container_width=True, hide_index=True)
+
+    st.subheader("Page Preview")
+    if page_inventory:
+        st.dataframe(_page_preview_rows(page_inventory), use_container_width=True, hide_index=True)
+    else:
+        st.info("No readable PDF pages were found.")
