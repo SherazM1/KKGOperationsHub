@@ -258,7 +258,7 @@ def test_multi_page_extraction_preserves_order() -> None:
 
 
 def test_rotation_normalization_uses_same_header_zones() -> None:
-    values = {**_representative_values(), "Customer": "Rotated Customer"}
+    values = {**_representative_values(), "Customer": "Rotated Customer", "Date": "02/20/2026"}
 
     results = extract_header_fields_from_uploads(
         [UploadedFileStub("rotated.pdf", _rotated_storage_header_pdf_bytes([values]))]
@@ -267,6 +267,7 @@ def test_rotation_normalization_uses_same_header_zones() -> None:
     assert results[0].extraction_status == "Extracted"
     assert results[0].customer == "Rotated Customer"
     assert results[0].blank_width == "53+9/16"
+    assert results[0].date == "02/20/2026"
 
 
 def test_real_coordinate_transformations_use_current_and_text_matrices() -> None:
@@ -310,7 +311,7 @@ def test_blank_id_field_remains_blank() -> None:
     )
 
     assert results[0].id == ""
-    assert results[0].extraction_status == "Extracted with blanks"
+    assert results[0].extraction_status == "Extracted"
 
 
 def test_zero_field_extraction_becomes_failed_extraction() -> None:
@@ -322,7 +323,7 @@ def test_zero_field_extraction_becomes_failed_extraction() -> None:
     assert results[0].error_message == "No fixed header fields could be extracted."
 
 
-def test_partial_extraction_becomes_extracted_with_blanks() -> None:
+def test_partial_extraction_with_legitimate_blanks_is_extracted() -> None:
     values = {field_name: "" for field_name in SPEC_SHEET_FIXED_FIELDS}
     values["Customer"] = "Only Customer"
 
@@ -330,9 +331,71 @@ def test_partial_extraction_becomes_extracted_with_blanks() -> None:
         [UploadedFileStub("partial.pdf", _header_pdf_bytes([values]))]
     )
 
-    assert results[0].extraction_status == "Extracted with blanks"
+    assert results[0].extraction_status == "Extracted"
     assert results[0].customer == "Only Customer"
     assert results[0].design == ""
+
+
+def test_date_returns_strict_mm_dd_yyyy_value() -> None:
+    values = {**_representative_values(), "Date": "02/20/2026"}
+
+    results = extract_header_fields_from_uploads(
+        [UploadedFileStub("date.pdf", _header_pdf_bytes([values]))]
+    )
+
+    assert results[0].date == "02/20/2026"
+
+
+def test_date_does_not_include_nearby_dimensions() -> None:
+    values = {**_representative_values(), "Date": "02/20/2026 43 12 1809.9"}
+
+    results = extract_header_fields_from_uploads(
+        [UploadedFileStub("date-dimensions.pdf", _header_pdf_bytes([values]))]
+    )
+
+    assert results[0].date == "02/20/2026"
+
+
+def test_date_remains_blank_when_no_valid_date_exists() -> None:
+    values = {**_representative_values(), "Date": "not available"}
+
+    results = extract_header_fields_from_uploads(
+        [UploadedFileStub("no-date.pdf", _header_pdf_bytes([values]))]
+    )
+
+    assert results[0].date == ""
+    assert results[0].extraction_status == "Extracted"
+
+
+def test_inches_of_rule_removes_trailing_date_label() -> None:
+    values = {**_representative_values(), "Inches of rule": "522+25/32 Date:"}
+
+    results = extract_header_fields_from_uploads(
+        [UploadedFileStub("rule-date-label.pdf", _header_pdf_bytes([values]))]
+    )
+
+    assert results[0].inches_of_rule == "522+25/32"
+
+
+def test_populated_inaccurately_extracted_field_can_create_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fields = _representative_values()
+
+    def warned_page(_page: object) -> extractor.HeaderFieldExtraction:
+        return extractor.HeaderFieldExtraction(
+            fields,
+            ("Date was corrected by strict date parsing.",),
+        )
+
+    monkeypatch.setattr(extractor, "_extract_page_header_fields", warned_page)
+
+    results = extractor.extract_header_fields_from_uploads(
+        [UploadedFileStub("warning.pdf", _header_pdf_bytes([fields]))]
+    )
+
+    assert results[0].extraction_status == "Extracted with blanks"
+    assert results[0].error_message == "Date was corrected by strict date parsing."
 
 
 def test_fractional_values_are_preserved_exactly() -> None:
@@ -388,7 +451,7 @@ def test_one_failed_page_does_not_block_remaining_pages(monkeypatch: pytest.Monk
     original_extract_page = extractor._extract_page_header_fields
     call_count = 0
 
-    def fail_second_page(page: object) -> dict[str, str]:
+    def fail_second_page(page: object) -> extractor.HeaderFieldExtraction:
         nonlocal call_count
         call_count += 1
         if call_count == 2:

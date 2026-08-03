@@ -52,6 +52,14 @@ class TextFragment:
     transformed_matrix: tuple[float, ...]
 
 
+@dataclass(frozen=True)
+class HeaderFieldExtraction:
+    """Extracted header fields plus non-fatal extraction warnings."""
+
+    fields: dict[str, str]
+    warnings: tuple[str, ...] = ()
+
+
 def read_uploaded_pdf_bytes(uploaded_file: UploadedPdf) -> bytes:
     """Read uploaded PDF bytes in memory."""
     return uploaded_file.getvalue()
@@ -143,6 +151,7 @@ _LABEL_LOOKAHEAD = "|".join(
     for patterns in _FIELD_LABEL_PATTERNS.values()
     for label_pattern in patterns
 )
+_STRICT_DATE_PATTERN = re.compile(r"\b\d{2}/\d{2}/\d{4}\b")
 
 
 def _clean_pdf_text(text: str) -> str:
@@ -165,8 +174,34 @@ def _strip_printed_field_label(field_name: str, text: str) -> str:
             flags=re.IGNORECASE,
         )
         if stripped_value != value:
-            return _trim_contaminating_labels(stripped_value)
+            return _clean_extracted_field_value(field_name, stripped_value)
     return ""
+
+
+def _clean_extracted_field_value(field_name: str, value: str) -> str:
+    if field_name == "Date":
+        return _extract_strict_date(value)
+    if field_name == "Inches of rule":
+        return _trim_trailing_known_label(value, "Date")
+    return _trim_contaminating_labels(value)
+
+
+def _extract_strict_date(value: str) -> str:
+    match = _STRICT_DATE_PATTERN.search(_clean_pdf_text(value))
+    return match.group(0) if match else ""
+
+
+def _trim_trailing_known_label(value: str, label_field_name: str) -> str:
+    cleaned = _clean_pdf_text(value)
+    for label_pattern in _FIELD_LABEL_PATTERNS[label_field_name]:
+        cleaned = re.sub(
+            rf"\s+(?:{label_pattern})\s*:\s*$",
+            "",
+            cleaned,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return cleaned.strip()
 
 
 def _trim_contaminating_labels(value: str) -> str:
@@ -343,18 +378,24 @@ def _parse_labeled_header_text(text: str) -> dict[str, str]:
                 flags=re.IGNORECASE,
             )
             if match:
-                parsed[field_name] = _clean_pdf_text(match.group(1))
+                parsed[field_name] = _clean_extracted_field_value(field_name, match.group(1))
                 break
     return parsed
 
 
-def _merge_fallback_fields(primary: dict[str, str], fallback: dict[str, str]) -> dict[str, str]:
+def _merge_fallback_fields(
+    primary: dict[str, str],
+    fallback: dict[str, str],
+    warnings: list[str],
+) -> dict[str, str]:
     merged = {
-        field_name: _trim_contaminating_labels(value)
+        field_name: _clean_extracted_field_value(field_name, value)
         for field_name, value in primary.items()
     }
     for field_name, value in fallback.items():
         if value and (not merged.get(field_name) or _value_contains_field_label(merged[field_name])):
+            if merged.get(field_name) and merged[field_name] != value:
+                warnings.append(f"{field_name} was corrected by fallback parsing.")
             merged[field_name] = value
     return merged
 
@@ -367,18 +408,25 @@ def _value_contains_field_label(value: str) -> bool:
     )
 
 
-def _extract_page_header_fields(page: object) -> dict[str, str]:
+def _extract_page_header_fields(page: object) -> HeaderFieldExtraction:
     extracted_fields: dict[str, str] = {}
+    warnings: list[str] = []
     for zone in HEADER_FIELD_ZONES:
         zone_text = _collect_zone_text(page, zone)
         extracted_fields[zone.field_name] = _strip_printed_field_label(zone.field_name, zone_text)
 
-    fallback_fields = _parse_labeled_header_text(_top_region_text_from_fragments(page))
-    extracted_fields = _merge_fallback_fields(extracted_fields, fallback_fields)
+    top_region_text = _top_region_text_from_fragments(page)
+    fallback_fields = _parse_labeled_header_text(top_region_text)
+    extracted_fields = _merge_fallback_fields(extracted_fields, fallback_fields, warnings)
+    if not extracted_fields.get("Date"):
+        extracted_fields["Date"] = _extract_strict_date(top_region_text)
     if int(getattr(page, "rotation", 0) or 0) % 360 == 0:
-        layout_fallback_fields = _parse_labeled_header_text(_top_region_layout_text(page))
-        extracted_fields = _merge_fallback_fields(extracted_fields, layout_fallback_fields)
-    return extracted_fields
+        layout_text = _top_region_layout_text(page)
+        layout_fallback_fields = _parse_labeled_header_text(layout_text)
+        extracted_fields = _merge_fallback_fields(extracted_fields, layout_fallback_fields, warnings)
+        if not extracted_fields.get("Date"):
+            extracted_fields["Date"] = _extract_strict_date(layout_text)
+    return HeaderFieldExtraction(extracted_fields, tuple(warnings))
 
 
 def inspect_pdf_page_text_structure(pdf_bytes: bytes, page_number: int = 1) -> dict[str, Any]:
@@ -463,15 +511,15 @@ def extract_header_fields_from_uploads(
         for page_index, page in enumerate(reader.pages):
             page_number = page_index + 1
             try:
-                extracted_fields = _extract_page_header_fields(page)
+                extraction = _extract_page_header_fields(page)
+                extracted_fields = extraction.fields
                 populated_count = sum(1 for value in extracted_fields.values() if value)
-                blank_count = len(SPEC_SHEET_FIXED_FIELDS) - populated_count
                 if populated_count == 0:
                     status = "Failed extraction"
                     error_message = "No fixed header fields could be extracted."
                 else:
-                    status = "Extracted with blanks" if blank_count else "Extracted"
-                    error_message = None
+                    status = "Extracted with blanks" if extraction.warnings else "Extracted"
+                    error_message = " | ".join(extraction.warnings) if extraction.warnings else None
                 results.append(
                     _header_result_from_fields(
                         source_filename=source_filename,
