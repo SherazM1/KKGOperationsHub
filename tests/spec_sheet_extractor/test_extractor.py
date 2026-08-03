@@ -142,6 +142,36 @@ def _rotated_storage_header_pdf_bytes(pages: list[dict[str, str]]) -> bytes:
     return rotated.getvalue()
 
 
+def _special_text_pdf_bytes(
+    *,
+    upper_lines: list[str] | None = None,
+    lower_lines: list[str] | None = None,
+    extra_lines: list[tuple[float, float, str]] | None = None,
+) -> bytes:
+    buffer = BytesIO()
+    canv = canvas.Canvas(buffer, pagesize=letter)
+    page_width, page_height = letter
+    values = _representative_values()
+    zone_by_field = {zone.field_name: zone for zone in HEADER_FIELD_ZONES}
+
+    canv.setFont("Helvetica", 9)
+    for field_name in SPEC_SHEET_FIXED_FIELDS:
+        zone = zone_by_field[field_name]
+        x = zone.left * page_width + 4
+        y = ((zone.bottom + zone.top) / 2) * page_height
+        canv.drawString(x, y, f"{field_name}: {values[field_name]}")
+
+    canv.setFont("Helvetica", 10)
+    for index, line in enumerate(upper_lines or []):
+        canv.drawString(72, 500 - index * 14, line)
+    for index, line in enumerate(lower_lines or []):
+        canv.drawString(72, 112 - index * 14, line)
+    for x, y, line in extra_lines or []:
+        canv.drawString(x, y, line)
+    canv.save()
+    return buffer.getvalue()
+
+
 def test_inventories_one_valid_single_page_pdf() -> None:
     file_results, page_inventory = inventory_pdf_uploads(
         [UploadedFileStub("single.pdf", _pdf_bytes(1))]
@@ -482,3 +512,128 @@ def test_body_dieline_measurement_text_does_not_leak_into_header_fields() -> Non
 
     assert results[0].blank_width == ""
     assert results[0].inches_of_rule == ""
+
+
+def test_upper_special_text_extraction() -> None:
+    results = extract_header_fields_from_uploads(
+        [UploadedFileStub("upper.pdf", _special_text_pdf_bytes(upper_lines=["4 color - Litho or Digital"]))]
+    )
+
+    assert results[0].upper_special_text == "4 color - Litho or Digital"
+    assert results[0].lower_special_text == ""
+
+
+def test_lower_special_text_extraction() -> None:
+    results = extract_header_fields_from_uploads(
+        [UploadedFileStub("lower.pdf", _special_text_pdf_bytes(lower_lines=["Graphic Box - 1 Shown, 2 Required"]))]
+    )
+
+    assert results[0].upper_special_text == ""
+    assert results[0].lower_special_text == "Graphic Box - 1 Shown, 2 Required"
+
+
+def test_multiline_lower_special_text_preserves_line_order() -> None:
+    lines = [
+        "2025 Holiday Battery Power Stations - 25-ENER-02169",
+        "Product Stop",
+        "1 Shown - 1 per half Pallet",
+        "Outside View - CAD# KK250024-22B",
+    ]
+
+    results = extract_header_fields_from_uploads(
+        [UploadedFileStub("multi-lower.pdf", _special_text_pdf_bytes(lower_lines=lines))]
+    )
+
+    assert results[0].lower_special_text == "\n".join(lines)
+
+
+def test_repeated_part_and_pieces_wording_is_preserved_in_special_text() -> None:
+    lines = ["Blade Set - 1 Set Shown, 1 Set Required"]
+
+    results = extract_header_fields_from_uploads(
+        [UploadedFileStub("repeated.pdf", _special_text_pdf_bytes(lower_lines=lines))]
+    )
+
+    assert results[0].lower_special_text == lines[0]
+
+
+def test_copyright_and_standalone_copy_are_excluded_from_special_text() -> None:
+    results = extract_header_fields_from_uploads(
+        [
+            UploadedFileStub(
+                "noise.pdf",
+                _special_text_pdf_bytes(
+                    upper_lines=["COPY", "1 Color"],
+                    lower_lines=[
+                        "©2026 KENDAL KING. Engineering and graphic designs are the sole intellectual property of Kendal King.",
+                        "Fold Over and Glue",
+                    ],
+                ),
+            )
+        ]
+    )
+
+    assert results[0].upper_special_text == "1 Color"
+    assert results[0].lower_special_text == "Fold Over and Glue"
+
+
+def test_dimension_only_fragments_are_excluded_from_special_text() -> None:
+    results = extract_header_fields_from_uploads(
+        [
+            UploadedFileStub(
+                "dimensions.pdf",
+                _special_text_pdf_bytes(
+                    upper_lines=["53+9/16", "1 x 3 x 1/8", "full litho on this piece"],
+                ),
+            )
+        ]
+    )
+
+    assert results[0].upper_special_text == "full litho on this piece"
+
+
+def test_instruction_text_containing_dimensions_is_preserved() -> None:
+    instruction = 'Requires (2) 1" x 3" x 1/16" Pieces of Remo 1 Side'
+
+    results = extract_header_fields_from_uploads(
+        [UploadedFileStub("instruction-dimensions.pdf", _special_text_pdf_bytes(lower_lines=[instruction]))]
+    )
+
+    assert results[0].lower_special_text == instruction
+
+
+def test_no_fragment_appears_in_both_upper_and_lower_special_text() -> None:
+    line = "1 Required Per Display"
+
+    results = extract_header_fields_from_uploads(
+        [UploadedFileStub("boundary.pdf", _special_text_pdf_bytes(extra_lines=[(72, 120, line)]))]
+    )
+
+    occurrences = results[0].upper_special_text.count(line) + results[0].lower_special_text.count(line)
+    assert occurrences == 1
+
+
+def test_blank_special_text_zones_do_not_create_warnings() -> None:
+    results = extract_header_fields_from_uploads(
+        [UploadedFileStub("blank-special.pdf", _special_text_pdf_bytes())]
+    )
+
+    assert results[0].upper_special_text == ""
+    assert results[0].lower_special_text == ""
+    assert results[0].extraction_status == "Extracted"
+    assert results[0].error_message is None
+
+
+def test_fixed_header_fields_do_not_leak_into_special_text() -> None:
+    results = extract_header_fields_from_uploads(
+        [
+            UploadedFileStub(
+                "header-protection.pdf",
+                _special_text_pdf_bytes(
+                    upper_lines=["Customer:", "Fresh Step", "Design:", "KK260127-02", "1 Color"]
+                ),
+            )
+        ]
+    )
+
+    assert results[0].upper_special_text == "1 Color"

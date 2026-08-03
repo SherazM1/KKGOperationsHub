@@ -21,7 +21,9 @@ from app.spec_sheet_extractor.models import (
 from app.spec_sheet_extractor.zones import (
     HEADER_FIELD_ZONES,
     HEADER_REGION_ZONE,
+    LOWER_SPECIAL_TEXT_ZONE,
     NormalizedTextZone,
+    UPPER_SPECIAL_TEXT_ZONE,
 )
 
 
@@ -337,6 +339,21 @@ def _fragments_in_zone(page: object, zone: NormalizedTextZone) -> list[TextFragm
     ]
 
 
+def _zone_overlap_area(
+    fragment: TextFragment,
+    zone: NormalizedTextZone,
+    page_width: float,
+    page_height: float,
+) -> float:
+    zone_left = zone.left * page_width
+    zone_right = zone.right * page_width
+    zone_bottom = zone.bottom * page_height
+    zone_top = zone.top * page_height
+    overlap_width = max(0.0, min(fragment.right, zone_right) - max(fragment.left, zone_left))
+    overlap_height = max(0.0, min(fragment.top, zone_top) - max(fragment.bottom, zone_bottom))
+    return overlap_width * overlap_height
+
+
 def _sort_fragments_for_reading(fragments: list[TextFragment]) -> list[TextFragment]:
     return sorted(fragments, key=lambda fragment: (-round(fragment.y, 1), fragment.x))
 
@@ -408,6 +425,173 @@ def _value_contains_field_label(value: str) -> bool:
     )
 
 
+def _is_dimension_only_text(text: str) -> bool:
+    cleaned = _clean_pdf_text(text)
+    if not cleaned or not re.search(r"\d", cleaned):
+        return False
+    return bool(re.fullmatch(r"[\d\s+/\-xX.\"']+", cleaned))
+
+
+def _is_special_text_noise(text: str) -> bool:
+    cleaned = _clean_pdf_text(text)
+    if not cleaned:
+        return True
+    upper = cleaned.upper()
+    if not re.search(r"[A-Z0-9]", upper):
+        return True
+    if upper == "COPY":
+        return True
+    if re.fullmatch(r"[A-Z]", upper) or re.fullmatch(r"[A-Z]{2,3}", upper):
+        return True
+    if re.fullmatch(r"[A-Z](?:\s+[A-Z]){1,4}", upper):
+        return True
+    if upper in {"RIGHT", "LEFT", "READING", "READING RIGHT", "READING LEFT"}:
+        return True
+    if upper.startswith("READING "):
+        return True
+    if upper in {"BEND", "HERE", "BEND BEND", "HERE HERE"}:
+        return True
+    if re.fullmatch(r'\d+(?:["\']|\s)*(?:DST|DIST|DISTANCE)', upper):
+        return True
+    if "DIELINE MEASUREMENT" in upper:
+        return True
+    if upper.startswith("<<<CORR>>>"):
+        return True
+    if "KENDAL KING" in upper and "INTELLECTUAL PROPERTY" in upper:
+        return True
+    if cleaned.startswith("©") or cleaned.startswith("Â©") or cleaned.startswith("Š2026"):
+        return True
+    if _is_dimension_only_text(cleaned):
+        return True
+    if any(
+        re.search(rf"(?:^|\s){label_pattern}\s*:", cleaned, flags=re.IGNORECASE)
+        for patterns in _FIELD_LABEL_PATTERNS.values()
+        for label_pattern in patterns
+    ):
+        return True
+    if any(
+        re.fullmatch(rf"{label_pattern}\s*:?", cleaned, flags=re.IGNORECASE)
+        for patterns in _FIELD_LABEL_PATTERNS.values()
+        for label_pattern in patterns
+    ):
+        return True
+    return False
+
+
+def _is_fixed_header_value_fragment(
+    fragment: TextFragment,
+    header_fields: dict[str, str],
+    page_width: float,
+    page_height: float,
+) -> bool:
+    cleaned = _clean_pdf_text(fragment.text)
+    if not cleaned:
+        return False
+    return any(cleaned == value for value in header_fields.values() if value)
+
+
+def _prefer_lower_special_text(text: str) -> bool:
+    upper = text.upper()
+    return "PACKS" in upper or bool(
+        re.search(
+            r"\b(required|shown|cad#|fold over|glue|product stop|bend layout|requires|stations|pallet|outside view|packs|tray)\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _looks_like_header_person_fragment(fragment: TextFragment, text: str, page_height: float) -> bool:
+    normalized_y = fragment.y / page_height if page_height else 0.0
+    return (
+        0.62 <= normalized_y <= 0.75
+        and bool(re.fullmatch(r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}", text))
+    )
+
+
+def _join_special_text_fragments(fragments: list[TextFragment]) -> str:
+    sorted_fragments = _sort_fragments_for_reading(fragments)
+    lines: list[list[TextFragment]] = []
+    for fragment in sorted_fragments:
+        if not lines or abs(lines[-1][0].y - fragment.y) > 6.0:
+            lines.append([fragment])
+        elif fragment.x - max(item.x for item in lines[-1]) > 180.0:
+            lines.append([fragment])
+        else:
+            lines[-1].append(fragment)
+
+    rendered_lines: list[str] = []
+    for line in lines:
+        line_text = _clean_pdf_text(" ".join(fragment.text for fragment in sorted(line, key=lambda item: item.x)))
+        if line_text:
+            rendered_lines.append(line_text)
+    return "\n".join(rendered_lines)
+
+
+def _extract_special_text_fields(page: object, header_fields: dict[str, str]) -> dict[str, str]:
+    page_width, page_height = _display_page_dimensions(page)
+    upper_fragments: list[TextFragment] = []
+    lower_fragments: list[TextFragment] = []
+    seen_fragments: set[tuple[str, float, float]] = set()
+
+    for fragment in _iter_text_fragments(page):
+        text = _clean_pdf_text(fragment.text)
+        fragment_key = (text, round(fragment.x, 3), round(fragment.y, 3))
+        if fragment_key in seen_fragments:
+            continue
+        seen_fragments.add(fragment_key)
+        if _is_special_text_noise(text):
+            continue
+        if _is_fixed_header_value_fragment(fragment, header_fields, page_width, page_height):
+            continue
+        if _looks_like_header_person_fragment(fragment, text, page_height):
+            continue
+
+        upper_anchor = UPPER_SPECIAL_TEXT_ZONE.contains(
+            fragment.x,
+            fragment.y,
+            page_width,
+            page_height,
+        )
+        lower_anchor = LOWER_SPECIAL_TEXT_ZONE.contains(
+            fragment.x,
+            fragment.y,
+            page_width,
+            page_height,
+        )
+        if _prefer_lower_special_text(text) and (upper_anchor or lower_anchor):
+            lower_fragments.append(fragment)
+            continue
+        if upper_anchor and not lower_anchor:
+            upper_fragments.append(fragment)
+            continue
+        if lower_anchor and not upper_anchor:
+            lower_fragments.append(fragment)
+            continue
+        if upper_anchor and lower_anchor:
+            if _prefer_lower_special_text(text):
+                lower_fragments.append(fragment)
+            else:
+                upper_fragments.append(fragment)
+            continue
+
+        upper_overlap = _zone_overlap_area(fragment, UPPER_SPECIAL_TEXT_ZONE, page_width, page_height)
+        lower_overlap = _zone_overlap_area(fragment, LOWER_SPECIAL_TEXT_ZONE, page_width, page_height)
+        if upper_overlap <= 0 and lower_overlap <= 0:
+            continue
+        if lower_overlap > upper_overlap or (
+            lower_overlap == upper_overlap and _prefer_lower_special_text(text)
+        ):
+            lower_fragments.append(fragment)
+        else:
+            upper_fragments.append(fragment)
+
+    return {
+        "upper_special_text": _join_special_text_fragments(upper_fragments),
+        "lower_special_text": _join_special_text_fragments(lower_fragments),
+    }
+
+
 def _extract_page_header_fields(page: object) -> HeaderFieldExtraction:
     extracted_fields: dict[str, str] = {}
     warnings: list[str] = []
@@ -426,6 +610,7 @@ def _extract_page_header_fields(page: object) -> HeaderFieldExtraction:
         extracted_fields = _merge_fallback_fields(extracted_fields, layout_fallback_fields, warnings)
         if not extracted_fields.get("Date"):
             extracted_fields["Date"] = _extract_strict_date(layout_text)
+    extracted_fields.update(_extract_special_text_fields(page, extracted_fields))
     return HeaderFieldExtraction(extracted_fields, tuple(warnings))
 
 
@@ -469,8 +654,13 @@ def _header_result_from_fields(
     extracted_fields: dict[str, str] | None = None,
 ) -> PdfHeaderExtractionResult:
     values = {FIELD_ATTRIBUTE_BY_LABEL[label]: "" for label in SPEC_SHEET_FIXED_FIELDS}
+    values["upper_special_text"] = ""
+    values["lower_special_text"] = ""
     for label, value in (extracted_fields or {}).items():
-        values[FIELD_ATTRIBUTE_BY_LABEL[label]] = value
+        if label in FIELD_ATTRIBUTE_BY_LABEL:
+            values[FIELD_ATTRIBUTE_BY_LABEL[label]] = value
+        else:
+            values[label] = value
     return PdfHeaderExtractionResult(
         source_filename=source_filename,
         source_file_index=source_file_index,

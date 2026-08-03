@@ -94,6 +94,8 @@ class PdfHeaderExtractionResult:
     blank_height: str = ""
     inches_of_rule: str = ""
     date: str = ""
+    upper_special_text: str = ""
+    lower_special_text: str = ""
 
     def to_preview_row(self) -> dict[str, str | int | None]:
         """Return a UI-friendly row with final field labels."""
@@ -105,4 +107,6 @@ class PdfHeaderExtractionResult:
         }
         for label in SPEC_SHEET_FIXED_FIELDS:
             row[label] = getattr(self, FIELD_ATTRIBUTE_BY_LABEL[label])
+        row["Upper Special Text"] = self.upper_special_text
+        row["Lower Special Text"] = self.lower_special_text
         return row

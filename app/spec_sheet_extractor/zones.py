@@ -76,3 +76,25 @@ HEADER_FIELD_ZONES: tuple[NormalizedTextZone, ...] = (
 )
 
 HEADER_REGION_ZONE = NormalizedTextZone("Header Region", 0.0, 0.72, 1.0, 1.0)
+
+# Visual instruction area below the fixed header and above the lower caption band.
+# This broad zone catches color/print/material notes while excluding the fixed
+# header rows at the top of the page.
+UPPER_SPECIAL_TEXT_ZONE = NormalizedTextZone(
+    "Upper Special Text",
+    0.0,
+    0.13,
+    1.0,
+    0.86,
+)
+
+# Visual lower caption/instruction band above the copyright footer. The bottom
+# extends slightly below 0 because some production PDFs emit bottom captions with
+# transformed coordinates just outside the visible mediabox.
+LOWER_SPECIAL_TEXT_ZONE = NormalizedTextZone(
+    "Lower Special Text",
+    0.0,
+    -0.60,
+    1.0,
+    0.24,
+)
