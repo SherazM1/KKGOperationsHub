@@ -30,6 +30,27 @@ class NormalizedTextZone:
             and self.bottom <= normalized_y <= self.top
         )
 
+    def intersects(
+        self,
+        left: float,
+        bottom: float,
+        right: float,
+        top: float,
+        page_width: float,
+        page_height: float,
+    ) -> bool:
+        """Return True when a text span box overlaps this zone."""
+        normalized_left = left / page_width if page_width else 0.0
+        normalized_right = right / page_width if page_width else 0.0
+        normalized_bottom = bottom / page_height if page_height else 0.0
+        normalized_top = top / page_height if page_height else 0.0
+        return not (
+            normalized_right < self.left
+            or normalized_left > self.right
+            or normalized_top < self.bottom
+            or normalized_bottom > self.top
+        )
+
 
 # Zones target only the fixed top header section of the Kendal King spec sheet.
 # They intentionally stop above the drawing/body area so dieline measurements do
@@ -53,3 +74,5 @@ HEADER_FIELD_ZONES: tuple[NormalizedTextZone, ...] = (
     NormalizedTextZone("Inches of rule", 0.60, 0.775, 0.80, 0.818),
     NormalizedTextZone("Date", 0.80, 0.775, 0.95, 0.818),
 )
+
+HEADER_REGION_ZONE = NormalizedTextZone("Header Region", 0.0, 0.72, 1.0, 1.0)

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from io import BytesIO
+from dataclasses import dataclass
+from io import BytesIO, StringIO
+import contextlib
 import re
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 from pypdf import PdfReader
+from pypdf._text_extraction import mult
 
 from app.spec_sheet_extractor.models import (
     FIELD_ATTRIBUTE_BY_LABEL,
@@ -15,7 +18,11 @@ from app.spec_sheet_extractor.models import (
     PdfHeaderExtractionResult,
     PdfPageInventoryRecord,
 )
-from app.spec_sheet_extractor.zones import HEADER_FIELD_ZONES, NormalizedTextZone
+from app.spec_sheet_extractor.zones import (
+    HEADER_FIELD_ZONES,
+    HEADER_REGION_ZONE,
+    NormalizedTextZone,
+)
 
 
 class UploadedPdf(Protocol):
@@ -25,6 +32,24 @@ class UploadedPdf(Protocol):
 
     def getvalue(self) -> bytes:
         """Return uploaded file bytes."""
+
+
+@dataclass(frozen=True)
+class TextFragment:
+    """A positioned text fragment extracted from a PDF page."""
+
+    text: str
+    raw_x: float
+    raw_y: float
+    x: float
+    y: float
+    left: float
+    bottom: float
+    right: float
+    top: float
+    current_matrix: tuple[float, ...]
+    text_matrix: tuple[float, ...]
+    transformed_matrix: tuple[float, ...]
 
 
 def read_uploaded_pdf_bytes(uploaded_file: UploadedPdf) -> bytes:
@@ -87,6 +112,8 @@ _FIELD_LABEL_PATTERNS: dict[str, tuple[str, ...]] = {
     "Part": (r"Part",),
     "Opportunity/Project #": (
         r"Opportunity\s*/\s*Project\s*#",
+        r"Oppty\s*/\s*Proj\.?\s*#",
+        r"Oppty\s*/\s*Project\s*#",
         r"Opportunity\s*#",
         r"Project\s*#",
         r"Oppty\s*#",
@@ -111,6 +138,12 @@ _FIELD_LABEL_PATTERNS: dict[str, tuple[str, ...]] = {
     "Date": (r"Date",),
 }
 
+_LABEL_LOOKAHEAD = "|".join(
+    rf"(?:{label_pattern})\s*:"
+    for patterns in _FIELD_LABEL_PATTERNS.values()
+    for label_pattern in patterns
+)
+
 
 def _clean_pdf_text(text: str) -> str:
     """Collapse obvious PDF whitespace artifacts without changing value text."""
@@ -124,32 +157,214 @@ def _strip_printed_field_label(field_name: str, text: str) -> str:
     """Remove the template label from a zone while preserving the value."""
     value = _clean_pdf_text(text)
     for label_pattern in _FIELD_LABEL_PATTERNS[field_name]:
-        value = re.sub(
+        stripped_value = re.sub(
             rf"^\s*{label_pattern}\s*:?\s*",
             "",
             value,
             count=1,
             flags=re.IGNORECASE,
         )
-    return value.strip()
+        if stripped_value != value:
+            return _trim_contaminating_labels(stripped_value)
+    return ""
+
+
+def _trim_contaminating_labels(value: str) -> str:
+    cleaned = _clean_pdf_text(value)
+    for label_pattern in _FIELD_LABEL_PATTERNS.values():
+        for pattern in label_pattern:
+            match = re.search(rf"\s+(?:{pattern})\s*:", cleaned, flags=re.IGNORECASE)
+            if match:
+                return cleaned[: match.start()].strip()
+    return cleaned
+
+
+def _text_box_for_fragment(
+    text: str,
+    transformed_matrix: Sequence[float],
+    font_size: float,
+) -> tuple[float, float, float, float, float, float]:
+    x = float(transformed_matrix[4])
+    y = float(transformed_matrix[5])
+    scale_x = max(abs(float(transformed_matrix[0])), abs(float(transformed_matrix[2])), 1.0)
+    scale_y = max(abs(float(transformed_matrix[1])), abs(float(transformed_matrix[3])), 1.0)
+    height = max(float(font_size) * scale_y, 1.0)
+    width = max(len(_clean_pdf_text(text)) * float(font_size) * 0.55 * scale_x, 1.0)
+    return x, y, x, y - height * 0.25, x + width, y + height
+
+
+def _raw_page_dimensions(page: object) -> tuple[float, float]:
+    cropbox = getattr(page, "cropbox", None)
+    box = cropbox or page.mediabox
+    return float(box.width), float(box.height)
+
+
+def _display_page_dimensions(page: object) -> tuple[float, float]:
+    raw_width, raw_height = _raw_page_dimensions(page)
+    rotation = int(getattr(page, "rotation", 0) or 0) % 360
+    if rotation in (90, 270):
+        return raw_height, raw_width
+    return raw_width, raw_height
+
+
+def _map_point_to_display(page: object, x: float, y: float) -> tuple[float, float]:
+    raw_width, raw_height = _raw_page_dimensions(page)
+    rotation = int(getattr(page, "rotation", 0) or 0) % 360
+    if rotation == 90:
+        return y, raw_width - x
+    if rotation == 180:
+        return raw_width - x, raw_height - y
+    if rotation == 270:
+        return raw_height - y, x
+    return x, y
+
+
+def _map_box_to_display(
+    page: object,
+    left: float,
+    bottom: float,
+    right: float,
+    top: float,
+) -> tuple[float, float, float, float]:
+    points = [
+        _map_point_to_display(page, left, bottom),
+        _map_point_to_display(page, left, top),
+        _map_point_to_display(page, right, bottom),
+        _map_point_to_display(page, right, top),
+    ]
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _iter_text_fragments(page: object) -> list[TextFragment]:
+    fragments: list[TextFragment] = []
+
+    def visitor_text(
+        text: str,
+        cm: Sequence[float],
+        tm: Sequence[float],
+        _font: object,
+        font_size: float,
+    ) -> None:
+        cleaned = _clean_pdf_text(text)
+        if not cleaned:
+            return
+        transformed = mult(tm, cm)
+        raw_x, raw_y, raw_left, raw_bottom, raw_right, raw_top = _text_box_for_fragment(
+            cleaned,
+            transformed,
+            font_size,
+        )
+        x, y = _map_point_to_display(page, raw_x, raw_y)
+        left, bottom, right, top = _map_box_to_display(
+            page,
+            raw_left,
+            raw_bottom,
+            raw_right,
+            raw_top,
+        )
+        fragments.append(
+            TextFragment(
+                text=cleaned,
+                raw_x=raw_x,
+                raw_y=raw_y,
+                x=x,
+                y=y,
+                left=left,
+                bottom=bottom,
+                right=right,
+                top=top,
+                current_matrix=tuple(float(value) for value in cm),
+                text_matrix=tuple(float(value) for value in tm),
+                transformed_matrix=tuple(float(value) for value in transformed),
+            )
+        )
+
+    page.extract_text(visitor_text=visitor_text)
+    return fragments
+
+
+def _fragments_in_zone(page: object, zone: NormalizedTextZone) -> list[TextFragment]:
+    page_width, page_height = _display_page_dimensions(page)
+    return [
+        fragment
+        for fragment in _iter_text_fragments(page)
+        if (
+            zone.contains(fragment.x, fragment.y, page_width, page_height)
+            or zone.contains(
+                (fragment.left + fragment.right) / 2,
+                (fragment.bottom + fragment.top) / 2,
+                page_width,
+                page_height,
+            )
+        )
+    ]
+
+
+def _sort_fragments_for_reading(fragments: list[TextFragment]) -> list[TextFragment]:
+    return sorted(fragments, key=lambda fragment: (-round(fragment.y, 1), fragment.x))
 
 
 def _collect_zone_text(page: object, zone: NormalizedTextZone) -> str:
-    page_width = float(page.mediabox.width)
-    page_height = float(page.mediabox.height)
-    text_chunks: list[tuple[float, float, str]] = []
+    fragments = _sort_fragments_for_reading(_fragments_in_zone(page, zone))
+    return _clean_pdf_text(" ".join(fragment.text for fragment in fragments))
 
-    def visitor_text(text: str, _cm: object, tm: Sequence[float], _font: object, _font_size: float) -> None:
-        if not text.strip():
-            return
-        x = float(tm[4])
-        y = float(tm[5])
-        if zone.contains(x, y, page_width, page_height):
-            text_chunks.append((y, x, text))
 
-    page.extract_text(visitor_text=visitor_text)
-    text_chunks.sort(key=lambda chunk: (-chunk[0], chunk[1]))
-    return _clean_pdf_text(" ".join(chunk[2] for chunk in text_chunks))
+def _top_region_text_from_fragments(page: object) -> str:
+    fragments = _sort_fragments_for_reading(_fragments_in_zone(page, HEADER_REGION_ZONE))
+    return "\n".join(fragment.text for fragment in fragments)
+
+
+def _top_region_layout_text(page: object) -> str:
+    try:
+        with contextlib.redirect_stdout(StringIO()), contextlib.redirect_stderr(StringIO()):
+            text = page.extract_text(extraction_mode="layout") or ""
+    except Exception:
+        text = page.extract_text() or ""
+    lines = text.splitlines()
+    if not lines:
+        return ""
+    line_limit = max(1, int(len(lines) * 0.35))
+    return "\n".join(lines[:line_limit])
+
+
+def _parse_labeled_header_text(text: str) -> dict[str, str]:
+    parsed = {label: "" for label in SPEC_SHEET_FIXED_FIELDS}
+    normalized = _clean_pdf_text(text)
+    if not normalized:
+        return parsed
+
+    for field_name in SPEC_SHEET_FIXED_FIELDS:
+        for label_pattern in _FIELD_LABEL_PATTERNS[field_name]:
+            match = re.search(
+                rf"(?:^|\s){label_pattern}\s*:?\s*(.*?)\s*(?=(?:{_LABEL_LOOKAHEAD})(?:\s|:)|$)",
+                normalized,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                parsed[field_name] = _clean_pdf_text(match.group(1))
+                break
+    return parsed
+
+
+def _merge_fallback_fields(primary: dict[str, str], fallback: dict[str, str]) -> dict[str, str]:
+    merged = {
+        field_name: _trim_contaminating_labels(value)
+        for field_name, value in primary.items()
+    }
+    for field_name, value in fallback.items():
+        if value and (not merged.get(field_name) or _value_contains_field_label(merged[field_name])):
+            merged[field_name] = value
+    return merged
+
+
+def _value_contains_field_label(value: str) -> bool:
+    return any(
+        re.search(rf"(?:^|\s){label_pattern}\s*:?", value, flags=re.IGNORECASE)
+        for patterns in _FIELD_LABEL_PATTERNS.values()
+        for label_pattern in patterns
+    )
 
 
 def _extract_page_header_fields(page: object) -> dict[str, str]:
@@ -157,7 +372,43 @@ def _extract_page_header_fields(page: object) -> dict[str, str]:
     for zone in HEADER_FIELD_ZONES:
         zone_text = _collect_zone_text(page, zone)
         extracted_fields[zone.field_name] = _strip_printed_field_label(zone.field_name, zone_text)
+
+    fallback_fields = _parse_labeled_header_text(_top_region_text_from_fragments(page))
+    extracted_fields = _merge_fallback_fields(extracted_fields, fallback_fields)
+    if int(getattr(page, "rotation", 0) or 0) % 360 == 0:
+        layout_fallback_fields = _parse_labeled_header_text(_top_region_layout_text(page))
+        extracted_fields = _merge_fallback_fields(extracted_fields, layout_fallback_fields)
     return extracted_fields
+
+
+def inspect_pdf_page_text_structure(pdf_bytes: bytes, page_number: int = 1) -> dict[str, Any]:
+    """Return developer diagnostics for one PDF page's text structure."""
+    reader = PdfReader(BytesIO(pdf_bytes))
+    page = reader.pages[page_number - 1]
+    fragments = _iter_text_fragments(page)
+    return {
+        "page_number": page_number,
+        "mediabox": tuple(float(value) for value in page.mediabox),
+        "cropbox": tuple(float(value) for value in page.cropbox),
+        "rotation": int(page.rotation or 0),
+        "fragment_count": len(fragments),
+        "fragments": [
+            {
+                "text": fragment.text,
+                "x": fragment.x,
+                "y": fragment.y,
+                "raw_x": fragment.raw_x,
+                "raw_y": fragment.raw_y,
+                "bbox": (fragment.left, fragment.bottom, fragment.right, fragment.top),
+                "current_matrix": fragment.current_matrix,
+                "text_matrix": fragment.text_matrix,
+                "transformed_matrix": fragment.transformed_matrix,
+            }
+            for fragment in _sort_fragments_for_reading(fragments)
+        ],
+        "top_region_text": _top_region_text_from_fragments(page),
+        "layout_top_text": _top_region_layout_text(page),
+    }
 
 
 def _header_result_from_fields(
@@ -213,15 +464,21 @@ def extract_header_fields_from_uploads(
             page_number = page_index + 1
             try:
                 extracted_fields = _extract_page_header_fields(page)
-                blank_count = sum(1 for value in extracted_fields.values() if value == "")
-                status = "Extracted with blanks" if blank_count else "Extracted"
+                populated_count = sum(1 for value in extracted_fields.values() if value)
+                blank_count = len(SPEC_SHEET_FIXED_FIELDS) - populated_count
+                if populated_count == 0:
+                    status = "Failed extraction"
+                    error_message = "No fixed header fields could be extracted."
+                else:
+                    status = "Extracted with blanks" if blank_count else "Extracted"
+                    error_message = None
                 results.append(
                     _header_result_from_fields(
                         source_filename=source_filename,
                         source_file_index=file_index,
                         page_number=page_number,
                         extraction_status=status,
-                        error_message=None,
+                        error_message=error_message,
                         extracted_fields=extracted_fields,
                     )
                 )
@@ -231,7 +488,7 @@ def extract_header_fields_from_uploads(
                         source_filename=source_filename,
                         source_file_index=file_index,
                         page_number=page_number,
-                        extraction_status="Failed",
+                        extraction_status="Failed extraction",
                         error_message=str(exc),
                     )
                 )

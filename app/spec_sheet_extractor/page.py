@@ -88,7 +88,9 @@ def _header_summary(results: list[PdfHeaderExtractionResult]) -> dict[str, int]:
         "pages_with_warnings": sum(
             1 for result in results if result.extraction_status == "Extracted with blanks"
         ),
-        "pages_failed": sum(1 for result in results if result.extraction_status == "Failed"),
+        "pages_failed": sum(
+            1 for result in results if result.extraction_status == "Failed extraction"
+        ),
     }
 
 

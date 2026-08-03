@@ -68,6 +68,7 @@ def _header_pdf_bytes(
     *,
     manager_label: str = "Production Mngr",
     rotate_degrees: int | None = None,
+    ctm_offset: tuple[float, float] | None = None,
 ) -> bytes:
     buffer = BytesIO()
     canv = canvas.Canvas(buffer, pagesize=letter)
@@ -76,13 +77,21 @@ def _header_pdf_bytes(
 
     for page_values in pages:
         canv.setFont("Helvetica", 9)
+        if ctm_offset is not None:
+            canv.saveState()
+            canv.translate(*ctm_offset)
         for field_name in SPEC_SHEET_FIXED_FIELDS:
             zone = zone_by_field[field_name]
             x = zone.left * page_width + 4
             y = ((zone.bottom + zone.top) / 2) * page_height
+            if ctm_offset is not None:
+                x -= ctm_offset[0]
+                y -= ctm_offset[1]
             label = _label_for_field(field_name, manager_label)
             value = page_values.get(field_name, "")
             canv.drawString(x, y, f"{label}: {value}")
+        if ctm_offset is not None:
+            canv.restoreState()
         canv.setFont("Helvetica", 11)
         canv.drawString(72, 420, "BODY DIELINE MEASUREMENT Blank width: 999+1/2")
         canv.drawString(72, 400, "Inches of rule: 999 Date: 01/01/1900")
@@ -97,6 +106,36 @@ def _header_pdf_bytes(
     writer = PdfWriter()
     for page in reader.pages:
         page.rotate(rotate_degrees)
+        writer.add_page(page)
+    rotated = BytesIO()
+    writer.write(rotated)
+    return rotated.getvalue()
+
+
+def _rotated_storage_header_pdf_bytes(pages: list[dict[str, str]]) -> bytes:
+    buffer = BytesIO()
+    canv = canvas.Canvas(buffer, pagesize=letter)
+    raw_width, raw_height = letter
+    display_width, display_height = raw_height, raw_width
+    zone_by_field = {zone.field_name: zone for zone in HEADER_FIELD_ZONES}
+
+    for page_values in pages:
+        canv.setFont("Helvetica", 9)
+        for field_name in SPEC_SHEET_FIXED_FIELDS:
+            zone = zone_by_field[field_name]
+            display_x = zone.left * display_width + 4
+            display_y = ((zone.bottom + zone.top) / 2) * display_height
+            raw_x = raw_width - display_y
+            raw_y = display_x
+            value = page_values.get(field_name, "")
+            canv.drawString(raw_x, raw_y, f"{field_name}: {value}")
+        canv.showPage()
+    canv.save()
+
+    reader = PdfReader(BytesIO(buffer.getvalue()))
+    writer = PdfWriter()
+    for page in reader.pages:
+        page.rotate(90)
         writer.add_page(page)
     rotated = BytesIO()
     writer.write(rotated)
@@ -222,12 +261,45 @@ def test_rotation_normalization_uses_same_header_zones() -> None:
     values = {**_representative_values(), "Customer": "Rotated Customer"}
 
     results = extract_header_fields_from_uploads(
-        [UploadedFileStub("rotated.pdf", _header_pdf_bytes([values], rotate_degrees=90))]
+        [UploadedFileStub("rotated.pdf", _rotated_storage_header_pdf_bytes([values]))]
     )
 
     assert results[0].extraction_status == "Extracted"
     assert results[0].customer == "Rotated Customer"
     assert results[0].blank_width == "53+9/16"
+
+
+def test_real_coordinate_transformations_use_current_and_text_matrices() -> None:
+    values = {**_representative_values(), "Customer": "Transformed Customer"}
+
+    results = extract_header_fields_from_uploads(
+        [UploadedFileStub("transformed.pdf", _header_pdf_bytes([values], ctm_offset=(48, -22)))]
+    )
+
+    assert results[0].extraction_status == "Extracted"
+    assert results[0].customer == "Transformed Customer"
+    assert results[0].opportunity_project_number == "3356"
+
+
+def test_label_aware_fallback_parses_header_when_coordinate_zones_are_blank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = {
+        **_representative_values(),
+        "Opportunity/Project #": "Oppty-3075",
+        "Pieces per set": "1 Set Required",
+    }
+    monkeypatch.setattr(extractor, "_collect_zone_text", lambda _page, _zone: "")
+
+    results = extractor.extract_header_fields_from_uploads(
+        [UploadedFileStub("fallback.pdf", _header_pdf_bytes([values], manager_label="Project Mngr"))]
+    )
+
+    assert results[0].extraction_status == "Extracted"
+    assert results[0].customer == "Fresh Step"
+    assert results[0].opportunity_project_number == "Oppty-3075"
+    assert results[0].pieces_per_set == "1 Set Required"
+    assert results[0].production_project_manager == "Marta Espina"
 
 
 def test_blank_id_field_remains_blank() -> None:
@@ -239,6 +311,28 @@ def test_blank_id_field_remains_blank() -> None:
 
     assert results[0].id == ""
     assert results[0].extraction_status == "Extracted with blanks"
+
+
+def test_zero_field_extraction_becomes_failed_extraction() -> None:
+    results = extract_header_fields_from_uploads(
+        [UploadedFileStub("no-header.pdf", _pdf_bytes(1))]
+    )
+
+    assert results[0].extraction_status == "Failed extraction"
+    assert results[0].error_message == "No fixed header fields could be extracted."
+
+
+def test_partial_extraction_becomes_extracted_with_blanks() -> None:
+    values = {field_name: "" for field_name in SPEC_SHEET_FIXED_FIELDS}
+    values["Customer"] = "Only Customer"
+
+    results = extract_header_fields_from_uploads(
+        [UploadedFileStub("partial.pdf", _header_pdf_bytes([values]))]
+    )
+
+    assert results[0].extraction_status == "Extracted with blanks"
+    assert results[0].customer == "Only Customer"
+    assert results[0].design == ""
 
 
 def test_fractional_values_are_preserved_exactly() -> None:
@@ -309,7 +403,7 @@ def test_one_failed_page_does_not_block_remaining_pages(monkeypatch: pytest.Monk
 
     assert [result.extraction_status for result in results] == [
         "Extracted",
-        "Failed",
+        "Failed extraction",
         "Extracted",
     ]
     assert results[1].error_message == "page could not be processed"
