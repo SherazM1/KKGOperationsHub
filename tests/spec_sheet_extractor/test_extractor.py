@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from io import BytesIO
+from pathlib import Path
 
 import pytest
+from openpyxl import Workbook, load_workbook
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
+from app.spec_sheet_extractor.excel_export import (
+    DEFAULT_TEMPLATE_PATH,
+    EXPECTED_TEMPLATE_HEADERS,
+    SpecSheetExcelExportError,
+    TEMPLATE_WORKSHEET_NAME,
+    build_spec_sheet_excel,
+)
 from app.spec_sheet_extractor import extractor
 from app.spec_sheet_extractor.extractor import extract_header_fields_from_uploads, inventory_pdf_uploads
-from app.spec_sheet_extractor.models import SPEC_SHEET_FIXED_FIELDS
+from app.spec_sheet_extractor.models import PdfHeaderExtractionResult, SPEC_SHEET_FIXED_FIELDS
 from app.spec_sheet_extractor.zones import HEADER_FIELD_ZONES
 
 
@@ -55,6 +65,47 @@ def _representative_values() -> dict[str, str]:
         "Inches of rule": "522+25/32",
         "Date": "07/20/2026",
     }
+
+
+def _result(
+    *,
+    index: int = 0,
+    page_number: int = 1,
+    status: str = "Extracted",
+    **overrides: str,
+) -> PdfHeaderExtractionResult:
+    values = _representative_values()
+    values.update(overrides)
+    return PdfHeaderExtractionResult(
+        source_filename=f"source-{index}.pdf",
+        source_file_index=index,
+        page_number=page_number,
+        extraction_status=status,
+        error_message=None if status != "Failed extraction" else "failed",
+        customer=values["Customer"],
+        design=values["Design"],
+        revision=values["Revision"],
+        part=values["Part"],
+        opportunity_project_number=values["Opportunity/Project #"],
+        pieces_per_set=values["Pieces per set"],
+        board=values["Board"],
+        corr_direction=values["Corr direction"],
+        view=values["View"],
+        production_project_manager=values["Production/Project Manager"],
+        designer=values["Designer"],
+        id=values["ID"],
+        area=values["Area"],
+        blank_width=values["Blank width"],
+        blank_height=values["Blank height"],
+        inches_of_rule=values["Inches of rule"],
+        date=values["Date"],
+        upper_special_text=overrides.get("upper_special_text", ""),
+        lower_special_text=overrides.get("lower_special_text", ""),
+    )
+
+
+def _workbook_from_export(results: list[PdfHeaderExtractionResult]):
+    return load_workbook(BytesIO(build_spec_sheet_excel(results)))
 
 
 def _label_for_field(field_name: str, manager_label: str) -> str:
@@ -637,3 +688,149 @@ def test_fixed_header_fields_do_not_leak_into_special_text() -> None:
     )
 
     assert results[0].upper_special_text == "1 Color"
+
+
+def test_spec_sheet_template_loads_successfully() -> None:
+    workbook = load_workbook(DEFAULT_TEMPLATE_PATH)
+
+    assert TEMPLATE_WORKSHEET_NAME in workbook.sheetnames
+
+
+def test_expected_19_template_headers_are_validated() -> None:
+    workbook = load_workbook(DEFAULT_TEMPLATE_PATH)
+    worksheet = workbook[TEMPLATE_WORKSHEET_NAME]
+
+    headers = tuple(worksheet.cell(row=1, column=column).value for column in range(1, 20))
+
+    assert headers == EXPECTED_TEMPLATE_HEADERS
+
+
+def test_header_mismatch_creates_controlled_error(tmp_path: Path) -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = TEMPLATE_WORKSHEET_NAME
+    for column, header in enumerate(EXPECTED_TEMPLATE_HEADERS, start=1):
+        worksheet.cell(row=1, column=column).value = header
+    worksheet.cell(row=1, column=3).value = "wrong header"
+    template_path = tmp_path / "bad_template.xlsx"
+    workbook.save(template_path)
+
+    with pytest.raises(SpecSheetExcelExportError):
+        build_spec_sheet_excel([_result()], template_path=template_path)
+
+
+def test_one_extraction_result_populates_row_2_correctly() -> None:
+    workbook = _workbook_from_export(
+        [
+            _result(
+                Date="02/20/2026",
+                **{
+                    "Blank width": "53+9/16",
+                    "Inches of rule": "522+25/32",
+                    "upper_special_text": "4 color - Litho or Digital",
+                    "lower_special_text": "Graphic Box - 1 Shown, 2 Required",
+                },
+            )
+        ]
+    )
+    worksheet = workbook[TEMPLATE_WORKSHEET_NAME]
+
+    assert worksheet.cell(row=2, column=1).value == "Fresh Step"
+    assert worksheet.cell(row=2, column=2).value == "KK260127-02"
+    assert worksheet.cell(row=2, column=17).value == "02/20/2026"
+    assert worksheet.cell(row=2, column=18).value == "4 color - Litho or Digital"
+    assert worksheet.cell(row=2, column=19).value == "Graphic Box - 1 Shown, 2 Required"
+
+
+def test_multiple_export_results_preserve_order() -> None:
+    workbook = _workbook_from_export(
+        [
+            _result(index=0, page_number=1, Customer="First", Design="KK1"),
+            _result(index=1, page_number=1, Customer="Second", Design="KK2"),
+        ]
+    )
+    worksheet = workbook[TEMPLATE_WORKSHEET_NAME]
+
+    assert [worksheet.cell(row=row, column=1).value for row in (2, 3)] == ["First", "Second"]
+    assert [worksheet.cell(row=row, column=2).value for row in (2, 3)] == ["KK1", "KK2"]
+
+
+def test_45_page_results_create_45_populated_rows() -> None:
+    workbook = _workbook_from_export(
+        [_result(index=0, page_number=page, Design=f"KK-{page:02}") for page in range(1, 46)]
+    )
+    worksheet = workbook[TEMPLATE_WORKSHEET_NAME]
+
+    assert worksheet.cell(row=46, column=2).value == "KK-45"
+    assert worksheet.cell(row=47, column=1).value is None
+
+
+def test_legitimate_blanks_remain_blank_cells() -> None:
+    workbook = _workbook_from_export([_result(ID="", upper_special_text="", lower_special_text="")])
+    worksheet = workbook[TEMPLATE_WORKSHEET_NAME]
+
+    assert worksheet.cell(row=2, column=12).value is None
+    assert worksheet.cell(row=2, column=18).value is None
+    assert worksheet.cell(row=2, column=19).value is None
+
+
+def test_export_preserves_date_fraction_and_multiline_special_text_exactly() -> None:
+    workbook = _workbook_from_export(
+        [
+            _result(
+                Date="02/20/2026",
+                **{
+                    "Blank width": "53+9/16",
+                    "lower_special_text": "Line One\nLine Two",
+                },
+            )
+        ]
+    )
+    worksheet = workbook[TEMPLATE_WORKSHEET_NAME]
+
+    assert worksheet.cell(row=2, column=14).value == "53+9/16"
+    assert worksheet.cell(row=2, column=17).value == "02/20/2026"
+    assert worksheet.cell(row=2, column=19).value == "Line One\nLine Two"
+
+
+def test_source_filename_page_status_and_error_are_not_exported() -> None:
+    workbook = _workbook_from_export([_result()])
+    worksheet = workbook[TEMPLATE_WORKSHEET_NAME]
+    exported_headers = [worksheet.cell(row=1, column=column).value for column in range(1, 20)]
+
+    assert "Source File" not in exported_headers
+    assert "Page Number" not in exported_headers
+    assert "Status" not in exported_headers
+    assert "Error" not in exported_headers
+
+
+def test_failed_extraction_pages_are_excluded_from_export() -> None:
+    workbook = _workbook_from_export(
+        [
+            _result(Customer="Good"),
+            _result(Customer="Bad", status="Failed extraction"),
+            _result(Customer="Also Good"),
+        ]
+    )
+    worksheet = workbook[TEMPLATE_WORKSHEET_NAME]
+
+    assert worksheet.cell(row=2, column=1).value == "Good"
+    assert worksheet.cell(row=3, column=1).value == "Also Good"
+    assert worksheet.cell(row=4, column=1).value is None
+
+
+def test_source_template_file_is_not_modified() -> None:
+    before = hashlib.sha256(DEFAULT_TEMPLATE_PATH.read_bytes()).hexdigest()
+
+    build_spec_sheet_excel([_result()])
+
+    after = hashlib.sha256(DEFAULT_TEMPLATE_PATH.read_bytes()).hexdigest()
+    assert after == before
+
+
+def test_generated_workbook_can_be_reopened_successfully() -> None:
+    excel_bytes = build_spec_sheet_excel([_result()])
+
+    workbook = load_workbook(BytesIO(excel_bytes))
+
+    assert TEMPLATE_WORKSHEET_NAME in workbook.sheetnames

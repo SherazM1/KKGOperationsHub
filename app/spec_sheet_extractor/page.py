@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime
 
 import streamlit as st
 
+from app.spec_sheet_extractor.excel_export import (
+    SpecSheetExcelExportError,
+    build_spec_sheet_excel,
+)
 from app.spec_sheet_extractor.extractor import (
     extract_header_fields_from_uploads,
     inventory_pdf_uploads,
@@ -29,6 +34,13 @@ def _clear_header_extraction_state() -> None:
     st.session_state["spec_sheet_extractor_header_results"] = []
     st.session_state["spec_sheet_extractor_header_summary"] = {}
     st.session_state["spec_sheet_extractor_extraction_signature"] = None
+    _clear_excel_export_state()
+
+
+def _clear_excel_export_state() -> None:
+    st.session_state["spec_sheet_extractor_excel_bytes"] = None
+    st.session_state["spec_sheet_extractor_excel_filename"] = None
+    st.session_state["spec_sheet_extractor_excel_error"] = None
 
 
 def _upload_signature(uploaded_files: list[object]) -> tuple[tuple[object, ...], ...]:
@@ -50,6 +62,9 @@ def _initialize_spec_sheet_extractor_state() -> None:
     st.session_state.setdefault("spec_sheet_extractor_header_results", [])
     st.session_state.setdefault("spec_sheet_extractor_header_summary", {})
     st.session_state.setdefault("spec_sheet_extractor_extraction_signature", None)
+    st.session_state.setdefault("spec_sheet_extractor_excel_bytes", None)
+    st.session_state.setdefault("spec_sheet_extractor_excel_filename", None)
+    st.session_state.setdefault("spec_sheet_extractor_excel_error", None)
 
 
 def _file_summary_rows(file_results: list[PdfFileInventoryResult]) -> list[dict[str, object]]:
@@ -190,6 +205,7 @@ def render_spec_sheet_extractor_view() -> None:
         ]
         st.session_state["spec_sheet_extractor_header_summary"] = _header_summary(header_results)
         st.session_state["spec_sheet_extractor_extraction_signature"] = signature
+        _clear_excel_export_state()
 
     header_results = [
         PdfHeaderExtractionResult(**result)
@@ -212,3 +228,50 @@ def render_spec_sheet_extractor_view() -> None:
 
         st.subheader("Header Field Preview")
         st.dataframe(_header_summary_rows(header_results), use_container_width=True, hide_index=True)
+
+        exportable_results = [
+            result
+            for result in header_results
+            if result.extraction_status != "Failed extraction"
+        ]
+        failed_export_count = len(header_results) - len(exportable_results)
+
+        st.subheader("Excel Export")
+        export_columns = st.columns(2)
+        export_columns[0].metric("Rows Ready for Export", len(exportable_results))
+        export_columns[1].metric("Failed Pages Excluded", failed_export_count)
+        if failed_export_count:
+            st.warning(f"{failed_export_count} failed page(s) will be excluded from the Excel export.")
+
+        if st.button(
+            "Generate Excel Workbook",
+            key="spec_sheet_extractor_generate_excel",
+            disabled=not exportable_results,
+        ):
+            try:
+                st.session_state["spec_sheet_extractor_excel_bytes"] = build_spec_sheet_excel(
+                    header_results
+                )
+                st.session_state["spec_sheet_extractor_excel_filename"] = (
+                    f"Spec_Sheet_Export_{datetime.now():%Y-%m-%d_%H%M}.xlsx"
+                )
+                st.session_state["spec_sheet_extractor_excel_error"] = None
+            except SpecSheetExcelExportError as exc:
+                st.session_state["spec_sheet_extractor_excel_bytes"] = None
+                st.session_state["spec_sheet_extractor_excel_filename"] = None
+                st.session_state["spec_sheet_extractor_excel_error"] = str(exc)
+
+        if st.session_state.get("spec_sheet_extractor_excel_error"):
+            st.error(st.session_state["spec_sheet_extractor_excel_error"])
+
+        excel_bytes = st.session_state.get("spec_sheet_extractor_excel_bytes")
+        excel_filename = st.session_state.get("spec_sheet_extractor_excel_filename")
+        if excel_bytes and excel_filename:
+            st.download_button(
+                "Download Spec Sheet Excel",
+                data=excel_bytes,
+                file_name=excel_filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="spec_sheet_extractor_download_excel",
+                use_container_width=True,
+            )
