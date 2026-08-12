@@ -16,13 +16,17 @@ from app.display_compliance.segmentation import (
 )
 from app.display_compliance.storage import LocalBaselineStorage, baseline_from_dict
 
+_SELECTED_BASELINE_KEY = "display_compliance_selected_baseline_id"
+_ANNOTATED_PREVIEW_BYTES_KEY = "display_compliance_annotated_preview_bytes"
+_ANNOTATED_PREVIEW_BASELINE_KEY = "display_compliance_annotated_preview_baseline_id"
+
 
 def _initialize_display_compliance_state() -> None:
     st.session_state.setdefault("display_compliance_created_baseline", None)
     st.session_state.setdefault("display_compliance_status_message", None)
-    st.session_state.setdefault("display_compliance_selected_baseline_id", None)
-    st.session_state.setdefault("display_compliance_annotated_preview_bytes", None)
-    st.session_state.setdefault("display_compliance_annotated_preview_baseline_id", None)
+    st.session_state.setdefault(_SELECTED_BASELINE_KEY, None)
+    st.session_state.setdefault(_ANNOTATED_PREVIEW_BYTES_KEY, None)
+    st.session_state.setdefault(_ANNOTATED_PREVIEW_BASELINE_KEY, None)
 
 
 def _created_baseline() -> DisplayBaseline | None:
@@ -45,18 +49,29 @@ def _baseline_metadata_rows(baseline: DisplayBaseline) -> list[dict[str, object]
     ]
 
 
-def _selected_or_created_baseline(
-    *,
-    selected_baseline: DisplayBaseline | None,
-    saved_baselines: list[DisplayBaseline],
-) -> DisplayBaseline | None:
-    if selected_baseline is not None:
-        return selected_baseline
+def _sanitize_selected_baseline_state(baseline_options: dict[str, DisplayBaseline]) -> None:
+    selected_baseline_id = st.session_state.get(_SELECTED_BASELINE_KEY)
+    if selected_baseline_id is not None and selected_baseline_id not in baseline_options:
+        st.session_state.pop(_SELECTED_BASELINE_KEY, None)
 
-    created = _created_baseline()
-    if created is not None:
-        return created
-    return saved_baselines[0] if saved_baselines else None
+
+def _clear_stale_preview_state(active_baseline_id: str | None) -> None:
+    preview_baseline_id = st.session_state.get(_ANNOTATED_PREVIEW_BASELINE_KEY)
+    if preview_baseline_id is None:
+        return
+    if preview_baseline_id != active_baseline_id:
+        st.session_state.pop(_ANNOTATED_PREVIEW_BYTES_KEY, None)
+        st.session_state.pop(_ANNOTATED_PREVIEW_BASELINE_KEY, None)
+
+
+def _format_baseline_option(
+    baseline_id: str | None,
+    baseline_options: dict[str, DisplayBaseline],
+) -> str:
+    if baseline_id is None:
+        return "Choose an option"
+    baseline = baseline_options.get(baseline_id)
+    return baseline.name if baseline is not None else "Unavailable baseline"
 
 
 def _render_candidate_detection(
@@ -74,19 +89,21 @@ def _render_candidate_detection(
         "Detect Product Regions",
         type="primary",
         key="display_compliance_detect_product_regions",
+        disabled=baseline is None,
     ):
+        if baseline is None:
+            st.info("Select a saved baseline to detect candidate product regions.")
+            return
         try:
             image_bytes = storage.load_reference_image_bytes(baseline)
             regions = detect_baseline_regions(baseline=baseline, image_bytes=image_bytes)
             updated_baseline = replace(baseline, regions=regions)
             storage.save_baseline_metadata(updated_baseline)
             st.session_state["display_compliance_created_baseline"] = asdict(updated_baseline)
-            st.session_state["display_compliance_annotated_preview_bytes"] = (
+            st.session_state[_ANNOTATED_PREVIEW_BYTES_KEY] = (
                 render_annotated_preview(image_bytes=image_bytes, regions=regions)
             )
-            st.session_state["display_compliance_annotated_preview_baseline_id"] = (
-                updated_baseline.baseline_id
-            )
+            st.session_state[_ANNOTATED_PREVIEW_BASELINE_KEY] = updated_baseline.baseline_id
             st.session_state["display_compliance_status_message"] = (
                 f"Detected {len(regions)} candidate product region(s). "
                 "Rerun detection any time to replace these candidates."
@@ -96,7 +113,12 @@ def _render_candidate_detection(
         except Exception as exc:
             st.error(f"Unexpected detection error: {exc}")
 
-    current_baseline = storage.load_baseline(baseline.baseline_id)
+    try:
+        current_baseline = storage.load_baseline(baseline.baseline_id)
+    except (FileNotFoundError, ValueError) as exc:
+        st.info(f"Selected baseline is no longer available: {exc}")
+        return
+
     region_count = len(current_baseline.regions)
     st.metric("Candidate Region Count", region_count)
     if region_count == 0:
@@ -104,20 +126,17 @@ def _render_candidate_detection(
 
     preview_bytes = None
     if (
-        st.session_state.get("display_compliance_annotated_preview_baseline_id")
-        == current_baseline.baseline_id
+        st.session_state.get(_ANNOTATED_PREVIEW_BASELINE_KEY) == current_baseline.baseline_id
     ):
-        preview_bytes = st.session_state.get("display_compliance_annotated_preview_bytes")
+        preview_bytes = st.session_state.get(_ANNOTATED_PREVIEW_BYTES_KEY)
     if preview_bytes is None and current_baseline.regions:
         try:
             preview_bytes = render_annotated_preview(
                 image_bytes=storage.load_reference_image_bytes(current_baseline),
                 regions=current_baseline.regions,
             )
-            st.session_state["display_compliance_annotated_preview_bytes"] = preview_bytes
-            st.session_state["display_compliance_annotated_preview_baseline_id"] = (
-                current_baseline.baseline_id
-            )
+            st.session_state[_ANNOTATED_PREVIEW_BYTES_KEY] = preview_bytes
+            st.session_state[_ANNOTATED_PREVIEW_BASELINE_KEY] = current_baseline.baseline_id
         except (DisplayComplianceSegmentationError, FileNotFoundError, ValueError):
             preview_bytes = None
     if preview_bytes:
@@ -192,17 +211,25 @@ def render_display_compliance_view() -> None:
         st.info("Automatic region detection is not active yet. Detected region count is 0.")
 
     saved_baselines = storage.list_baselines()
+    baseline_options = {baseline.baseline_id: baseline for baseline in saved_baselines}
+    _sanitize_selected_baseline_state(baseline_options)
     selected_baseline = None
     if saved_baselines:
         st.subheader("Saved Baselines")
-        baseline_options = {baseline.baseline_id: baseline for baseline in saved_baselines}
         selected_baseline_id = st.selectbox(
             "Select saved baseline",
-            options=list(baseline_options.keys()),
-            format_func=lambda baseline_id: baseline_options[baseline_id].name,
-            key="display_compliance_selected_baseline_id",
+            options=[None, *baseline_options.keys()],
+            format_func=lambda baseline_id: _format_baseline_option(
+                baseline_id,
+                baseline_options,
+            ),
+            key=_SELECTED_BASELINE_KEY,
         )
-        selected_baseline = baseline_options[selected_baseline_id]
+        selected_baseline = (
+            baseline_options.get(selected_baseline_id)
+            if selected_baseline_id is not None
+            else None
+        )
         st.dataframe(
             [
                 {
@@ -220,10 +247,13 @@ def render_display_compliance_view() -> None:
             use_container_width=True,
             hide_index=True,
         )
+    else:
+        st.info("No saved baselines yet. Create a baseline above to begin.")
 
-    active_baseline = _selected_or_created_baseline(
-        selected_baseline=selected_baseline,
-        saved_baselines=saved_baselines,
-    )
+    active_baseline = selected_baseline
+    active_baseline_id = active_baseline.baseline_id if active_baseline is not None else None
+    _clear_stale_preview_state(active_baseline_id)
     if active_baseline is not None:
         _render_candidate_detection(storage=storage, baseline=active_baseline)
+    elif saved_baselines:
+        st.info("Select a saved baseline to detect candidate product regions.")
