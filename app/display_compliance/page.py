@@ -22,6 +22,7 @@ def _initialize_display_compliance_state() -> None:
     st.session_state.setdefault("display_compliance_status_message", None)
     st.session_state.setdefault("display_compliance_selected_baseline_id", None)
     st.session_state.setdefault("display_compliance_annotated_preview_bytes", None)
+    st.session_state.setdefault("display_compliance_annotated_preview_baseline_id", None)
 
 
 def _created_baseline() -> DisplayBaseline | None:
@@ -46,15 +47,11 @@ def _baseline_metadata_rows(baseline: DisplayBaseline) -> list[dict[str, object]
 
 def _selected_or_created_baseline(
     *,
-    storage: LocalBaselineStorage,
+    selected_baseline: DisplayBaseline | None,
     saved_baselines: list[DisplayBaseline],
 ) -> DisplayBaseline | None:
-    selected_baseline_id = st.session_state.get("display_compliance_selected_baseline_id")
-    if selected_baseline_id:
-        try:
-            return storage.load_baseline(selected_baseline_id)
-        except FileNotFoundError:
-            st.session_state["display_compliance_selected_baseline_id"] = None
+    if selected_baseline is not None:
+        return selected_baseline
 
     created = _created_baseline()
     if created is not None:
@@ -84,11 +81,11 @@ def _render_candidate_detection(
             updated_baseline = replace(baseline, regions=regions)
             storage.save_baseline_metadata(updated_baseline)
             st.session_state["display_compliance_created_baseline"] = asdict(updated_baseline)
-            st.session_state["display_compliance_selected_baseline_id"] = (
-                updated_baseline.baseline_id
-            )
             st.session_state["display_compliance_annotated_preview_bytes"] = (
                 render_annotated_preview(image_bytes=image_bytes, regions=regions)
+            )
+            st.session_state["display_compliance_annotated_preview_baseline_id"] = (
+                updated_baseline.baseline_id
             )
             st.session_state["display_compliance_status_message"] = (
                 f"Detected {len(regions)} candidate product region(s). "
@@ -105,7 +102,12 @@ def _render_candidate_detection(
     if region_count == 0:
         st.warning("No candidate product regions are currently saved for this baseline.")
 
-    preview_bytes = st.session_state.get("display_compliance_annotated_preview_bytes")
+    preview_bytes = None
+    if (
+        st.session_state.get("display_compliance_annotated_preview_baseline_id")
+        == current_baseline.baseline_id
+    ):
+        preview_bytes = st.session_state.get("display_compliance_annotated_preview_bytes")
     if preview_bytes is None and current_baseline.regions:
         try:
             preview_bytes = render_annotated_preview(
@@ -113,6 +115,9 @@ def _render_candidate_detection(
                 regions=current_baseline.regions,
             )
             st.session_state["display_compliance_annotated_preview_bytes"] = preview_bytes
+            st.session_state["display_compliance_annotated_preview_baseline_id"] = (
+                current_baseline.baseline_id
+            )
         except (DisplayComplianceSegmentationError, FileNotFoundError, ValueError):
             preview_bytes = None
     if preview_bytes:
@@ -187,6 +192,7 @@ def render_display_compliance_view() -> None:
         st.info("Automatic region detection is not active yet. Detected region count is 0.")
 
     saved_baselines = storage.list_baselines()
+    selected_baseline = None
     if saved_baselines:
         st.subheader("Saved Baselines")
         baseline_options = {baseline.baseline_id: baseline for baseline in saved_baselines}
@@ -216,7 +222,7 @@ def render_display_compliance_view() -> None:
         )
 
     active_baseline = _selected_or_created_baseline(
-        storage=storage,
+        selected_baseline=selected_baseline,
         saved_baselines=saved_baselines,
     )
     if active_baseline is not None:
