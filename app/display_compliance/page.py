@@ -45,12 +45,12 @@ def render_display_compliance_view() -> None:
         st.session_state["page"] = "home"
         st.stop()
 
-    st.title("Display Compliance")
+    st.title("Displays: Product Quality Control ")
     st.caption("Create a known-perfect display baseline for future product-placement QC.")
 
     st.subheader("Create Baseline")
     baseline_name = st.text_input(
-        "Display / Baseline Name",
+        "Display Name",
         key="display_compliance_baseline_name",
     )
     uploaded_file = st.file_uploader(
@@ -95,7 +95,7 @@ def render_display_compliance_view() -> None:
 
     baseline = _created_baseline()
     if baseline is not None:
-        st.subheader("Baseline Metadata")
+        st.subheader("Baseline Data")
         st.dataframe(_baseline_metadata_rows(baseline), use_container_width=True, hide_index=True)
         st.info("Automatic region detection is not active yet. Detected region count is 0.")
 
