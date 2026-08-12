@@ -9,8 +9,8 @@ import zlib
 import pytest
 
 from app.display_compliance.baseline import create_baseline
-from app.display_compliance.models import DisplayBaseline
-from app.display_compliance.storage import LocalBaselineStorage
+from app.display_compliance.models import DisplayBaseline, ProductRegion
+from app.display_compliance.storage import LocalBaselineStorage, baseline_from_dict
 
 
 def _png_bytes(width: int = 3, height: int = 2) -> bytes:
@@ -68,3 +68,40 @@ def test_baseline_metadata_round_trips_through_local_storage(tmp_path: Path) -> 
     assert storage.list_baselines() == [baseline]
     assert (tmp_path / baseline.baseline_id / "baseline.json").exists()
     assert (tmp_path / baseline.baseline_id / "baseline_a.png").read_bytes() == image_bytes
+
+
+def test_baseline_region_metadata_round_trips_through_local_storage(tmp_path: Path) -> None:
+    image_bytes = _png_bytes(10, 8)
+    baseline = create_baseline(
+        name="Baseline With Regions",
+        filename="baseline.png",
+        image_bytes=image_bytes,
+    )
+    baseline.regions.append(
+        ProductRegion(
+            region_id="region_001",
+            bbox=(1, 2, 3, 4),
+            polygon=((1, 2), (4, 2), (4, 6), (1, 6)),
+        )
+    )
+    storage = LocalBaselineStorage(tmp_path)
+
+    storage.save_baseline(baseline, image_bytes)
+    loaded = storage.load_baseline(baseline.baseline_id)
+
+    assert loaded == baseline
+
+
+def test_existing_zero_region_baseline_metadata_remains_loadable() -> None:
+    baseline = baseline_from_dict(
+        {
+            "baseline_id": "baseline-1",
+            "name": "Pass 1 Baseline",
+            "reference_filename": "reference.png",
+            "reference_width": 100,
+            "reference_height": 80,
+            "regions": [],
+        }
+    )
+
+    assert baseline.regions == []
