@@ -1117,7 +1117,7 @@ def render_bol_generator_view() -> None:
             st.session_state["bol_multistop_individual_template_mode"] = current_individual_template
 
         st.selectbox(
-            "Choose individual BOL template",
+            "Choose Multistop BOL template",
             options=individual_template_options,
             index=individual_template_options.index(current_individual_template),
             key="bol_multistop_individual_template_mode",
@@ -1138,7 +1138,7 @@ def render_bol_generator_view() -> None:
                     selected_facility=st.session_state["bol_selected_facility"],
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
                     bol_type=st.session_state.get("bol_type_selector", "PLT"),
-                    template_path=MULTISTOP_TEMPLATE_PATH,
+                    template_path=resolve_template_path_for_mode(individual_template_mode),
                     individual_stop_template_path=resolve_template_path_for_mode(
                         individual_template_mode
                     ),
@@ -1292,7 +1292,7 @@ def render_bol_generator_view() -> None:
                     selected_facility=st.session_state["bol_selected_facility"],
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
                     bol_type=st.session_state.get("bol_type_selector", "PLT"),
-                    template_path=MULTISTOP_TEMPLATE_PATH,
+                    template_path=resolve_template_path_for_mode(individual_template_mode),
                     individual_stop_template_path=resolve_template_path_for_mode(
                         individual_template_mode
                     ),

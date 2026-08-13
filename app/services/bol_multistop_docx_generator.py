@@ -26,6 +26,7 @@ from app.services.bol_standard_docx_generator import (
     SkippedDocxRecord,
     StandardDocxGenerationResult,
     _apply_template_record_values as _apply_standard_template_record_values,
+    _normalize_document_font as _normalize_standard_document_font,
     _normalize_bol_type,
     _postprocess_comments_in_saved_docx as _postprocess_standard_comments_in_saved_docx,
 )
@@ -900,6 +901,32 @@ def _build_individual_stop_standard_record(
     )
 
 
+def _build_combined_standard_record(record: BolMultistopRecord) -> BolStandardRecord:
+    return BolStandardRecord(
+        bol_number=record.bol_number,
+        ship_date=record.ship_date,
+        carrier=record.carrier,
+        kk_load_number=record.kk_load_number,
+        kk_po_number=record.kk_po_number,
+        po_number=record.po_number,
+        dc_number=record.dc_number,
+        consignee_company=record.consignee_company,
+        consignee_street=record.consignee_street,
+        consignee_city_state_zip=record.consignee_city_state_zip,
+        ship_from=record.ship_from,
+        bill_to=record.bill_to,
+        seal_number_blank=record.seal_number_blank,
+        comments=record.comments,
+        item_lines=record.item_lines,
+        total_skids=record.total_skids,
+        is_ready=True,
+        status="Ready",
+        selected_for_generation=True,
+        pickup_number="",
+        carrier_pro_number=record.load_number,
+    )
+
+
 def _save_multistop_docx(
     *,
     record: BolMultistopRecord,
@@ -917,34 +944,61 @@ def _save_multistop_docx(
     notices: list[DocxGenerationNotice],
 ) -> MultistopGeneratedDocxFile:
     doc = Document(str(resolved_template))
-    _tighten_multistop_template_rows(doc)
-    _replace_text_in_document(doc, replacements, include_xml_tree=True)
-    _fit_combined_bol_number(doc, record.bol_number)
-    _clean_combined_multistop_item_area(doc, record, bol_type)
-    for table in doc.tables:
-        format_bol_item_detail_table(table)
-    ship_from_populated = _populate_ship_from_block(doc, selected_facility)
-    if not ship_from_populated:
-        notices.append(
-            DocxGenerationNotice(
-                bol_number=bol_label,
-                message="Could not confirm ship-from block location in template.",
-            )
+    is_standard_family_template = resolved_template.name in {
+        STANDARD_TEMPLATE_PATH.name,
+        NO_RECOURSE_TEMPLATE_PATH.name,
+    }
+    resolved_comment = _resolve_comment_for_record(record.comments, batch_comment)
+
+    if is_standard_family_template:
+        is_no_recourse_template = resolved_template.name == NO_RECOURSE_TEMPLATE_PATH.name
+        record_notice_messages = _apply_standard_template_record_values(
+            doc,
+            _build_combined_standard_record(record),
+            selected_facility,
+            batch_comment,
+            bol_type=bol_type,
+            compact_standard_item_area=True,
+            filter_blank_item_lines=is_no_recourse_template,
         )
-    bill_to_populated = _populate_combined_bill_to_block(doc, record)
-    if not bill_to_populated:
-        notices.append(
-            DocxGenerationNotice(
-                bol_number=bol_label,
-                message="Could not confirm combined Bill To block location in template.",
+        ship_from_populated = _populate_ship_from_block(doc, selected_facility)
+        if not ship_from_populated:
+            notices.append(
+                DocxGenerationNotice(
+                    bol_number=bol_label,
+                    message="Could not confirm ship-from block location in combined template.",
+                )
             )
-        )
+        for message in record_notice_messages:
+            notices.append(DocxGenerationNotice(bol_number=bol_label, message=message))
+    else:
+        _tighten_multistop_template_rows(doc)
+        _replace_text_in_document(doc, replacements, include_xml_tree=True)
+        _fit_combined_bol_number(doc, record.bol_number)
+        _clean_combined_multistop_item_area(doc, record, bol_type)
+        for table in doc.tables:
+            format_bol_item_detail_table(table)
+        ship_from_populated = _populate_ship_from_block(doc, selected_facility)
+        if not ship_from_populated:
+            notices.append(
+                DocxGenerationNotice(
+                    bol_number=bol_label,
+                    message="Could not confirm ship-from block location in template.",
+                )
+            )
+        bill_to_populated = _populate_combined_bill_to_block(doc, record)
+        if not bill_to_populated:
+            notices.append(
+                DocxGenerationNotice(
+                    bol_number=bol_label,
+                    message="Could not confirm combined Bill To block location in template.",
+                )
+            )
 
     destination = _unique_destination_path(output_root, base_name, ".docx")
     filename = destination.name
     doc.save(str(destination))
 
-    resolved_comment = _resolve_comment_for_record(record.comments, batch_comment)
     comment_label_populated = _postprocess_standard_comments_in_saved_docx(
         destination,
         resolved_comment,
@@ -1018,6 +1072,7 @@ def _save_individual_stop_docx(
         _clean_standard_individual_stop_item_area(doc, stop, bol_type)
     elif is_no_recourse_template:
         _clean_no_recourse_individual_stop_item_area(doc, stop, bol_type)
+    _normalize_standard_document_font(doc)
     for message in record_notice_messages:
         notices.append(DocxGenerationNotice(bol_number=bol_label, message=message))
 

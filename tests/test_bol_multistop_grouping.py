@@ -126,6 +126,7 @@ def _capture_multistop_shippers(monkeypatch: pytest.MonkeyPatch) -> dict[str, li
                 "record_street": record.ship_from.street,
                 "record_city_state_zip": record.ship_from.city_state_zip,
                 "template_mode": kwargs.get("template_mode", ""),
+                "template_name": Path(kwargs["resolved_template"]).name,
             }
         )
         return MultistopGeneratedDocxFile(
@@ -425,6 +426,42 @@ def test_multistop_generic_shipper_docx_renders_full_address(tmp_path: Path) -> 
         assert "Madison, WI 53703" in text
 
 
+def test_multistop_combined_docx_uses_selected_standard_template(tmp_path: Path) -> None:
+    result = generate_multistop_docx_set(
+        _three_stop_record(),
+        selected_facility=BOL_FACILITY_LOOKUP["Green Bay Packaging"],
+        template_path=Path("app/templates/standard_bol_template.docx"),
+        individual_stop_template_path=Path("app/templates/standard_bol_template.docx"),
+        master_template_mode="Standard",
+        output_dir=tmp_path,
+    )
+
+    combined_file = next(file for file in result.generated_files if file.document_type == "combined")
+    text = _docx_text(combined_file.file_path)
+
+    assert combined_file.template_mode == "Standard"
+    assert "The transportation of the property described herein" not in text
+
+
+def test_multistop_combined_docx_uses_selected_no_recourse_template(tmp_path: Path) -> None:
+    result = generate_multistop_docx_set(
+        _three_stop_record(),
+        selected_facility=BOL_FACILITY_LOOKUP["Green Bay Packaging"],
+        template_path=Path("app/templates/no_recourse_bol_template.docx"),
+        individual_stop_template_path=Path("app/templates/no_recourse_bol_template.docx"),
+        master_template_mode="No Recourse",
+        output_dir=tmp_path,
+    )
+
+    combined_file = next(file for file in result.generated_files if file.document_type == "combined")
+    stop_files = [file for file in result.generated_files if file.document_type == "stop"]
+    text = _docx_text(combined_file.file_path)
+
+    assert combined_file.template_mode == "No Recourse"
+    assert all(file.template_mode == "No Recourse" for file in stop_files)
+    assert "waives any right of recourse against Kendal King Group" in text
+
+
 def test_multistop_standard_mode_propagates_to_master_and_stops(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -434,6 +471,7 @@ def test_multistop_standard_mode_propagates_to_master_and_stops(
     result = generate_multistop_docx_set(
         _three_stop_record(),
         selected_facility=BOL_FACILITY_LOOKUP["Green Bay Packaging"],
+        template_path=Path("app/templates/standard_bol_template.docx"),
         individual_stop_template_path=Path("app/templates/standard_bol_template.docx"),
         master_template_mode="Standard",
         output_dir=tmp_path,
@@ -446,6 +484,7 @@ def test_multistop_standard_mode_propagates_to_master_and_stops(
         "Standard",
     ]
     assert captured["combined"][0]["template_mode"] == "Standard"
+    assert captured["combined"][0]["template_name"] == "standard_bol_template.docx"
 
 
 def test_multistop_no_recourse_mode_propagates_to_master_and_stops(
@@ -457,6 +496,7 @@ def test_multistop_no_recourse_mode_propagates_to_master_and_stops(
     result = generate_multistop_docx_set(
         _three_stop_record(),
         selected_facility=BOL_FACILITY_LOOKUP["Green Bay Packaging"],
+        template_path=Path("app/templates/no_recourse_bol_template.docx"),
         individual_stop_template_path=Path("app/templates/no_recourse_bol_template.docx"),
         master_template_mode="No Recourse",
         output_dir=tmp_path,
@@ -469,6 +509,7 @@ def test_multistop_no_recourse_mode_propagates_to_master_and_stops(
         "No Recourse",
     ]
     assert captured["combined"][0]["template_mode"] == "No Recourse"
+    assert captured["combined"][0]["template_name"] == "no_recourse_bol_template.docx"
 
 
 def test_multistop_groups_multiple_loads_without_cross_contamination() -> None:
