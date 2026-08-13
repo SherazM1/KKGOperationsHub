@@ -18,6 +18,7 @@ from app.services.bol_multistop_parser import (
     _resolve_columns,
     _resolve_optional_columns,
 )
+from app.utils.bol_facilities import BOL_FACILITY_LOOKUP
 
 
 def _row(
@@ -105,6 +106,96 @@ def _fake_multistop_saves(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, li
     return calls
 
 
+def _capture_multistop_shippers(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict[str, str]]]:
+    captured: dict[str, list[dict[str, str]]] = {"combined": [], "stop": []}
+
+    def fake_combined(**kwargs):
+        record = kwargs["record"]
+        selected_facility = kwargs["selected_facility"]
+        destination = Path(kwargs["output_root"]) / f"{kwargs['base_name']}.docx"
+        destination.write_bytes(b"combined")
+        captured["combined"].append(
+            {
+                "facility_name": selected_facility["facility_name"],
+                "address": selected_facility["address"],
+                "location": selected_facility["location"],
+                "record_company": record.ship_from.company,
+                "record_street": record.ship_from.street,
+                "record_city_state_zip": record.ship_from.city_state_zip,
+            }
+        )
+        return MultistopGeneratedDocxFile(
+            bol_number=kwargs["bol_label"],
+            file_name=destination.name,
+            file_path=str(destination),
+            document_type="combined",
+            load_number=record.load_number,
+            kk_load_number=record.kk_load_number,
+            stop_number=None,
+        )
+
+    def fake_apply_template(doc, stop_record, selected_facility, batch_comment, **kwargs):
+        captured["stop"].append(
+            {
+                "facility_name": selected_facility["facility_name"],
+                "address": selected_facility["address"],
+                "location": selected_facility["location"],
+                "record_company": stop_record.ship_from.company,
+                "record_street": stop_record.ship_from.street,
+                "record_city_state_zip": stop_record.ship_from.city_state_zip,
+            }
+        )
+        return []
+
+    def fake_postprocess(path, resolved_comment):
+        return True
+
+    monkeypatch.setattr(
+        "app.services.bol_multistop_docx_generator._save_multistop_docx",
+        fake_combined,
+    )
+    monkeypatch.setattr(
+        "app.services.bol_multistop_docx_generator._apply_standard_template_record_values",
+        fake_apply_template,
+    )
+    monkeypatch.setattr(
+        "app.services.bol_multistop_docx_generator._clean_standard_individual_stop_item_area",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.bol_multistop_docx_generator._clean_no_recourse_individual_stop_item_area",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.bol_multistop_docx_generator._postprocess_standard_comments_in_saved_docx",
+        fake_postprocess,
+    )
+    return captured
+
+
+def _three_stop_record():
+    return map_multistop_rows_to_records(
+        [
+            _row(kk_load="1", stop=1, bol_number="A"),
+            _row(kk_load="1", stop=2, bol_number="B"),
+            _row(kk_load="1", stop=3, bol_number="C"),
+        ]
+    )
+
+
+def _assert_captured_shipper(
+    captured_values: dict[str, str],
+    *,
+    facility_name: str,
+    street: str,
+    city_state_zip: str,
+) -> None:
+    assert captured_values["facility_name"] == facility_name
+    assert captured_values["record_company"] == facility_name
+    assert captured_values["record_street"] == street
+    assert captured_values["record_city_state_zip"] == city_state_zip
+
+
 def test_multistop_groups_three_stops_by_kk_load_and_generates_one_combined(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -144,6 +235,119 @@ def test_multistop_groups_three_stops_by_kk_load_and_generates_one_combined(
         "KK_Load_1/stop_2_bol_B.docx",
         "KK_Load_1/stop_3_bol_C.docx",
     ]
+
+
+def test_multistop_green_bay_shipper_propagates_to_combined_docx_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected_facility = BOL_FACILITY_LOOKUP["Green Bay Packaging"]
+    captured = _capture_multistop_shippers(monkeypatch)
+
+    generate_multistop_docx_set(
+        _three_stop_record(),
+        selected_facility=selected_facility,
+        output_dir=tmp_path,
+    )
+
+    assert len(captured["combined"]) == 1
+    _assert_captured_shipper(
+        captured["combined"][0],
+        facility_name="Kendal King C/O Green Bay",
+        street="5600 S. Moorland Road",
+        city_state_zip="New Berlin, WI 53151",
+    )
+    assert captured["combined"][0]["record_company"] != "KENDAL KING C/O"
+
+
+def test_multistop_green_bay_shipper_propagates_to_all_stop_docs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected_facility = BOL_FACILITY_LOOKUP["Green Bay Packaging"]
+    captured = _capture_multistop_shippers(monkeypatch)
+
+    generate_multistop_docx_set(
+        _three_stop_record(),
+        selected_facility=selected_facility,
+        output_dir=tmp_path,
+    )
+
+    assert len(captured["stop"]) == 3
+    for stop_capture in captured["stop"]:
+        _assert_captured_shipper(
+            stop_capture,
+            facility_name="Kendal King C/O Green Bay",
+            street="5600 S. Moorland Road",
+            city_state_zip="New Berlin, WI 53151",
+        )
+
+
+def test_multistop_selected_shipper_does_not_fall_back_to_shorr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected_facility = BOL_FACILITY_LOOKUP["Green Bay Packaging"]
+    captured = _capture_multistop_shippers(monkeypatch)
+
+    generate_multistop_docx_set(
+        _three_stop_record(),
+        selected_facility=selected_facility,
+        output_dir=tmp_path,
+    )
+
+    all_captures = [*captured["combined"], *captured["stop"]]
+    assert all("Shorr" not in capture["record_company"] for capture in all_captures)
+    assert all("981 W Oakdale Rd" not in capture["record_street"] for capture in all_captures)
+
+
+def test_multistop_another_shipper_selection_propagates_to_all_docs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected_facility = BOL_FACILITY_LOOKUP["SHORR"]
+    captured = _capture_multistop_shippers(monkeypatch)
+
+    generate_multistop_docx_set(
+        _three_stop_record(),
+        selected_facility=selected_facility,
+        output_dir=tmp_path,
+    )
+
+    for capture in [*captured["combined"], *captured["stop"]]:
+        _assert_captured_shipper(
+            capture,
+            facility_name="Kendal King C/O Shorr",
+            street="975 W Oakdale Road",
+            city_state_zip="Grand Prairie, TX 75050",
+        )
+
+
+def test_multistop_full_selected_shipper_record_propagates_to_all_docs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected_facility = {
+        "facility": "TEST",
+        "facility_name": "KENDAL KING C/O TEST LOCATION",
+        "address": "123 Test Street Test City, WI 54321",
+        "location": "Test City, WI",
+    }
+    captured = _capture_multistop_shippers(monkeypatch)
+
+    generate_multistop_docx_set(
+        _three_stop_record(),
+        selected_facility=selected_facility,
+        output_dir=tmp_path,
+    )
+
+    for capture in [*captured["combined"], *captured["stop"]]:
+        assert capture["facility_name"] == "KENDAL KING C/O TEST LOCATION"
+        assert capture["address"] == "123 Test Street Test City, WI 54321"
+        assert capture["location"] == "Test City, WI"
+        assert capture["record_company"] == "KENDAL KING C/O TEST LOCATION"
+        assert capture["record_street"] == "123 Test Street"
+        assert capture["record_city_state_zip"] == "Test City, WI 54321"
 
 
 def test_multistop_groups_multiple_loads_without_cross_contamination() -> None:

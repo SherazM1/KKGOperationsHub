@@ -29,7 +29,7 @@ from app.services.bol_standard_docx_generator import (
     _normalize_bol_type,
     _postprocess_comments_in_saved_docx as _postprocess_standard_comments_in_saved_docx,
 )
-from app.utils.bol_facilities import BolFacilityRecord
+from app.utils.bol_facilities import BolFacilityRecord, facility_to_ship_from
 
 
 MULTISTOP_TEMPLATE_PATH = Path("app/templates/multistop_bol_template.docx")
@@ -681,9 +681,10 @@ def _resolve_comment_for_record(record_comment: str, batch_comment: str | None) 
 
 
 def _populate_ship_from_block(doc: Document, selected_facility: BolFacilityRecord) -> bool:
-    name_value = selected_facility["facility_name"]
-    street_value = selected_facility["address"]
-    city_state_zip_value = selected_facility["location"]
+    ship_from = facility_to_ship_from(selected_facility)
+    name_value = ship_from.company
+    street_value = ship_from.street
+    city_state_zip_value = ship_from.city_state_zip
 
     for table in doc.tables:
         in_ship_from_block = False
@@ -703,7 +704,7 @@ def _populate_ship_from_block(doc: Document, selected_facility: BolFacilityRecor
             if not in_ship_from_block:
                 continue
 
-            if first_cell_text == "NAME" and len(row_cells) > 1:
+            if first_cell_text in {"NAME", "COMPANY"} and len(row_cells) > 1:
                 row_cells[1].text = name_value
             elif first_cell_text == "STREET" and len(row_cells) > 1:
                 row_cells[1].text = street_value
@@ -1064,6 +1065,7 @@ def generate_multistop_docx_set(
 
     output_root = output_dir or Path(mkdtemp(prefix="kkg_multistop_bol_docx_"))
     output_root.mkdir(parents=True, exist_ok=True)
+    selected_ship_from = facility_to_ship_from(selected_facility)
 
     generated: list[GeneratedDocxFile] = []
     skipped: list[SkippedDocxRecord] = []
@@ -1071,6 +1073,7 @@ def generate_multistop_docx_set(
     notices: list[DocxGenerationNotice] = []
 
     for record in records:
+        record.ship_from = selected_ship_from
         bol_label = record.bol_number or "(missing BOL #)"
         record.generation_skip_reason = None
 
