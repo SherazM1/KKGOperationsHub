@@ -42,17 +42,42 @@ REQUIRED_COLUMN_SPECS: dict[str, str] = {
     "pallet_description": "PalletDescription",
     "cases": "Cases",
     "total_pallets": "Total PLT",
-    "kit_value_each": "Kit Value (EACH)",
-    "shipment_value": "Shipment Value",
-    "chargeback_3_percent": "3% Chargeback",
     "weight_each": "weight each",
     "weight": "Weight",
 }
 
 OPTIONAL_COLUMN_SPECS: dict[str, tuple[str, ...]] = {
     "item_number": ("ITEM #", "Item #", "ITEM#", "Item#", "Item Number", "ITEM NUMBER"),
+    "kit_value_each": ("Kit Value (EACH)", "Kit Value Each", "Kit Value"),
+    "shipment_value": ("Shipment Value",),
+    "chargeback_3_percent": (
+        "3% Chargeback",
+        "3 % Chargeback",
+        "3 Percent Chargeback",
+    ),
 }
 CSV_WORKSHEET_NAME = "CSV"
+
+REQUIRED_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
+    "trackers": ("Pick Up #", "Pickup #", "Pick Up", "Pickup"),
+    "dc_city_state_zip": ("DC CITY, STATE, ZIP", "DC CITY STATE ZIP"),
+    "dc_city": ("DC City", "Destination City"),
+    "dc_state": ("DC ST", "DC State", "DC STATE", "State", "STATE", "ST"),
+    "dc_zip": ("DC ZIP", "DC Zip", "Zip", "ZIP", "Zip Code", "ZIP Code", "Postal Code"),
+    "dept": ("DEP.", "DEP", "Dept", "Department"),
+    "pallet_description": ("Pallet Description", "PALLETDESCRIPTION"),
+    "cases": ("CASES", "Case Qty", "Case QTY", "Case Quantity", "CASE QTY"),
+    "total_pallets": (
+        "Total PLT",
+        "TOTAL PLT",
+        "Total Pallets",
+        "TOTAL PALLETS",
+        "Total Pallet",
+        "Total Plts",
+        "Total PLTS",
+    ),
+    "weight_each": ("Weight Each", "WEIGHT EACH", "Weight", "WEIGHT"),
+}
 
 
 def _normalize_header(header: str) -> str:
@@ -66,6 +91,7 @@ def _normalize_header_for_fallback(header: str) -> str:
     cleaned = str(header).replace("\r", " ").replace("\n", " ")
     cleaned = cleaned.strip().lower()
     cleaned = re.sub(r"\s*#\s*", "#", cleaned)
+    cleaned = re.sub(r"\s*%\s*", " percent ", cleaned)
     # Tolerate minor punctuation differences (e.g., DEPT. vs DEPT, CITY, STATE, ZIP variants).
     cleaned = re.sub(r"[.,;:/\\()\-\_]+", " ", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
@@ -76,6 +102,69 @@ def _normalize_header_compact(header: str) -> str:
     cleaned = _normalize_header_for_fallback(header)
     # Second-pass comparison form: remove whitespace for compacted header variants.
     return cleaned.replace(" ", "")
+
+
+def _build_header_lookups(
+    columns: list[str],
+) -> tuple[list[str], dict[str, list[str]], dict[str, list[str]], dict[str, list[str]], dict[str, list[str]]]:
+    resolved_columns = [str(col) for col in columns]
+    exact_columns: dict[str, list[str]] = {}
+    lowered_exact_columns: dict[str, list[str]] = {}
+    normalized_columns: dict[str, list[str]] = {}
+    compact_columns: dict[str, list[str]] = {}
+
+    for column in resolved_columns:
+        exact_columns.setdefault(column, []).append(column)
+        lowered_exact_columns.setdefault(column.lower(), []).append(column)
+        normalized_columns.setdefault(_normalize_header_for_fallback(column), []).append(column)
+        compact_columns.setdefault(_normalize_header_compact(column), []).append(column)
+
+    return (
+        resolved_columns,
+        exact_columns,
+        lowered_exact_columns,
+        normalized_columns,
+        compact_columns,
+    )
+
+
+def _first_match(candidates: list[str] | None) -> str | None:
+    return candidates[0] if candidates else None
+
+
+def _resolve_column_name(
+    lookups: tuple[
+        list[str],
+        dict[str, list[str]],
+        dict[str, list[str]],
+        dict[str, list[str]],
+        dict[str, list[str]],
+    ],
+    primary: str,
+    aliases: tuple[str, ...],
+) -> str | None:
+    _, exact_columns, lowered_exact_columns, normalized_columns, compact_columns = lookups
+
+    for candidate in (primary, *aliases):
+        resolved_name = _first_match(exact_columns.get(candidate))
+        if resolved_name is not None:
+            return resolved_name
+
+        resolved_name = _first_match(lowered_exact_columns.get(candidate.lower()))
+        if resolved_name is not None:
+            return resolved_name
+
+        resolved_name = _first_match(
+            normalized_columns.get(_normalize_header_for_fallback(candidate))
+        )
+        if resolved_name is not None:
+            return resolved_name
+
+        resolved_name = _first_match(compact_columns.get(_normalize_header_compact(candidate)))
+        if resolved_name is not None:
+            return resolved_name
+
+    return None
 
 
 def _candidate_multistop_sheet_names(available_sheet_names: list[str]) -> list[str]:
@@ -97,39 +186,18 @@ def _candidate_multistop_sheet_names(available_sheet_names: list[str]) -> list[s
 
 
 def _resolve_columns_with_missing(columns: list[str]) -> tuple[dict[str, str], list[str]]:
-    resolved_columns = [str(col) for col in columns]
-    exact_columns = {col: col for col in resolved_columns}
-    lowered_exact_columns = {col.lower(): col for col in resolved_columns}
-    normalized_columns = {_normalize_header_for_fallback(col): col for col in resolved_columns}
-    compact_columns = {_normalize_header_compact(col): col for col in resolved_columns}
+    lookups = _build_header_lookups(columns)
 
     resolved: dict[str, str] = {}
     missing: list[str] = []
 
     for logical_name, source_name in REQUIRED_COLUMN_SPECS.items():
-        resolved_name: str | None = None
-
-        # 1) Exact canonical workbook header match first.
-        if source_name in exact_columns:
-            resolved_name = exact_columns[source_name]
-
-        # 2) Exact text match ignoring only case.
-        if resolved_name is None:
-            resolved_name = lowered_exact_columns.get(source_name.lower())
-
-        # 3) Controlled normalized fallback for slight formatting/case/punctuation differences.
-        if resolved_name is None:
-            normalized_name = _normalize_header_for_fallback(source_name)
-            if normalized_name in normalized_columns:
-                resolved_name = normalized_columns[normalized_name]
-
-        # 4) Compacted fallback for equivalent forms like "DC ST" vs "DCST".
-        if resolved_name is None:
-            compact_name = _normalize_header_compact(source_name)
-            if compact_name in compact_columns:
-                resolved_name = compact_columns[compact_name]
+        aliases = REQUIRED_COLUMN_ALIASES.get(logical_name, ())
+        resolved_name = _resolve_column_name(lookups, source_name, aliases)
 
         if resolved_name is None:
+            if logical_name == "dc_city_state_zip":
+                continue
             missing.append(f"{logical_name} (expected '{source_name}')")
         else:
             resolved[logical_name] = resolved_name
@@ -180,28 +248,13 @@ def _resolve_columns(columns: list[str], worksheet_name: str) -> dict[str, str]:
 
 
 def _resolve_optional_columns(columns: list[str]) -> dict[str, str]:
-    resolved_columns = [str(col) for col in columns]
-    exact_columns = {col: col for col in resolved_columns}
-    lowered_exact_columns = {col.lower(): col for col in resolved_columns}
-    normalized_columns = {_normalize_header_for_fallback(col): col for col in resolved_columns}
-    compact_columns = {_normalize_header_compact(col): col for col in resolved_columns}
+    lookups = _build_header_lookups(columns)
 
     resolved: dict[str, str] = {}
     for logical_name, candidate_names in OPTIONAL_COLUMN_SPECS.items():
-        for candidate_name in candidate_names:
-            resolved_name = exact_columns.get(candidate_name)
-            if resolved_name is None:
-                resolved_name = lowered_exact_columns.get(candidate_name.lower())
-            if resolved_name is None:
-                resolved_name = normalized_columns.get(
-                    _normalize_header_for_fallback(candidate_name)
-                )
-            if resolved_name is None:
-                resolved_name = compact_columns.get(_normalize_header_compact(candidate_name))
-
-            if resolved_name is not None:
-                resolved[logical_name] = resolved_name
-                break
+        resolved_name = _resolve_column_name(lookups, candidate_names[0], candidate_names[1:])
+        if resolved_name is not None:
+            resolved[logical_name] = resolved_name
 
     return resolved
 
@@ -227,6 +280,17 @@ def _parse_stop_number(value: str) -> int | None:
         return None
 
     return int(parsed)
+
+
+def _combine_city_state_zip_from_values(row_values: dict[str, str]) -> str:
+    if row_values.get("dc_city_state_zip", "").strip():
+        return row_values["dc_city_state_zip"]
+
+    city = row_values["dc_city"]
+    state = row_values["dc_state"]
+    zip_code = row_values["dc_zip"]
+    city_state = ", ".join(part for part in (city, state) if part)
+    return " ".join(part for part in (city_state, zip_code) if part)
 
 
 def _parse_multistop_dataframe_rows(
@@ -263,7 +327,7 @@ def _parse_multistop_dataframe_rows(
                 ship_date=row_values["ship_date"],
                 dc_name=row_values["dc_name"],
                 dc_address=row_values["dc_address"],
-                dc_city_state_zip=row_values["dc_city_state_zip"],
+                dc_city_state_zip=_combine_city_state_zip_from_values(row_values),
                 dc_city=row_values["dc_city"],
                 dc_state=row_values["dc_state"],
                 dc_zip=row_values["dc_zip"],
@@ -274,9 +338,9 @@ def _parse_multistop_dataframe_rows(
                 pallet_description=row_values["pallet_description"],
                 cases=row_values["cases"],
                 total_pallets=row_values["total_pallets"],
-                kit_value_each=row_values["kit_value_each"],
-                shipment_value=row_values["shipment_value"],
-                chargeback_3_percent=row_values["chargeback_3_percent"],
+                kit_value_each=optional_row_values.get("kit_value_each", ""),
+                shipment_value=optional_row_values.get("shipment_value", ""),
+                chargeback_3_percent=optional_row_values.get("chargeback_3_percent", ""),
                 weight_each=row_values["weight_each"],
                 weight=row_values["weight"],
             )
