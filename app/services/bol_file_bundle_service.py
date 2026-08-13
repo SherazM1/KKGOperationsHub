@@ -122,11 +122,17 @@ def _build_multistop_zip(
                 missing_count += 1
                 continue
 
-            bol_number = _sanitize_archive_part(generated_file.bol_number)
-            load_number = _sanitize_archive_part(
-                str(getattr(generated_file, "load_number", "") or "")
+            kk_load_number = _sanitize_archive_part(
+                str(getattr(generated_file, "kk_load_number", "") or "")
             )
-            folder_name = f"load_{load_number}_bol_{bol_number}"
+            if kk_load_number != "unknown":
+                folder_name = f"KK_Load_{kk_load_number}"
+            else:
+                bol_number = _sanitize_archive_part(generated_file.bol_number)
+                load_number = _sanitize_archive_part(
+                    str(getattr(generated_file, "load_number", "") or "")
+                )
+                folder_name = f"load_{load_number}_bol_{bol_number}"
             archive_file_name = _safe_archive_name(generated_file.file_name, expected_suffix)
             archive_name = f"{folder_name}/{archive_file_name}"
 

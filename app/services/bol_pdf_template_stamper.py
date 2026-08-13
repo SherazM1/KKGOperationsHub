@@ -1333,6 +1333,7 @@ def stamp_bol_pdf_set(
                     file_path=str(destination_pdf.resolve()),
                     document_type=str(getattr(generated_file, "document_type", "") or ""),
                     load_number=str(getattr(generated_file, "load_number", "") or ""),
+                    kk_load_number=str(getattr(generated_file, "kk_load_number", "") or ""),
                     stop_number=getattr(generated_file, "stop_number", None),
                 )
             )

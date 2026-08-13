@@ -104,6 +104,7 @@ def _multistop_record() -> BolMultistopRecord:
         BolMultistopStop(
             source_row_number=2,
             stop_number=1,
+            bol_number="MBOL-001",
             delivery_dc="DC 0551",
             delivery_address="1 Stop Way",
             delivery_city_state_zip="Dallas, TX 75001",
@@ -119,6 +120,7 @@ def _multistop_record() -> BolMultistopRecord:
         BolMultistopStop(
             source_row_number=3,
             stop_number=2,
+            bol_number="MBOL-002",
             delivery_dc="DC 0553",
             delivery_address="2 Stop Way",
             delivery_city_state_zip="Austin, TX 73301",

@@ -24,6 +24,7 @@ class ConvertedPdfFile:
     file_path: str
     document_type: str = ""
     load_number: str = ""
+    kk_load_number: str = ""
     stop_number: int | None = None
 
 
@@ -196,6 +197,7 @@ def convert_standard_docx_set_to_pdf(
                     file_path=str(destination_pdf.resolve()),
                     document_type=str(getattr(docx_file, "document_type", "") or ""),
                     load_number=str(getattr(docx_file, "load_number", "") or ""),
+                    kk_load_number=str(getattr(docx_file, "kk_load_number", "") or ""),
                     stop_number=getattr(docx_file, "stop_number", None),
                 )
             )

@@ -13,6 +13,7 @@ class BolMultistopStop:
 
     source_row_number: int
     stop_number: int
+    bol_number: str
     delivery_dc: str
     delivery_address: str
     delivery_city_state_zip: str
@@ -28,7 +29,7 @@ class BolMultistopStop:
 
 @dataclass(slots=True)
 class BolMultistopRecord:
-    """One grouped Multistop BOL record keyed by BOL # + load#."""
+    """One grouped Multistop BOL record keyed by KK Load."""
 
     # Header and grouping identity.
     bol_number: str

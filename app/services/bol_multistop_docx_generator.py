@@ -43,6 +43,7 @@ class MultistopGeneratedDocxFile(GeneratedDocxFile):
 
     document_type: str
     load_number: str
+    kk_load_number: str = ""
     stop_number: int | None = None
 
 
@@ -960,6 +961,7 @@ def _save_multistop_docx(
         file_path=str(destination.resolve()),
         document_type=document_type,
         load_number=record.load_number,
+        kk_load_number=record.kk_load_number,
         stop_number=stop_number,
     )
 
@@ -978,12 +980,7 @@ def _save_individual_stop_docx(
     notices: list[DocxGenerationNotice],
 ) -> MultistopGeneratedDocxFile:
     stop = record.stops[stop_index]
-    base_bol_number = (record.bol_number or "").strip()
-    display_bol_number = (
-        f"{base_bol_number}-{stop.stop_number:02d}"
-        if base_bol_number
-        else record.bol_number
-    )
+    display_bol_number = (stop.bol_number or "").strip() or record.bol_number
     stop_record = _build_individual_stop_standard_record(
         record,
         stop_index,
@@ -1029,11 +1026,12 @@ def _save_individual_stop_docx(
         )
 
     return MultistopGeneratedDocxFile(
-        bol_number=bol_label,
+        bol_number=display_bol_number,
         file_name=filename,
         file_path=str(destination.resolve()),
         document_type="stop",
         load_number=record.load_number,
+        kk_load_number=record.kk_load_number,
         stop_number=stop.stop_number,
     )
 
@@ -1102,8 +1100,8 @@ def generate_multistop_docx_set(
 
         try:
             safe_bol = _sanitize_filename_part(record.bol_number)
-            safe_load = _sanitize_filename_part(record.load_number)
-            combined_base_name = f"combined_multistop_bol_{safe_bol}_{safe_load}"
+            safe_kk_load = _sanitize_filename_part(record.kk_load_number)
+            combined_base_name = f"combined_multistop_bol_KK_Load_{safe_kk_load}"
 
             generated.append(
                 _save_multistop_docx(
@@ -1123,7 +1121,8 @@ def generate_multistop_docx_set(
             )
 
             for stop_index, stop in enumerate(record.stops):
-                stop_base_name = f"stop_{stop.stop_number}_bol_{safe_bol}_{safe_load}"
+                safe_stop_bol = _sanitize_filename_part(stop.bol_number or record.bol_number)
+                stop_base_name = f"stop_{stop.stop_number}_bol_{safe_stop_bol}"
                 generated.append(
                     _save_individual_stop_docx(
                         record=record,

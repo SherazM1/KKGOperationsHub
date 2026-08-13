@@ -121,6 +121,7 @@ def _build_stop(row: BolMultistopRow, stop_number: int) -> BolMultistopStop:
     return BolMultistopStop(
         source_row_number=row.source_row_number,
         stop_number=stop_number,
+        bol_number=row.bol_number,
         delivery_dc=_build_delivery_dc(row.dc_name, row.dc_number),
         delivery_address=row.dc_address,
         delivery_city_state_zip=_build_city_state_zip(row),
@@ -179,8 +180,15 @@ def _build_item_lines(stops: list[BolMultistopStop], rows_by_stop: dict[int, Bol
     return item_lines
 
 
-def _group_key(row: BolMultistopRow) -> tuple[str, str]:
-    return (row.bol_number.strip(), row.load_number.strip())
+def _group_key(row: BolMultistopRow) -> str:
+    return row.kk_load.strip()
+
+
+def _stop_sort_key(row: BolMultistopRow) -> tuple[int, int]:
+    stop_number = row.stop_number
+    if stop_number is None or stop_number <= 0:
+        return (MAX_SUPPORTED_STOPS + row.source_row_number, row.source_row_number)
+    return (stop_number, row.source_row_number)
 
 
 def _optional_grouped_field_warnings(group_rows: list[BolMultistopRow]) -> list[str]:
@@ -198,7 +206,7 @@ def _optional_grouped_field_warnings(group_rows: list[BolMultistopRow]) -> list[
 
 
 def map_multistop_rows_to_records(rows: list[BolMultistopRow]) -> list[BolMultistopRecord]:
-    grouped_rows: dict[tuple[str, str], list[BolMultistopRow]] = defaultdict(list)
+    grouped_rows: dict[str, list[BolMultistopRow]] = defaultdict(list)
     for row in rows:
         grouped_rows[_group_key(row)].append(row)
 
@@ -218,7 +226,10 @@ def map_multistop_rows_to_records(rows: list[BolMultistopRow]) -> list[BolMultis
     records: list[BolMultistopRecord] = []
 
     for group, group_rows in grouped_rows.items():
-        bol_number, load_number = group
+        group_rows = sorted(group_rows, key=_stop_sort_key)
+        bol_number = _first_non_empty(group_rows, "bol_number")
+        load_number = _first_non_empty(group_rows, "load_number")
+        kk_load_number = group or _first_non_empty(group_rows, "kk_load")
         issues: list[str] = []
         consistency_warnings = _header_consistency_warnings(group_rows)
         optional_warnings = _optional_grouped_field_warnings(group_rows)
@@ -322,8 +333,8 @@ def map_multistop_rows_to_records(rows: list[BolMultistopRow]) -> list[BolMultis
             carrier=_first_non_empty(group_rows, "carrier"),
             load_number=load_number,
             kk_po_number=_first_non_empty(group_rows, "kk_po_number"),
-            kk_load_number=_first_non_empty(group_rows, "kk_load"),
-            group_key=f"{bol_number}::{load_number}",
+            kk_load_number=kk_load_number,
+            group_key=f"kk_load::{kk_load_number or 'unknown'}",
             stop_count=stop_count,
             stops=ordered_stops,
             delivery_1_dc=ordered_stops[0].delivery_dc if len(ordered_stops) > 0 else "",
