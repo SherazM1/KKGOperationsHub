@@ -95,7 +95,6 @@ def _header_consistency_warnings(group_rows: list[BolMultistopRow]) -> list[str]
     fields = [
         ("Ship Date", "ship_date"),
         ("Carrier", "carrier"),
-        ("Load #", "load_number"),
         ("KKG PO#", "kk_po_number"),
         ("KKG Load #", "kk_load"),
     ]

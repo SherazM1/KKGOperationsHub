@@ -211,8 +211,10 @@ def test_halloween_workbook_multistop_grouping_by_kk_load_if_available() -> None
     if not workbook_path.exists():
         pytest.skip("Halloween Multistop load sheet fixture is not available locally.")
 
-    df = pd.read_excel(workbook_path, sheet_name="Sheet1", dtype=object)
-    column_map = _resolve_columns(df.columns.tolist(), "Sheet1")
+    workbook = pd.ExcelFile(workbook_path)
+    sheet_name = workbook.sheet_names[0]
+    df = workbook.parse(sheet_name=sheet_name, dtype=object)
+    column_map = _resolve_columns(df.columns.tolist(), sheet_name)
     optional_column_map = _resolve_optional_columns(df.columns.tolist())
     rows = _parse_multistop_dataframe_rows(df, column_map, optional_column_map)
     records = map_multistop_rows_to_records(rows)
