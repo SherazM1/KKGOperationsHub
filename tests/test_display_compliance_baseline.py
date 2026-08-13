@@ -11,6 +11,10 @@ import pytest
 from app.display_compliance.baseline import create_baseline
 from app.display_compliance.models import DisplayBaseline, ProductRegion
 from app.display_compliance import page as display_page
+from app.display_compliance.segmentation import (
+    SegmentationDiagnosticResult,
+    SegmentationDiagnostics,
+)
 from app.display_compliance.storage import LocalBaselineStorage, baseline_from_dict
 
 
@@ -213,6 +217,33 @@ def _baseline_for_page(baseline_id: str = "baseline-1") -> DisplayBaseline:
     )
 
 
+def _empty_diagnostic_result() -> SegmentationDiagnosticResult:
+    return SegmentationDiagnosticResult(
+        regions=[],
+        diagnostics=SegmentationDiagnostics(
+            original_width=10,
+            original_height=8,
+            working_width=10,
+            working_height=8,
+            raw_contour_count=0,
+            raw_proposal_count=0,
+            rejected_degenerate=0,
+            rejected_too_small=0,
+            rejected_too_large=0,
+            rejected_aspect_ratio=0,
+            rejected_near_whole_image=0,
+            proposals_after_geometry_filter=0,
+            deduplication_input_count=0,
+            removed_by_iou_deduplication=0,
+            removed_by_coverage_deduplication=0,
+            removed_by_deduplication=0,
+            final_region_count=0,
+        ),
+        diagnostic_images={},
+        proposal_sample=[],
+    )
+
+
 def _render_page_with_fakes(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -224,7 +255,11 @@ def _render_page_with_fakes(
     fake_storage = _FakeDisplayComplianceStorage(baselines)
     monkeypatch.setattr(display_page, "st", fake_st)
     monkeypatch.setattr(display_page, "LocalBaselineStorage", lambda: fake_storage)
-    monkeypatch.setattr(display_page, "detect_baseline_regions", lambda **kwargs: [])
+    monkeypatch.setattr(
+        display_page,
+        "analyze_candidate_regions",
+        lambda **kwargs: _empty_diagnostic_result(),
+    )
     monkeypatch.setattr(display_page, "render_annotated_preview", lambda **kwargs: b"preview")
 
     display_page.render_display_compliance_view()

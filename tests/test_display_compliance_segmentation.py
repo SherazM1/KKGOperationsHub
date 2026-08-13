@@ -8,6 +8,7 @@ import numpy as np
 from app.display_compliance.segmentation import (
     RegionDetectionConfig,
     _deduplicate_bboxes,
+    analyze_candidate_regions,
     detect_candidate_regions,
     render_annotated_preview,
 )
@@ -17,6 +18,12 @@ def _encode_png(image: np.ndarray) -> bytes:
     success, encoded = cv2.imencode(".png", image)
     assert success
     return encoded.tobytes()
+
+
+def _decode_png(image_bytes: bytes) -> np.ndarray:
+    decoded = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert decoded is not None
+    return decoded
 
 
 def _blank_image(width: int = 320, height: int = 220) -> np.ndarray:
@@ -143,3 +150,121 @@ def test_annotated_preview_renders_png_bytes() -> None:
     preview = render_annotated_preview(image_bytes=image_bytes, regions=regions)
 
     assert preview.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_diagnostics_return_dimensions_and_non_negative_counts() -> None:
+    image_bytes = _encode_png(_blank_image(width=420, height=260))
+
+    result = analyze_candidate_regions(image_bytes=image_bytes)
+    diagnostics = result.diagnostics
+
+    assert diagnostics.original_width == 420
+    assert diagnostics.original_height == 260
+    assert diagnostics.working_width == 420
+    assert diagnostics.working_height == 260
+    for value in diagnostics.__dict__.values():
+        assert value >= 0
+
+
+def test_diagnostic_counts_reconcile() -> None:
+    image = _blank_image()
+    _draw_product_box(image, left=30, top=30, right=100, bottom=95)
+    result = analyze_candidate_regions(image_bytes=_encode_png(image))
+    diagnostics = result.diagnostics
+
+    geometry_rejections = (
+        diagnostics.rejected_degenerate
+        + diagnostics.rejected_too_small
+        + diagnostics.rejected_too_large
+        + diagnostics.rejected_aspect_ratio
+        + diagnostics.rejected_near_whole_image
+    )
+    assert diagnostics.raw_proposal_count - geometry_rejections == (
+        diagnostics.proposals_after_geometry_filter
+    )
+    assert diagnostics.deduplication_input_count == diagnostics.proposals_after_geometry_filter
+    assert (
+        diagnostics.removed_by_iou_deduplication
+        + diagnostics.removed_by_coverage_deduplication
+        == diagnostics.removed_by_deduplication
+    )
+    assert diagnostics.deduplication_input_count - diagnostics.removed_by_deduplication == (
+        diagnostics.final_region_count
+    )
+
+
+def test_diagnostic_image_bytes_decode_as_pngs() -> None:
+    result = analyze_candidate_regions(image_bytes=_encode_png(_blank_image()))
+
+    assert set(result.diagnostic_images) == {
+        "normalized",
+        "edges",
+        "threshold",
+        "morphology",
+        "raw_proposals",
+        "filtered_proposals",
+        "final_proposals",
+    }
+    for image_bytes in result.diagnostic_images.values():
+        assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+        assert _decode_png(image_bytes).size > 0
+
+
+def test_synthetic_rectangles_produce_raw_diagnostic_proposals() -> None:
+    image = _blank_image()
+    _draw_product_box(image, left=30, top=30, right=100, bottom=95)
+    _draw_product_box(image, left=145, top=35, right=220, bottom=100)
+
+    result = analyze_candidate_regions(image_bytes=_encode_png(image))
+
+    assert result.diagnostics.raw_contour_count > 0
+    assert result.diagnostics.raw_proposal_count > 0
+    assert result.proposal_sample
+
+
+def test_zero_region_images_still_produce_diagnostic_stage_images() -> None:
+    result = analyze_candidate_regions(image_bytes=_encode_png(_blank_image()))
+
+    assert result.regions == []
+    assert result.diagnostics.final_region_count == 0
+    assert all(result.diagnostic_images.values())
+
+
+def test_diagnostics_do_not_change_deterministic_final_region_ids() -> None:
+    image = _blank_image(width=360, height=260)
+    _draw_product_box(image, left=205, top=145, right=285, bottom=210)
+    _draw_product_box(image, left=35, top=35, right=115, bottom=100)
+    _draw_product_box(image, left=205, top=35, right=285, bottom=100)
+    _draw_product_box(image, left=35, top=145, right=115, bottom=210)
+    image_bytes = _encode_png(image)
+
+    regions = detect_candidate_regions(image_bytes=image_bytes)
+    diagnostic_regions = analyze_candidate_regions(image_bytes=image_bytes).regions
+
+    assert diagnostic_regions == regions
+    assert [region.region_id for region in diagnostic_regions] == [
+        f"region_{index:03}" for index in range(1, len(diagnostic_regions) + 1)
+    ]
+
+
+def test_repeated_diagnostic_runs_return_equivalent_counts() -> None:
+    image = _blank_image()
+    _draw_product_box(image, left=35, top=35, right=100, bottom=95)
+    image_bytes = _encode_png(image)
+
+    first = analyze_candidate_regions(image_bytes=image_bytes)
+    second = analyze_candidate_regions(image_bytes=image_bytes)
+
+    assert second.diagnostics == first.diagnostics
+    assert second.regions == first.regions
+
+
+def test_detect_candidate_regions_remains_backward_compatible() -> None:
+    image = _blank_image()
+    _draw_product_box(image, left=30, top=30, right=100, bottom=95)
+    image_bytes = _encode_png(image)
+
+    regions = detect_candidate_regions(image_bytes=image_bytes)
+
+    assert isinstance(regions, list)
+    assert regions == analyze_candidate_regions(image_bytes=image_bytes).regions

@@ -11,7 +11,7 @@ from app.display_compliance.baseline import create_baseline
 from app.display_compliance.models import DisplayBaseline
 from app.display_compliance.segmentation import (
     DisplayComplianceSegmentationError,
-    detect_baseline_regions,
+    analyze_candidate_regions,
     render_annotated_preview,
 )
 from app.display_compliance.storage import LocalBaselineStorage, baseline_from_dict
@@ -19,6 +19,10 @@ from app.display_compliance.storage import LocalBaselineStorage, baseline_from_d
 _SELECTED_BASELINE_KEY = "display_compliance_selected_baseline_id"
 _ANNOTATED_PREVIEW_BYTES_KEY = "display_compliance_annotated_preview_bytes"
 _ANNOTATED_PREVIEW_BASELINE_KEY = "display_compliance_annotated_preview_baseline_id"
+_DETECTION_DIAGNOSTICS_KEY = "display_compliance_detection_diagnostics"
+_DETECTION_DIAGNOSTIC_IMAGES_KEY = "display_compliance_detection_diagnostic_images"
+_DETECTION_DIAGNOSTIC_SAMPLE_KEY = "display_compliance_detection_diagnostic_sample"
+_DETECTION_DIAGNOSTIC_BASELINE_KEY = "display_compliance_detection_diagnostic_baseline_id"
 
 
 def _initialize_display_compliance_state() -> None:
@@ -27,6 +31,10 @@ def _initialize_display_compliance_state() -> None:
     st.session_state.setdefault(_SELECTED_BASELINE_KEY, None)
     st.session_state.setdefault(_ANNOTATED_PREVIEW_BYTES_KEY, None)
     st.session_state.setdefault(_ANNOTATED_PREVIEW_BASELINE_KEY, None)
+    st.session_state.setdefault(_DETECTION_DIAGNOSTICS_KEY, None)
+    st.session_state.setdefault(_DETECTION_DIAGNOSTIC_IMAGES_KEY, None)
+    st.session_state.setdefault(_DETECTION_DIAGNOSTIC_SAMPLE_KEY, None)
+    st.session_state.setdefault(_DETECTION_DIAGNOSTIC_BASELINE_KEY, None)
 
 
 def _created_baseline() -> DisplayBaseline | None:
@@ -57,11 +65,16 @@ def _sanitize_selected_baseline_state(baseline_options: dict[str, DisplayBaselin
 
 def _clear_stale_preview_state(active_baseline_id: str | None) -> None:
     preview_baseline_id = st.session_state.get(_ANNOTATED_PREVIEW_BASELINE_KEY)
-    if preview_baseline_id is None:
-        return
-    if preview_baseline_id != active_baseline_id:
+    if preview_baseline_id is not None and preview_baseline_id != active_baseline_id:
         st.session_state.pop(_ANNOTATED_PREVIEW_BYTES_KEY, None)
         st.session_state.pop(_ANNOTATED_PREVIEW_BASELINE_KEY, None)
+
+    diagnostics_baseline_id = st.session_state.get(_DETECTION_DIAGNOSTIC_BASELINE_KEY)
+    if diagnostics_baseline_id is not None and diagnostics_baseline_id != active_baseline_id:
+        st.session_state.pop(_DETECTION_DIAGNOSTICS_KEY, None)
+        st.session_state.pop(_DETECTION_DIAGNOSTIC_IMAGES_KEY, None)
+        st.session_state.pop(_DETECTION_DIAGNOSTIC_SAMPLE_KEY, None)
+        st.session_state.pop(_DETECTION_DIAGNOSTIC_BASELINE_KEY, None)
 
 
 def _format_baseline_option(
@@ -72,6 +85,74 @@ def _format_baseline_option(
         return "Choose an option"
     baseline = baseline_options.get(baseline_id)
     return baseline.name if baseline is not None else "Unavailable baseline"
+
+
+def _render_detection_diagnostics(baseline_id: str) -> None:
+    if st.session_state.get(_DETECTION_DIAGNOSTIC_BASELINE_KEY) != baseline_id:
+        return
+    diagnostics = st.session_state.get(_DETECTION_DIAGNOSTICS_KEY)
+    if not diagnostics:
+        return
+
+    st.subheader("Detection Diagnostics")
+    st.dataframe(
+        [
+            {"Metric": "Original width", "Value": diagnostics["original_width"]},
+            {"Metric": "Original height", "Value": diagnostics["original_height"]},
+            {"Metric": "Working width", "Value": diagnostics["working_width"]},
+            {"Metric": "Working height", "Value": diagnostics["working_height"]},
+            {"Metric": "Raw contours", "Value": diagnostics["raw_contour_count"]},
+            {"Metric": "Raw bounding proposals", "Value": diagnostics["raw_proposal_count"]},
+            {"Metric": "Rejected: degenerate", "Value": diagnostics["rejected_degenerate"]},
+            {"Metric": "Rejected: too small", "Value": diagnostics["rejected_too_small"]},
+            {"Metric": "Rejected: too large", "Value": diagnostics["rejected_too_large"]},
+            {"Metric": "Rejected: aspect ratio", "Value": diagnostics["rejected_aspect_ratio"]},
+            {
+                "Metric": "Rejected: whole-image",
+                "Value": diagnostics["rejected_near_whole_image"],
+            },
+            {
+                "Metric": "After geometry filtering",
+                "Value": diagnostics["proposals_after_geometry_filter"],
+            },
+            {
+                "Metric": "Removed by IoU dedup",
+                "Value": diagnostics["removed_by_iou_deduplication"],
+            },
+            {
+                "Metric": "Removed by coverage dedup",
+                "Value": diagnostics["removed_by_coverage_deduplication"],
+            },
+            {
+                "Metric": "Removed during dedup",
+                "Value": diagnostics["removed_by_deduplication"],
+            },
+            {"Metric": "Final candidate regions", "Value": diagnostics["final_region_count"]},
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    diagnostic_images = st.session_state.get(_DETECTION_DIAGNOSTIC_IMAGES_KEY) or {}
+    proposal_sample = st.session_state.get(_DETECTION_DIAGNOSTIC_SAMPLE_KEY) or []
+    if not diagnostic_images and not proposal_sample:
+        return
+
+    with st.expander("View Detection Diagnostics"):
+        for key, label in [
+            ("normalized", "Normalized"),
+            ("edges", "Edge Map"),
+            ("threshold", "Adaptive Threshold"),
+            ("morphology", "Morphology"),
+            ("raw_proposals", "Raw Proposals"),
+            ("filtered_proposals", "After Geometry Filtering"),
+            ("final_proposals", "Final Proposals"),
+        ]:
+            image_bytes = diagnostic_images.get(key)
+            if image_bytes:
+                st.image(image_bytes, caption=label, use_container_width=True)
+        if proposal_sample:
+            st.dataframe(proposal_sample, use_container_width=True, hide_index=True)
 
 
 def _render_candidate_detection(
@@ -96,14 +177,29 @@ def _render_candidate_detection(
             return
         try:
             image_bytes = storage.load_reference_image_bytes(baseline)
-            regions = detect_baseline_regions(baseline=baseline, image_bytes=image_bytes)
+            diagnostic_result = analyze_candidate_regions(image_bytes=image_bytes)
+            regions = diagnostic_result.regions
             updated_baseline = replace(baseline, regions=regions)
             storage.save_baseline_metadata(updated_baseline)
             st.session_state["display_compliance_created_baseline"] = asdict(updated_baseline)
             st.session_state[_ANNOTATED_PREVIEW_BYTES_KEY] = (
                 render_annotated_preview(image_bytes=image_bytes, regions=regions)
+                if regions
+                else image_bytes
             )
             st.session_state[_ANNOTATED_PREVIEW_BASELINE_KEY] = updated_baseline.baseline_id
+            st.session_state[_DETECTION_DIAGNOSTICS_KEY] = asdict(
+                diagnostic_result.diagnostics
+            )
+            st.session_state[_DETECTION_DIAGNOSTIC_IMAGES_KEY] = (
+                diagnostic_result.diagnostic_images
+            )
+            st.session_state[_DETECTION_DIAGNOSTIC_SAMPLE_KEY] = [
+                asdict(row) for row in diagnostic_result.proposal_sample
+            ]
+            st.session_state[_DETECTION_DIAGNOSTIC_BASELINE_KEY] = (
+                updated_baseline.baseline_id
+            )
             st.session_state["display_compliance_status_message"] = (
                 f"Detected {len(regions)} candidate product region(s). "
                 "Rerun detection any time to replace these candidates."
@@ -140,11 +236,17 @@ def _render_candidate_detection(
         except (DisplayComplianceSegmentationError, FileNotFoundError, ValueError):
             preview_bytes = None
     if preview_bytes:
+        caption = (
+            "Annotated candidate product regions"
+            if region_count > 0
+            else "No candidate regions detected. Reference image shown below."
+        )
         st.image(
             preview_bytes,
-            caption="Annotated candidate product regions",
+            caption=caption,
             use_container_width=True,
         )
+    _render_detection_diagnostics(current_baseline.baseline_id)
 
 
 def render_display_compliance_view() -> None:
