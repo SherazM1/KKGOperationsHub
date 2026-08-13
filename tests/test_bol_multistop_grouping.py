@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from zipfile import ZipFile
 
+from docx import Document
 import pandas as pd
 import pytest
 
@@ -76,6 +77,7 @@ def _fake_multistop_saves(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, li
             document_type="combined",
             load_number=record.load_number,
             kk_load_number=record.kk_load_number,
+            template_mode=kwargs.get("template_mode", "Standard"),
             stop_number=None,
         )
 
@@ -92,6 +94,7 @@ def _fake_multistop_saves(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, li
             document_type="stop",
             load_number=record.load_number,
             kk_load_number=record.kk_load_number,
+            template_mode=kwargs.get("template_mode", "Standard"),
             stop_number=stop.stop_number,
         )
 
@@ -122,6 +125,7 @@ def _capture_multistop_shippers(monkeypatch: pytest.MonkeyPatch) -> dict[str, li
                 "record_company": record.ship_from.company,
                 "record_street": record.ship_from.street,
                 "record_city_state_zip": record.ship_from.city_state_zip,
+                "template_mode": kwargs.get("template_mode", ""),
             }
         )
         return MultistopGeneratedDocxFile(
@@ -131,6 +135,7 @@ def _capture_multistop_shippers(monkeypatch: pytest.MonkeyPatch) -> dict[str, li
             document_type="combined",
             load_number=record.load_number,
             kk_load_number=record.kk_load_number,
+            template_mode=kwargs.get("template_mode", "Standard"),
             stop_number=None,
         )
 
@@ -181,6 +186,17 @@ def _three_stop_record():
             _row(kk_load="1", stop=3, bol_number="C"),
         ]
     )
+
+
+def _docx_text(path: str) -> str:
+    doc = Document(path)
+    parts: list[str] = []
+    parts.extend(paragraph.text for paragraph in doc.paragraphs)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                parts.append(cell.text)
+    return "\n".join(parts)
 
 
 def _assert_captured_shipper(
@@ -248,6 +264,7 @@ def test_multistop_green_bay_shipper_propagates_to_combined_docx_data(
         _three_stop_record(),
         selected_facility=selected_facility,
         output_dir=tmp_path,
+        master_template_mode="Standard",
     )
 
     assert len(captured["combined"]) == 1
@@ -270,6 +287,7 @@ def test_multistop_green_bay_shipper_propagates_to_all_stop_docs(
     generate_multistop_docx_set(
         _three_stop_record(),
         selected_facility=selected_facility,
+        individual_stop_template_path=Path("app/templates/standard_bol_template.docx"),
         output_dir=tmp_path,
     )
 
@@ -348,6 +366,109 @@ def test_multistop_full_selected_shipper_record_propagates_to_all_docs(
         assert capture["record_company"] == "KENDAL KING C/O TEST LOCATION"
         assert capture["record_street"] == "123 Test Street"
         assert capture["record_city_state_zip"] == "Test City, WI 54321"
+
+
+def test_multistop_combined_docx_renders_full_green_bay_shipper_address(
+    tmp_path: Path,
+) -> None:
+    result = generate_multistop_docx_set(
+        _three_stop_record(),
+        selected_facility=BOL_FACILITY_LOOKUP["Green Bay Packaging"],
+        output_dir=tmp_path,
+    )
+
+    combined_file = next(file for file in result.generated_files if file.document_type == "combined")
+    text = _docx_text(combined_file.file_path)
+
+    assert "Kendal King C/O Green Bay" in text
+    assert "5600 S. Moorland Road" in text
+    assert "New Berlin, WI 53151" in text
+
+
+def test_multistop_stop_docx_renders_full_green_bay_shipper_address(
+    tmp_path: Path,
+) -> None:
+    result = generate_multistop_docx_set(
+        _three_stop_record(),
+        selected_facility=BOL_FACILITY_LOOKUP["Green Bay Packaging"],
+        individual_stop_template_path=Path("app/templates/standard_bol_template.docx"),
+        output_dir=tmp_path,
+    )
+
+    stop_files = [file for file in result.generated_files if file.document_type == "stop"]
+    assert len(stop_files) == 3
+    for stop_file in stop_files:
+        text = _docx_text(stop_file.file_path)
+        assert "Kendal King C/O Green Bay" in text
+        assert "5600 S. Moorland Road" in text
+        assert "New Berlin, WI 53151" in text
+
+
+def test_multistop_generic_shipper_docx_renders_full_address(tmp_path: Path) -> None:
+    selected_facility = {
+        "facility": "TEST",
+        "facility_name": "Kendal King C/O Test Facility",
+        "address": "123 Example Ave Madison, WI 53703",
+        "location": "Madison, WI",
+    }
+
+    result = generate_multistop_docx_set(
+        _three_stop_record(),
+        selected_facility=selected_facility,
+        output_dir=tmp_path,
+    )
+
+    for generated_file in result.generated_files:
+        text = _docx_text(generated_file.file_path)
+        assert "Kendal King C/O Test Facility" in text
+        assert "123 Example Ave" in text
+        assert "Madison, WI 53703" in text
+
+
+def test_multistop_standard_mode_propagates_to_master_and_stops(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _capture_multistop_shippers(monkeypatch)
+
+    result = generate_multistop_docx_set(
+        _three_stop_record(),
+        selected_facility=BOL_FACILITY_LOOKUP["Green Bay Packaging"],
+        individual_stop_template_path=Path("app/templates/standard_bol_template.docx"),
+        master_template_mode="Standard",
+        output_dir=tmp_path,
+    )
+
+    assert [file.template_mode for file in result.generated_files] == [
+        "Standard",
+        "Standard",
+        "Standard",
+        "Standard",
+    ]
+    assert captured["combined"][0]["template_mode"] == "Standard"
+
+
+def test_multistop_no_recourse_mode_propagates_to_master_and_stops(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _capture_multistop_shippers(monkeypatch)
+
+    result = generate_multistop_docx_set(
+        _three_stop_record(),
+        selected_facility=BOL_FACILITY_LOOKUP["Green Bay Packaging"],
+        individual_stop_template_path=Path("app/templates/no_recourse_bol_template.docx"),
+        master_template_mode="No Recourse",
+        output_dir=tmp_path,
+    )
+
+    assert [file.template_mode for file in result.generated_files] == [
+        "No Recourse",
+        "No Recourse",
+        "No Recourse",
+        "No Recourse",
+    ]
+    assert captured["combined"][0]["template_mode"] == "No Recourse"
 
 
 def test_multistop_groups_multiple_loads_without_cross_contamination() -> None:

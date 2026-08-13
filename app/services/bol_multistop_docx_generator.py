@@ -44,6 +44,7 @@ class MultistopGeneratedDocxFile(GeneratedDocxFile):
     document_type: str
     load_number: str
     kk_load_number: str = ""
+    template_mode: str = "Standard"
     stop_number: int | None = None
 
 
@@ -683,7 +684,9 @@ def _resolve_comment_for_record(record_comment: str, batch_comment: str | None) 
 def _populate_ship_from_block(doc: Document, selected_facility: BolFacilityRecord) -> bool:
     ship_from = facility_to_ship_from(selected_facility)
     name_value = ship_from.company
-    street_value = ship_from.street
+    street_value = "\n".join(
+        part for part in (ship_from.street, ship_from.city_state_zip) if part.strip()
+    )
     city_state_zip_value = ship_from.city_state_zip
 
     for table in doc.tables:
@@ -909,6 +912,7 @@ def _save_multistop_docx(
     replacements: dict[str, str],
     document_type: str,
     stop_number: int | None,
+    template_mode: str,
     bol_type: str | None,
     notices: list[DocxGenerationNotice],
 ) -> MultistopGeneratedDocxFile:
@@ -963,6 +967,7 @@ def _save_multistop_docx(
         document_type=document_type,
         load_number=record.load_number,
         kk_load_number=record.kk_load_number,
+        template_mode=template_mode,
         stop_number=stop_number,
     )
 
@@ -977,6 +982,7 @@ def _save_individual_stop_docx(
     output_root: Path,
     base_name: str,
     stop_index: int,
+    template_mode: str,
     bol_type: str | None,
     notices: list[DocxGenerationNotice],
 ) -> MultistopGeneratedDocxFile:
@@ -1000,6 +1006,14 @@ def _save_individual_stop_docx(
         bol_type=bol_type,
         compact_standard_item_area=is_standard_template,
     )
+    ship_from_populated = _populate_ship_from_block(doc, selected_facility)
+    if not ship_from_populated:
+        notices.append(
+            DocxGenerationNotice(
+                bol_number=bol_label,
+                message="Could not confirm ship-from block location in individual stop template.",
+            )
+        )
     if is_standard_template:
         _clean_standard_individual_stop_item_area(doc, stop, bol_type)
     elif is_no_recourse_template:
@@ -1033,6 +1047,7 @@ def _save_individual_stop_docx(
         document_type="stop",
         load_number=record.load_number,
         kk_load_number=record.kk_load_number,
+        template_mode=template_mode,
         stop_number=stop.stop_number,
     )
 
@@ -1044,6 +1059,7 @@ def generate_multistop_docx_set(
     bol_type: str | None = None,
     template_path: Path | None = None,
     individual_stop_template_path: Path | None = None,
+    master_template_mode: str = "Standard",
     output_dir: Path | None = None,
     file_name_prefix: str = "multistop_bol",
     allow_incomplete_records: bool = False,
@@ -1066,6 +1082,14 @@ def generate_multistop_docx_set(
     output_root = output_dir or Path(mkdtemp(prefix="kkg_multistop_bol_docx_"))
     output_root.mkdir(parents=True, exist_ok=True)
     selected_ship_from = facility_to_ship_from(selected_facility)
+    resolved_master_template_mode = (
+        master_template_mode if master_template_mode in {"Standard", "No Recourse"} else "Standard"
+    )
+    resolved_stop_template_mode = (
+        "No Recourse"
+        if resolved_individual_stop_template.name == NO_RECOURSE_TEMPLATE_PATH.name
+        else "Standard"
+    )
 
     generated: list[GeneratedDocxFile] = []
     skipped: list[SkippedDocxRecord] = []
@@ -1118,6 +1142,7 @@ def generate_multistop_docx_set(
                     replacements=_template_replacements(record, bol_type),
                     document_type="combined",
                     stop_number=None,
+                    template_mode=resolved_master_template_mode,
                     bol_type=bol_type,
                     notices=notices,
                 )
@@ -1136,6 +1161,7 @@ def generate_multistop_docx_set(
                         output_root=output_root,
                         base_name=stop_base_name,
                         stop_index=stop_index,
+                        template_mode=resolved_stop_template_mode,
                         bol_type=bol_type,
                         notices=notices,
                     )

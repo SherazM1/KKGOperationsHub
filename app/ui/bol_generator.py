@@ -1142,6 +1142,7 @@ def render_bol_generator_view() -> None:
                     individual_stop_template_path=resolve_template_path_for_mode(
                         individual_template_mode
                     ),
+                    master_template_mode=individual_template_mode,
                     file_name_prefix="multistop_bol",
                     allow_incomplete_records=True,
                 )
@@ -1295,6 +1296,7 @@ def render_bol_generator_view() -> None:
                     individual_stop_template_path=resolve_template_path_for_mode(
                         individual_template_mode
                     ),
+                    master_template_mode=individual_template_mode,
                     file_name_prefix="multistop_bol",
                     allow_incomplete_records=True,
                 )
