@@ -86,7 +86,7 @@ def _render_candidate_detection(
     )
 
     if st.button(
-        "Detect Product Regions",
+        "Detect Regions for Different Product Placements",
         type="primary",
         key="display_compliance_detect_product_regions",
         disabled=baseline is None,
