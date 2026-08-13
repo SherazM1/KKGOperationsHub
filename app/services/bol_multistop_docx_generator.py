@@ -229,6 +229,13 @@ def _set_cell_text(cell, value: str, *, font_points: float = 8.5, align_center: 
             run.font.size = Pt(font_points)
 
 
+def _set_cell_nowrap(cell) -> None:
+    tc_pr = cell._tc.get_or_add_tcPr()
+    no_wrap = tc_pr.find(qn("w:noWrap"))
+    if no_wrap is None:
+        tc_pr.append(OxmlElement("w:noWrap"))
+
+
 def _format_multistop_item_description(
     description: str,
     item_number: str,
@@ -409,6 +416,51 @@ def format_bol_item_detail_table(table: Table) -> None:
         )
         if is_totals_row:
             break
+
+
+def _compact_standard_family_multistop_table(doc: Document) -> None:
+    for table in doc.tables:
+        header_idx = None
+        for idx, row in enumerate(table.rows):
+            if _is_bol_item_detail_header(row):
+                header_idx = idx
+                break
+
+        if header_idx is None:
+            continue
+
+        header_row = table.rows[header_idx]
+        _set_row_height(header_row, 300, exact=False)
+        _format_item_detail_row(header_row, header_row, font_points=9.0, bold=True)
+
+        for row in table.rows[header_idx + 1 :]:
+            row_text_upper = " ".join(cell.text.strip() for cell in row.cells).upper()
+            if not _row_has_visible_text(row):
+                continue
+            if "SHIPPER SIGNATURE" in row_text_upper:
+                break
+
+            is_totals_row = "TOTALS" in row_text_upper
+            _set_row_height(row, 430 if is_totals_row else 520, exact=False)
+            for cell_index, cell in _row_unique_cells(row):
+                value = cell.text.strip()
+                if not value:
+                    continue
+                is_description = _is_item_description_cell(header_row, cell_index)
+                if is_totals_row and "TOTALS" in value.upper():
+                    value = "TOTALS"
+                _set_cell_text(
+                    cell,
+                    value,
+                    font_points=8.5,
+                    align_center=not is_description or is_totals_row,
+                )
+                if _cell_header_text(header_row, cell_index) == "PO #":
+                    _set_cell_nowrap(cell)
+
+            if is_totals_row:
+                break
+        return
 
 
 def _tighten_multistop_template_rows(doc: Document) -> None:
@@ -969,6 +1021,8 @@ def _save_multistop_docx(
                     message="Could not confirm ship-from block location in combined template.",
                 )
             )
+        _compact_standard_family_multistop_table(doc)
+        _normalize_standard_document_font(doc)
         for message in record_notice_messages:
             notices.append(DocxGenerationNotice(bol_number=bol_label, message=message))
     else:

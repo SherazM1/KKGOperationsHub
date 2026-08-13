@@ -200,6 +200,16 @@ def _docx_text(path: str) -> str:
     return "\n".join(parts)
 
 
+def _item_table_rows(path: str):
+    doc = Document(path)
+    for table in doc.tables:
+        for idx, row in enumerate(table.rows):
+            row_text = " ".join(cell.text.strip() for cell in row.cells).upper()
+            if "ITEM DESCRIPTION" in row_text and "PO #" in row_text and "WEIGHT" in row_text:
+                return table, idx
+    raise AssertionError("Item table was not found.")
+
+
 def _assert_captured_shipper(
     captured_values: dict[str, str],
     *,
@@ -424,6 +434,59 @@ def test_multistop_generic_shipper_docx_renders_full_address(tmp_path: Path) -> 
         assert "Kendal King C/O Test Facility" in text
         assert "123 Example Ave" in text
         assert "Madison, WI 53703" in text
+
+
+def test_multistop_combined_rows_use_compact_table_styling(tmp_path: Path) -> None:
+    result = generate_multistop_docx_set(
+        _three_stop_record(),
+        selected_facility=BOL_FACILITY_LOOKUP["Green Bay Packaging"],
+        template_path=Path("app/templates/no_recourse_bol_template.docx"),
+        individual_stop_template_path=Path("app/templates/no_recourse_bol_template.docx"),
+        master_template_mode="No Recourse",
+        output_dir=tmp_path,
+    )
+    combined_file = next(file for file in result.generated_files if file.document_type == "combined")
+
+    table, header_idx = _item_table_rows(combined_file.file_path)
+    product_rows = table.rows[header_idx + 1 : header_idx + 4]
+    totals_row = table.rows[header_idx + 4]
+
+    assert [row.height.twips for row in product_rows] == [520, 520, 520]
+    assert totals_row.height.twips == 430
+    assert "TOTALS" in " ".join(cell.text for cell in totals_row.cells)
+    for row in product_rows:
+        for cell in row.cells:
+            if cell.text.strip():
+                assert len(cell.paragraphs) == 1
+                for paragraph in cell.paragraphs:
+                    assert paragraph.paragraph_format.space_before.pt == 0
+                    assert paragraph.paragraph_format.space_after.pt == 0
+
+
+def test_multistop_combined_po_identifier_remains_intact(tmp_path: Path) -> None:
+    row = _row(kk_load="1", stop=1, bol_number="A")
+    row.target_po_number = "10002016379-0557"
+    records = map_multistop_rows_to_records(
+        [
+            row,
+            _row(kk_load="1", stop=2, bol_number="B"),
+            _row(kk_load="1", stop=3, bol_number="C"),
+        ]
+    )
+
+    result = generate_multistop_docx_set(
+        records,
+        selected_facility=BOL_FACILITY_LOOKUP["Green Bay Packaging"],
+        template_path=Path("app/templates/no_recourse_bol_template.docx"),
+        individual_stop_template_path=Path("app/templates/no_recourse_bol_template.docx"),
+        master_template_mode="No Recourse",
+        output_dir=tmp_path,
+    )
+    combined_file = next(file for file in result.generated_files if file.document_type == "combined")
+    text = _docx_text(combined_file.file_path)
+
+    assert "10002016379-0557" in text
+    assert "10002016379-\n0557" not in text
 
 
 def test_multistop_combined_docx_uses_selected_standard_template(tmp_path: Path) -> None:
