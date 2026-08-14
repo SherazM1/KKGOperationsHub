@@ -7,6 +7,7 @@ baseline image.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
 from io import BytesIO
 import math
 
@@ -61,6 +62,32 @@ class SegmentationDiagnostics:
     removed_by_coverage_deduplication: int
     removed_by_deduplication: int
     final_region_count: int
+    strategy_a_raw_proposal_count: int
+    strategy_a_proposals_after_geometry_filter: int
+    strategy_a_rejected_degenerate: int
+    strategy_a_rejected_too_small: int
+    strategy_a_rejected_too_large: int
+    strategy_a_rejected_aspect_ratio: int
+    strategy_a_rejected_near_whole_image: int
+    strategy_b_raw_proposal_count: int
+    strategy_b_proposals_after_geometry_filter: int
+    strategy_b_rejected_degenerate: int
+    strategy_b_rejected_too_small: int
+    strategy_b_rejected_too_large: int
+    strategy_b_rejected_aspect_ratio: int
+    strategy_b_rejected_near_whole_image: int
+    strategy_c_raw_proposal_count: int
+    strategy_c_proposals_after_geometry_filter: int
+    strategy_c_rejected_degenerate: int
+    strategy_c_rejected_too_small: int
+    strategy_c_rejected_too_large: int
+    strategy_c_rejected_aspect_ratio: int
+    strategy_c_rejected_near_whole_image: int
+    merged_pool_count_before_dedup: int
+    size_cluster_count: int
+    repeated_size_member_count: int
+    alignment_boosted_count: int
+    multi_strategy_supported_count: int
 
 
 @dataclass(frozen=True)
@@ -110,9 +137,29 @@ class _GeometryFilterResult:
 
 @dataclass(frozen=True)
 class _DeduplicationResult:
-    kept: list[BBox]
+    kept: list["_Proposal"]
     removed_by_iou: int
     removed_by_coverage: int
+
+
+@dataclass(frozen=True)
+class _Proposal:
+    bbox: BBox
+    sources: tuple[str, ...]
+    rectangularity: float = 0.0
+    edge_support: float = 0.0
+    size_cluster_size: int = 1
+    row_alignment_size: int = 1
+    column_alignment_size: int = 1
+    score: float = 0.0
+
+
+@dataclass(frozen=True)
+class _StrategyResult:
+    name: str
+    raw_contour_count: int
+    raw_proposals: list[_Proposal]
+    geometry_result: _GeometryFilterResult
 
 
 def detect_baseline_regions(*, baseline: DisplayBaseline, image_bytes: bytes) -> list[ProductRegion]:
@@ -140,22 +187,22 @@ def analyze_candidate_regions(
     original_height, original_width = image.shape[:2]
     working_image, scale = _resize_for_detection(image, config.max_working_side)
     stages = _build_proposal_stages(working_image, config)
-    contours, proposals = _contour_bboxes(stages.morphology)
-    geometry_result = _filter_bboxes_with_diagnostics(
-        proposals,
-        image_width=working_image.shape[1],
-        image_height=working_image.shape[0],
-        config=config,
-    )
-    dedup_result = _deduplicate_bboxes_with_diagnostics(geometry_result.filtered, config=config)
+    strategy_results = [
+        _strategy_a_morphology_contours(stages, working_image, config),
+        _strategy_b_cleaned_edges(stages, working_image, config),
+        _strategy_c_structural_rectangles(stages, working_image, config),
+    ]
+    merged_pool = _merge_strategy_proposals(strategy_results, stages.edges)
+    scored_pool, scoring_summary = _score_structural_proposals(merged_pool)
+    dedup_result = _deduplicate_proposals_with_diagnostics(scored_pool, config=config)
     original_bboxes = [
         _map_bbox_to_original(
-            bbox,
+            proposal.bbox,
             scale=scale,
             original_width=original_width,
             original_height=original_height,
         )
-        for bbox in dedup_result.kept
+        for proposal in dedup_result.kept
     ]
     ordered_bboxes = _spatially_sort_bboxes(original_bboxes)
     regions = [
@@ -166,25 +213,55 @@ def analyze_candidate_regions(
         )
         for index, bbox in enumerate(ordered_bboxes, start=1)
     ]
+    strategy_a = strategy_results[0]
+    strategy_b = strategy_results[1]
+    strategy_c = strategy_results[2]
+    strategy_a_geometry = strategy_a.geometry_result
     removed_by_deduplication = dedup_result.removed_by_iou + dedup_result.removed_by_coverage
     diagnostics = SegmentationDiagnostics(
         original_width=original_width,
         original_height=original_height,
         working_width=working_image.shape[1],
         working_height=working_image.shape[0],
-        raw_contour_count=len(contours),
-        raw_proposal_count=len(proposals),
-        rejected_degenerate=geometry_result.rejected_degenerate,
-        rejected_too_small=geometry_result.rejected_too_small,
-        rejected_too_large=geometry_result.rejected_too_large,
-        rejected_aspect_ratio=geometry_result.rejected_aspect_ratio,
-        rejected_near_whole_image=geometry_result.rejected_near_whole_image,
-        proposals_after_geometry_filter=len(geometry_result.filtered),
-        deduplication_input_count=len(geometry_result.filtered),
+        raw_contour_count=strategy_a.raw_contour_count,
+        raw_proposal_count=len(strategy_a.raw_proposals),
+        rejected_degenerate=strategy_a_geometry.rejected_degenerate,
+        rejected_too_small=strategy_a_geometry.rejected_too_small,
+        rejected_too_large=strategy_a_geometry.rejected_too_large,
+        rejected_aspect_ratio=strategy_a_geometry.rejected_aspect_ratio,
+        rejected_near_whole_image=strategy_a_geometry.rejected_near_whole_image,
+        proposals_after_geometry_filter=len(strategy_a_geometry.filtered),
+        deduplication_input_count=len(scored_pool),
         removed_by_iou_deduplication=dedup_result.removed_by_iou,
         removed_by_coverage_deduplication=dedup_result.removed_by_coverage,
         removed_by_deduplication=removed_by_deduplication,
         final_region_count=len(regions),
+        strategy_a_raw_proposal_count=len(strategy_a.raw_proposals),
+        strategy_a_proposals_after_geometry_filter=len(strategy_a.geometry_result.filtered),
+        strategy_a_rejected_degenerate=strategy_a.geometry_result.rejected_degenerate,
+        strategy_a_rejected_too_small=strategy_a.geometry_result.rejected_too_small,
+        strategy_a_rejected_too_large=strategy_a.geometry_result.rejected_too_large,
+        strategy_a_rejected_aspect_ratio=strategy_a.geometry_result.rejected_aspect_ratio,
+        strategy_a_rejected_near_whole_image=strategy_a.geometry_result.rejected_near_whole_image,
+        strategy_b_raw_proposal_count=len(strategy_b.raw_proposals),
+        strategy_b_proposals_after_geometry_filter=len(strategy_b.geometry_result.filtered),
+        strategy_b_rejected_degenerate=strategy_b.geometry_result.rejected_degenerate,
+        strategy_b_rejected_too_small=strategy_b.geometry_result.rejected_too_small,
+        strategy_b_rejected_too_large=strategy_b.geometry_result.rejected_too_large,
+        strategy_b_rejected_aspect_ratio=strategy_b.geometry_result.rejected_aspect_ratio,
+        strategy_b_rejected_near_whole_image=strategy_b.geometry_result.rejected_near_whole_image,
+        strategy_c_raw_proposal_count=len(strategy_c.raw_proposals),
+        strategy_c_proposals_after_geometry_filter=len(strategy_c.geometry_result.filtered),
+        strategy_c_rejected_degenerate=strategy_c.geometry_result.rejected_degenerate,
+        strategy_c_rejected_too_small=strategy_c.geometry_result.rejected_too_small,
+        strategy_c_rejected_too_large=strategy_c.geometry_result.rejected_too_large,
+        strategy_c_rejected_aspect_ratio=strategy_c.geometry_result.rejected_aspect_ratio,
+        strategy_c_rejected_near_whole_image=strategy_c.geometry_result.rejected_near_whole_image,
+        merged_pool_count_before_dedup=len(scored_pool),
+        size_cluster_count=scoring_summary["size_cluster_count"],
+        repeated_size_member_count=scoring_summary["repeated_size_member_count"],
+        alignment_boosted_count=scoring_summary["alignment_boosted_count"],
+        multi_strategy_supported_count=scoring_summary["multi_strategy_supported_count"],
     )
     return SegmentationDiagnosticResult(
         regions=regions,
@@ -194,12 +271,37 @@ def analyze_candidate_regions(
             "edges": _encode_png(stages.edges),
             "threshold": _encode_png(stages.threshold),
             "morphology": _encode_png(stages.morphology),
-            "raw_proposals": _render_bbox_overlay(working_image, proposals),
-            "filtered_proposals": _render_bbox_overlay(working_image, geometry_result.filtered),
-            "final_proposals": _render_bbox_overlay(working_image, dedup_result.kept),
+            "strategy_a_proposals": _render_bbox_overlay(
+                working_image,
+                strategy_a.geometry_result.filtered,
+            ),
+            "strategy_b_proposals": _render_bbox_overlay(
+                working_image,
+                strategy_b.geometry_result.filtered,
+            ),
+            "strategy_c_proposals": _render_bbox_overlay(
+                working_image,
+                strategy_c.geometry_result.filtered,
+            ),
+            "merged_proposals": _render_bbox_overlay(
+                working_image,
+                [proposal.bbox for proposal in scored_pool],
+            ),
+            "raw_proposals": _render_bbox_overlay(
+                working_image,
+                [proposal.bbox for proposal in merged_pool],
+            ),
+            "filtered_proposals": _render_bbox_overlay(
+                working_image,
+                [proposal.bbox for proposal in scored_pool],
+            ),
+            "final_proposals": _render_bbox_overlay(
+                working_image,
+                [proposal.bbox for proposal in dedup_result.kept],
+            ),
         },
         proposal_sample=_proposal_sample(
-            geometry_result.filtered,
+            [proposal.bbox for proposal in scored_pool],
             image_width=working_image.shape[1],
             image_height=working_image.shape[0],
             limit=proposal_sample_limit,
@@ -318,6 +420,304 @@ def _contour_bboxes(mask: np.ndarray) -> tuple[list[np.ndarray], list[BBox]]:
     return contours, [cv2.boundingRect(contour) for contour in contours]
 
 
+def _strategy_a_morphology_contours(
+    stages: _ProposalStages,
+    image: np.ndarray,
+    config: RegionDetectionConfig,
+) -> _StrategyResult:
+    contours, bboxes = _contour_bboxes(stages.morphology)
+    raw_proposals = [
+        _proposal_from_contour(
+            contour,
+            source="strategy_a_morphology",
+            edges=stages.edges,
+        )
+        for contour in contours
+    ]
+    geometry_result = _filter_bboxes_with_diagnostics(
+        bboxes,
+        image_width=image.shape[1],
+        image_height=image.shape[0],
+        config=config,
+    )
+    return _StrategyResult(
+        name="strategy_a_morphology",
+        raw_contour_count=len(contours),
+        raw_proposals=raw_proposals,
+        geometry_result=geometry_result,
+    )
+
+
+def _strategy_b_cleaned_edges(
+    stages: _ProposalStages,
+    image: np.ndarray,
+    config: RegionDetectionConfig,
+) -> _StrategyResult:
+    light_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    cleaned = cv2.dilate(stages.edges, light_kernel, iterations=1)
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, light_kernel, iterations=1)
+    contours, _hierarchy = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    raw_proposals = [
+        _proposal_from_contour(
+            contour,
+            source="strategy_b_cleaned_edges",
+            edges=stages.edges,
+        )
+        for contour in contours
+    ]
+    bboxes = [proposal.bbox for proposal in raw_proposals]
+    geometry_result = _filter_bboxes_with_diagnostics(
+        bboxes,
+        image_width=image.shape[1],
+        image_height=image.shape[0],
+        config=config,
+    )
+    return _StrategyResult(
+        name="strategy_b_cleaned_edges",
+        raw_contour_count=len(contours),
+        raw_proposals=raw_proposals,
+        geometry_result=geometry_result,
+    )
+
+
+def _strategy_c_structural_rectangles(
+    stages: _ProposalStages,
+    image: np.ndarray,
+    config: RegionDetectionConfig,
+) -> _StrategyResult:
+    vertical_kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (1, max(8, image.shape[0] // 45)),
+    )
+    horizontal_kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (max(8, image.shape[1] // 45), 1),
+    )
+    vertical = cv2.morphologyEx(stages.edges, cv2.MORPH_CLOSE, vertical_kernel, iterations=1)
+    horizontal = cv2.morphologyEx(stages.edges, cv2.MORPH_CLOSE, horizontal_kernel, iterations=1)
+    structural = cv2.bitwise_or(vertical, horizontal)
+    structural = cv2.dilate(
+        structural,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+        iterations=1,
+    )
+    contours, _hierarchy = cv2.findContours(structural, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    raw_proposals = [
+        _proposal_from_contour(
+            contour,
+            source="strategy_c_structural",
+            edges=stages.edges,
+        )
+        for contour in contours
+    ]
+    bboxes = [proposal.bbox for proposal in raw_proposals]
+    geometry_result = _filter_bboxes_with_diagnostics(
+        bboxes,
+        image_width=image.shape[1],
+        image_height=image.shape[0],
+        config=config,
+    )
+    return _StrategyResult(
+        name="strategy_c_structural",
+        raw_contour_count=len(contours),
+        raw_proposals=raw_proposals,
+        geometry_result=geometry_result,
+    )
+
+
+def _proposal_from_contour(
+    contour: np.ndarray,
+    *,
+    source: str,
+    edges: np.ndarray,
+) -> _Proposal:
+    bbox = cv2.boundingRect(contour)
+    x, y, width, height = bbox
+    contour_area = cv2.contourArea(contour)
+    bbox_area = max(1, width * height)
+    rectangularity = min(1.0, float(contour_area) / bbox_area)
+    return _Proposal(
+        bbox=bbox,
+        sources=(source,),
+        rectangularity=round(rectangularity, 4),
+        edge_support=round(_edge_support(edges, bbox), 4),
+    )
+
+
+def _edge_support(edges: np.ndarray, bbox: BBox) -> float:
+    x, y, width, height = bbox
+    if width <= 0 or height <= 0:
+        return 0.0
+    roi = edges[y : y + height, x : x + width]
+    if roi.size == 0:
+        return 0.0
+    perimeter_scale = max(1, 2 * (width + height))
+    return min(1.0, float(cv2.countNonZero(roi)) / perimeter_scale)
+
+
+def _merge_strategy_proposals(
+    strategy_results: list[_StrategyResult],
+    edges: np.ndarray,
+) -> list[_Proposal]:
+    merged: list[_Proposal] = []
+    for result in strategy_results:
+        proposal_by_bbox = {proposal.bbox: proposal for proposal in result.raw_proposals}
+        for bbox in result.geometry_result.filtered:
+            proposal = proposal_by_bbox.get(bbox)
+            if proposal is None:
+                proposal = _Proposal(
+                    bbox=bbox,
+                    sources=(result.name,),
+                    edge_support=round(_edge_support(edges, bbox), 4),
+                )
+            merge_index = _find_multi_strategy_match(merged, proposal)
+            if merge_index is None:
+                merged.append(proposal)
+            else:
+                existing = merged[merge_index]
+                sources = tuple(sorted(set(existing.sources + proposal.sources)))
+                stronger = proposal if proposal.rectangularity > existing.rectangularity else existing
+                merged[merge_index] = replace(
+                    stronger,
+                    sources=sources,
+                    edge_support=max(existing.edge_support, proposal.edge_support),
+                )
+    return merged
+
+
+def _find_multi_strategy_match(
+    proposals: list[_Proposal],
+    candidate: _Proposal,
+) -> int | None:
+    for index, proposal in enumerate(proposals):
+        if set(proposal.sources) == set(candidate.sources):
+            continue
+        if _bbox_iou(proposal.bbox, candidate.bbox) >= 0.72:
+            return index
+        if _smaller_coverage(proposal.bbox, candidate.bbox) >= 0.92:
+            return index
+    return None
+
+
+def _score_structural_proposals(
+    proposals: list[_Proposal],
+) -> tuple[list[_Proposal], dict[str, int]]:
+    if not proposals:
+        return proposals, {
+            "size_cluster_count": 0,
+            "repeated_size_member_count": 0,
+            "alignment_boosted_count": 0,
+            "multi_strategy_supported_count": 0,
+        }
+
+    size_clusters = _group_similar_sizes(proposals)
+    row_clusters = _group_similar_centers(proposals, axis="y")
+    column_clusters = _group_similar_centers(proposals, axis="x")
+    size_cluster_by_index = _index_cluster_sizes(size_clusters)
+    row_cluster_by_index = _index_cluster_sizes(row_clusters)
+    column_cluster_by_index = _index_cluster_sizes(column_clusters)
+
+    scored: list[_Proposal] = []
+    for index, proposal in enumerate(proposals):
+        size_cluster_size = size_cluster_by_index[index]
+        row_alignment_size = row_cluster_by_index[index]
+        column_alignment_size = column_cluster_by_index[index]
+        alignment_size = max(row_alignment_size, column_alignment_size)
+        repeated_bonus = min(3, size_cluster_size - 1) * 0.35
+        alignment_bonus = min(3, alignment_size - 1) * 0.25
+        source_bonus = (len(proposal.sources) - 1) * 0.45
+        score = (
+            proposal.rectangularity * 1.2
+            + proposal.edge_support * 1.6
+            + repeated_bonus
+            + alignment_bonus
+            + source_bonus
+        )
+        scored.append(
+            replace(
+                proposal,
+                size_cluster_size=size_cluster_size,
+                row_alignment_size=row_alignment_size,
+                column_alignment_size=column_alignment_size,
+                score=round(score, 4),
+            )
+        )
+
+    scored.sort(
+        key=lambda proposal: (
+            -proposal.score,
+            proposal.bbox[1],
+            proposal.bbox[0],
+            proposal.bbox[2] * proposal.bbox[3],
+        )
+    )
+    return scored, {
+        "size_cluster_count": sum(1 for cluster in size_clusters if len(cluster) > 1),
+        "repeated_size_member_count": sum(
+            1 for proposal in scored if proposal.size_cluster_size > 1
+        ),
+        "alignment_boosted_count": sum(
+            1
+            for proposal in scored
+            if proposal.row_alignment_size > 1 or proposal.column_alignment_size > 1
+        ),
+        "multi_strategy_supported_count": sum(1 for proposal in scored if len(proposal.sources) > 1),
+    }
+
+
+def _group_similar_sizes(proposals: list[_Proposal]) -> list[list[int]]:
+    clusters: list[list[int]] = []
+    for index, proposal in enumerate(proposals):
+        width = proposal.bbox[2]
+        height = proposal.bbox[3]
+        for cluster in clusters:
+            cluster_width = sum(proposals[item].bbox[2] for item in cluster) / len(cluster)
+            cluster_height = sum(proposals[item].bbox[3] for item in cluster) / len(cluster)
+            width_tolerance = max(8, cluster_width * 0.18)
+            height_tolerance = max(8, cluster_height * 0.18)
+            if (
+                abs(width - cluster_width) <= width_tolerance
+                and abs(height - cluster_height) <= height_tolerance
+            ):
+                cluster.append(index)
+                break
+        else:
+            clusters.append([index])
+    return clusters
+
+
+def _group_similar_centers(proposals: list[_Proposal], *, axis: str) -> list[list[int]]:
+    clusters: list[list[int]] = []
+    for index, proposal in enumerate(proposals):
+        x, y, width, height = proposal.bbox
+        center = x + width / 2 if axis == "x" else y + height / 2
+        span = width if axis == "x" else height
+        for cluster in clusters:
+            cluster_center = sum(
+                (
+                    proposals[item].bbox[0] + proposals[item].bbox[2] / 2
+                    if axis == "x"
+                    else proposals[item].bbox[1] + proposals[item].bbox[3] / 2
+                )
+                for item in cluster
+            ) / len(cluster)
+            cluster_span = sum(
+                proposals[item].bbox[2] if axis == "x" else proposals[item].bbox[3]
+                for item in cluster
+            ) / len(cluster)
+            tolerance = max(10, min(span, cluster_span) * 0.35)
+            if abs(center - cluster_center) <= tolerance:
+                cluster.append(index)
+                break
+        else:
+            clusters.append([index])
+    return clusters
+
+
+def _index_cluster_sizes(clusters: list[list[int]]) -> dict[int, int]:
+    return {index: len(cluster) for cluster in clusters for index in cluster}
+
+
 def _filter_bboxes(
     bboxes: list[BBox],
     *,
@@ -384,7 +784,7 @@ def _deduplicate_bboxes(
     *,
     config: RegionDetectionConfig,
 ) -> list[BBox]:
-    return _deduplicate_bboxes_with_diagnostics(bboxes, config=config).kept
+    return [proposal.bbox for proposal in _deduplicate_bboxes_with_diagnostics(bboxes, config=config).kept]
 
 
 def _deduplicate_bboxes_with_diagnostics(
@@ -392,18 +792,37 @@ def _deduplicate_bboxes_with_diagnostics(
     *,
     config: RegionDetectionConfig,
 ) -> _DeduplicationResult:
-    ordered = sorted(bboxes, key=lambda bbox: bbox[2] * bbox[3], reverse=True)
-    kept: list[BBox] = []
+    proposals = [_Proposal(bbox=bbox, sources=("legacy",)) for bbox in bboxes]
+    return _deduplicate_proposals_with_diagnostics(proposals, config=config)
+
+
+def _deduplicate_proposals_with_diagnostics(
+    proposals: list[_Proposal],
+    *,
+    config: RegionDetectionConfig,
+) -> _DeduplicationResult:
+    ordered = sorted(
+        proposals,
+        key=lambda proposal: (
+            -proposal.score,
+            -(proposal.bbox[2] * proposal.bbox[3]),
+            proposal.bbox[1],
+            proposal.bbox[0],
+        ),
+    )
+    kept: list[_Proposal] = []
     removed_by_iou = 0
     removed_by_coverage = 0
     for candidate in ordered:
         rejected_by_iou = any(
-            _bbox_iou(candidate, existing) >= config.overlap_iou_threshold for existing in kept
+            _bbox_iou(candidate.bbox, existing.bbox) >= config.overlap_iou_threshold
+            for existing in kept
         )
         rejected_by_coverage = False
         if not rejected_by_iou:
             rejected_by_coverage = any(
-                _smaller_coverage(candidate, existing) >= config.overlap_coverage_threshold
+                _smaller_coverage(candidate.bbox, existing.bbox)
+                >= config.overlap_coverage_threshold
                 for existing in kept
             )
         if rejected_by_iou:

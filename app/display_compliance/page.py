@@ -101,20 +101,13 @@ def _render_detection_diagnostics(baseline_id: str) -> None:
             {"Metric": "Original height", "Value": diagnostics["original_height"]},
             {"Metric": "Working width", "Value": diagnostics["working_width"]},
             {"Metric": "Working height", "Value": diagnostics["working_height"]},
-            {"Metric": "Raw contours", "Value": diagnostics["raw_contour_count"]},
-            {"Metric": "Raw bounding proposals", "Value": diagnostics["raw_proposal_count"]},
-            {"Metric": "Rejected: degenerate", "Value": diagnostics["rejected_degenerate"]},
-            {"Metric": "Rejected: too small", "Value": diagnostics["rejected_too_small"]},
-            {"Metric": "Rejected: too large", "Value": diagnostics["rejected_too_large"]},
-            {"Metric": "Rejected: aspect ratio", "Value": diagnostics["rejected_aspect_ratio"]},
-            {
-                "Metric": "Rejected: whole-image",
-                "Value": diagnostics["rejected_near_whole_image"],
-            },
-            {
-                "Metric": "After geometry filtering",
-                "Value": diagnostics["proposals_after_geometry_filter"],
-            },
+            {"Metric": "Strategy A raw proposals", "Value": diagnostics["strategy_a_raw_proposal_count"]},
+            {"Metric": "Strategy A after filtering", "Value": diagnostics["strategy_a_proposals_after_geometry_filter"]},
+            {"Metric": "Strategy B raw proposals", "Value": diagnostics["strategy_b_raw_proposal_count"]},
+            {"Metric": "Strategy B after filtering", "Value": diagnostics["strategy_b_proposals_after_geometry_filter"]},
+            {"Metric": "Strategy C raw proposals", "Value": diagnostics["strategy_c_raw_proposal_count"]},
+            {"Metric": "Strategy C after filtering", "Value": diagnostics["strategy_c_proposals_after_geometry_filter"]},
+            {"Metric": "Merged pool before dedup", "Value": diagnostics["merged_pool_count_before_dedup"]},
             {
                 "Metric": "Removed by IoU dedup",
                 "Value": diagnostics["removed_by_iou_deduplication"],
@@ -126,6 +119,19 @@ def _render_detection_diagnostics(baseline_id: str) -> None:
             {
                 "Metric": "Removed during dedup",
                 "Value": diagnostics["removed_by_deduplication"],
+            },
+            {"Metric": "Repeated-size clusters", "Value": diagnostics["size_cluster_count"]},
+            {
+                "Metric": "Repeated-size proposals",
+                "Value": diagnostics["repeated_size_member_count"],
+            },
+            {
+                "Metric": "Alignment-boosted proposals",
+                "Value": diagnostics["alignment_boosted_count"],
+            },
+            {
+                "Metric": "Multi-strategy proposals",
+                "Value": diagnostics["multi_strategy_supported_count"],
             },
             {"Metric": "Final candidate regions", "Value": diagnostics["final_region_count"]},
         ],
@@ -144,8 +150,10 @@ def _render_detection_diagnostics(baseline_id: str) -> None:
             ("edges", "Edge Map"),
             ("threshold", "Adaptive Threshold"),
             ("morphology", "Morphology"),
-            ("raw_proposals", "Raw Proposals"),
-            ("filtered_proposals", "After Geometry Filtering"),
+            ("strategy_a_proposals", "Strategy A: Morphology Contours"),
+            ("strategy_b_proposals", "Strategy B: Cleaned Edges"),
+            ("strategy_c_proposals", "Strategy C: Structural Rectangles"),
+            ("merged_proposals", "Merged Proposals Before Dedup"),
             ("final_proposals", "Final Proposals"),
         ]:
             image_bytes = diagnostic_images.get(key)

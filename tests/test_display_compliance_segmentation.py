@@ -42,6 +42,31 @@ def _draw_product_box(
     cv2.rectangle(image, (left, top), (right, bottom), (30, 30, 30), 3)
 
 
+def _draw_product_grid(
+    image: np.ndarray,
+    *,
+    columns: int = 4,
+    rows: int = 3,
+    left: int = 28,
+    top: int = 24,
+    box_width: int = 46,
+    box_height: int = 58,
+    gap_x: int = 16,
+    gap_y: int = 14,
+) -> None:
+    for row in range(rows):
+        for column in range(columns):
+            x = left + column * (box_width + gap_x)
+            y = top + row * (box_height + gap_y)
+            _draw_product_box(
+                image,
+                left=x,
+                top=y,
+                right=x + box_width,
+                bottom=y + box_height,
+            )
+
+
 def test_detector_accepts_valid_image_bytes() -> None:
     regions = detect_candidate_regions(image_bytes=_encode_png(_blank_image()))
 
@@ -182,7 +207,16 @@ def test_diagnostic_counts_reconcile() -> None:
     assert diagnostics.raw_proposal_count - geometry_rejections == (
         diagnostics.proposals_after_geometry_filter
     )
-    assert diagnostics.deduplication_input_count == diagnostics.proposals_after_geometry_filter
+    assert (
+        diagnostics.strategy_a_raw_proposal_count - geometry_rejections
+        == diagnostics.strategy_a_proposals_after_geometry_filter
+    )
+    assert diagnostics.raw_proposal_count == diagnostics.strategy_a_raw_proposal_count
+    assert (
+        diagnostics.proposals_after_geometry_filter
+        == diagnostics.strategy_a_proposals_after_geometry_filter
+    )
+    assert diagnostics.deduplication_input_count == diagnostics.merged_pool_count_before_dedup
     assert (
         diagnostics.removed_by_iou_deduplication
         + diagnostics.removed_by_coverage_deduplication
@@ -193,6 +227,21 @@ def test_diagnostic_counts_reconcile() -> None:
     )
 
 
+def test_multi_strategy_diagnostics_expose_strategy_and_merge_counts() -> None:
+    image = _blank_image(width=340, height=260)
+    _draw_product_grid(image, columns=3, rows=2)
+
+    result = analyze_candidate_regions(image_bytes=_encode_png(image))
+    diagnostics = result.diagnostics
+
+    assert diagnostics.strategy_a_raw_proposal_count >= 0
+    assert diagnostics.strategy_b_raw_proposal_count > 0
+    assert diagnostics.strategy_c_raw_proposal_count > 0
+    assert diagnostics.merged_pool_count_before_dedup >= diagnostics.final_region_count
+    assert diagnostics.deduplication_input_count == diagnostics.merged_pool_count_before_dedup
+    assert diagnostics.removed_by_deduplication >= 0
+
+
 def test_diagnostic_image_bytes_decode_as_pngs() -> None:
     result = analyze_candidate_regions(image_bytes=_encode_png(_blank_image()))
 
@@ -201,6 +250,10 @@ def test_diagnostic_image_bytes_decode_as_pngs() -> None:
         "edges",
         "threshold",
         "morphology",
+        "strategy_a_proposals",
+        "strategy_b_proposals",
+        "strategy_c_proposals",
+        "merged_proposals",
         "raw_proposals",
         "filtered_proposals",
         "final_proposals",
@@ -222,12 +275,54 @@ def test_synthetic_rectangles_produce_raw_diagnostic_proposals() -> None:
     assert result.proposal_sample
 
 
+def test_repeated_rectangle_grid_produces_multiple_plausible_proposals() -> None:
+    image = _blank_image(width=340, height=280)
+    _draw_product_grid(image, columns=4, rows=3)
+
+    result = analyze_candidate_regions(image_bytes=_encode_png(image))
+
+    assert len(result.regions) > 1
+    assert result.diagnostics.repeated_size_member_count > 1
+    assert result.diagnostics.size_cluster_count > 0
+
+
+def test_alignment_and_repeated_size_scoring_retains_grid_proposals() -> None:
+    image = _blank_image(width=420, height=320)
+    _draw_product_grid(
+        image,
+        columns=5,
+        rows=3,
+        left=24,
+        top=28,
+        box_width=48,
+        box_height=62,
+        gap_x=18,
+        gap_y=18,
+    )
+
+    result = analyze_candidate_regions(image_bytes=_encode_png(image))
+
+    assert result.diagnostics.alignment_boosted_count > 1
+    assert result.diagnostics.final_region_count >= 6
+
+
 def test_zero_region_images_still_produce_diagnostic_stage_images() -> None:
     result = analyze_candidate_regions(image_bytes=_encode_png(_blank_image()))
 
     assert result.regions == []
     assert result.diagnostics.final_region_count == 0
+    assert result.diagnostics.merged_pool_count_before_dedup == 0
     assert all(result.diagnostic_images.values())
+
+
+def test_multi_strategy_merge_does_not_fabricate_blank_image_proposals() -> None:
+    result = analyze_candidate_regions(image_bytes=_encode_png(_blank_image(width=420, height=260)))
+
+    assert result.regions == []
+    assert result.diagnostics.strategy_a_raw_proposal_count == 0
+    assert result.diagnostics.strategy_b_raw_proposal_count == 0
+    assert result.diagnostics.strategy_c_raw_proposal_count == 0
+    assert result.diagnostics.merged_pool_count_before_dedup == 0
 
 
 def test_diagnostics_do_not_change_deterministic_final_region_ids() -> None:
