@@ -9,6 +9,10 @@ import streamlit as st
 
 from app.display_compliance.baseline import create_baseline
 from app.display_compliance.models import DisplayBaseline
+from app.display_compliance.proposal_backends import (
+    RegionProposalBackendUnavailable,
+    analyze_learned_candidate_regions,
+)
 from app.display_compliance.segmentation import (
     DisplayComplianceSegmentationError,
     analyze_candidate_regions,
@@ -23,6 +27,9 @@ _DETECTION_DIAGNOSTICS_KEY = "display_compliance_detection_diagnostics"
 _DETECTION_DIAGNOSTIC_IMAGES_KEY = "display_compliance_detection_diagnostic_images"
 _DETECTION_DIAGNOSTIC_SAMPLE_KEY = "display_compliance_detection_diagnostic_sample"
 _DETECTION_DIAGNOSTIC_BASELINE_KEY = "display_compliance_detection_diagnostic_baseline_id"
+_DETECTION_METHOD_KEY = "display_compliance_detection_method"
+_CLASSICAL_METHOD = "Classical CV"
+_LEARNED_METHOD = "Learned Segmentation - Experimental"
 
 
 def _initialize_display_compliance_state() -> None:
@@ -35,6 +42,7 @@ def _initialize_display_compliance_state() -> None:
     st.session_state.setdefault(_DETECTION_DIAGNOSTIC_IMAGES_KEY, None)
     st.session_state.setdefault(_DETECTION_DIAGNOSTIC_SAMPLE_KEY, None)
     st.session_state.setdefault(_DETECTION_DIAGNOSTIC_BASELINE_KEY, None)
+    st.session_state.setdefault(_DETECTION_METHOD_KEY, _CLASSICAL_METHOD)
 
 
 def _created_baseline() -> DisplayBaseline | None:
@@ -95,8 +103,53 @@ def _render_detection_diagnostics(baseline_id: str) -> None:
         return
 
     st.subheader("Detection Diagnostics")
-    st.dataframe(
-        [
+    if diagnostics.get("backend") == "sam2":
+        rows = [
+            {"Metric": "Original width", "Value": diagnostics["original_width"]},
+            {"Metric": "Original height", "Value": diagnostics["original_height"]},
+            {"Metric": "Working width", "Value": diagnostics["working_width"]},
+            {"Metric": "Working height", "Value": diagnostics["working_height"]},
+            {"Metric": "Backend", "Value": "SAM 2"},
+            {"Metric": "Device", "Value": diagnostics["device"]},
+            {"Metric": "Model load seconds", "Value": diagnostics["model_load_seconds"]},
+            {"Metric": "Inference seconds", "Value": diagnostics["inference_seconds"]},
+            {"Metric": "Total seconds", "Value": diagnostics["total_seconds"]},
+            {"Metric": "Raw learned masks", "Value": diagnostics["raw_mask_count"]},
+            {"Metric": "Rejected too small", "Value": diagnostics["rejected_too_small"]},
+            {"Metric": "Rejected too large", "Value": diagnostics["rejected_too_large"]},
+            {"Metric": "Rejected thin/degenerate", "Value": diagnostics["rejected_degenerate"]},
+            {"Metric": "Rejected aspect ratio", "Value": diagnostics["rejected_aspect_ratio"]},
+            {"Metric": "Rejected low confidence", "Value": diagnostics["rejected_low_confidence"]},
+            {"Metric": "Rejected low solidity", "Value": diagnostics["rejected_low_solidity"]},
+            {
+                "Metric": "After basic filtering",
+                "Value": diagnostics["proposals_after_basic_filtering"],
+            },
+            {
+                "Metric": "Removed by IoU dedup",
+                "Value": diagnostics["removed_by_iou_deduplication"],
+            },
+            {
+                "Metric": "Removed as nested duplicates",
+                "Value": diagnostics["removed_by_nested_deduplication"],
+            },
+            {
+                "Metric": "After duplicate cleanup",
+                "Value": diagnostics["proposals_after_duplicate_cleanup"],
+            },
+            {"Metric": "Repeated-size clusters", "Value": diagnostics["size_cluster_count"]},
+            {
+                "Metric": "Repeated-size proposals",
+                "Value": diagnostics["repeated_size_member_count"],
+            },
+            {
+                "Metric": "Alignment-supported proposals",
+                "Value": diagnostics["alignment_supported_count"],
+            },
+            {"Metric": "Final candidate regions", "Value": diagnostics["final_region_count"]},
+        ]
+    else:
+        rows = [
             {"Metric": "Original width", "Value": diagnostics["original_width"]},
             {"Metric": "Original height", "Value": diagnostics["original_height"]},
             {"Metric": "Working width", "Value": diagnostics["working_width"]},
@@ -134,7 +187,9 @@ def _render_detection_diagnostics(baseline_id: str) -> None:
                 "Value": diagnostics["multi_strategy_supported_count"],
             },
             {"Metric": "Final candidate regions", "Value": diagnostics["final_region_count"]},
-        ],
+        ]
+    st.dataframe(
+        rows,
         use_container_width=True,
         hide_index=True,
     )
@@ -155,6 +210,12 @@ def _render_detection_diagnostics(baseline_id: str) -> None:
             ("strategy_c_proposals", "Strategy C: Structural Rectangles"),
             ("merged_proposals", "Merged Proposals Before Dedup"),
             ("final_proposals", "Final Proposals"),
+            ("learned_raw_masks", "Learned: Raw Masks"),
+            ("learned_raw_bboxes", "Learned: Raw Bounding Boxes"),
+            ("learned_after_basic_filtering", "Learned: After Basic Filtering"),
+            ("learned_after_duplicate_cleanup", "Learned: After Duplicate Cleanup"),
+            ("learned_structurally_supported", "Learned: Structurally Supported"),
+            ("learned_final_regions", "Learned: Final Regions"),
         ]:
             image_bytes = diagnostic_images.get(key)
             if image_bytes:
@@ -173,6 +234,16 @@ def _render_candidate_detection(
         "Experimental local detection proposes candidate product regions for review. "
         "These are not guaranteed final product boundaries."
     )
+    detection_method = st.selectbox(
+        "Region Proposal Method",
+        options=[_CLASSICAL_METHOD, _LEARNED_METHOD],
+        key=_DETECTION_METHOD_KEY,
+    )
+    if detection_method == _LEARNED_METHOD:
+        st.caption(
+            "Learned segmentation is experimental. The first run may download and cache "
+            "a small local model before analyzing the image."
+        )
 
     if st.button(
         "Detect Regions for Different Product Placements",
@@ -185,7 +256,14 @@ def _render_candidate_detection(
             return
         try:
             image_bytes = storage.load_reference_image_bytes(baseline)
-            diagnostic_result = analyze_candidate_regions(image_bytes=image_bytes)
+            if detection_method == _LEARNED_METHOD:
+                with st.spinner(
+                    "Preparing learned vision model, downloading the model if needed, "
+                    "and analyzing the baseline image..."
+                ):
+                    diagnostic_result = analyze_learned_candidate_regions(image_bytes=image_bytes)
+            else:
+                diagnostic_result = analyze_candidate_regions(image_bytes=image_bytes)
             regions = diagnostic_result.regions
             updated_baseline = replace(baseline, regions=regions)
             storage.save_baseline_metadata(updated_baseline)
@@ -202,8 +280,9 @@ def _render_candidate_detection(
             st.session_state[_DETECTION_DIAGNOSTIC_IMAGES_KEY] = (
                 diagnostic_result.diagnostic_images
             )
+            proposal_sample = getattr(diagnostic_result, "proposal_sample", [])
             st.session_state[_DETECTION_DIAGNOSTIC_SAMPLE_KEY] = [
-                asdict(row) for row in diagnostic_result.proposal_sample
+                asdict(row) for row in proposal_sample
             ]
             st.session_state[_DETECTION_DIAGNOSTIC_BASELINE_KEY] = (
                 updated_baseline.baseline_id
@@ -212,8 +291,21 @@ def _render_candidate_detection(
                 f"Detected {len(regions)} candidate product region(s). "
                 "Rerun detection any time to replace these candidates."
             )
-        except (DisplayComplianceSegmentationError, FileNotFoundError, ValueError) as exc:
-            st.error(f"Detection error: {exc}")
+        except (
+            DisplayComplianceSegmentationError,
+            FileNotFoundError,
+            RegionProposalBackendUnavailable,
+            ValueError,
+        ) as exc:
+            if detection_method == _LEARNED_METHOD:
+                st.error(
+                    "Learned segmentation is temporarily unavailable. "
+                    "Classical CV remains available."
+                )
+                with st.expander("Technical details"):
+                    st.write(str(exc))
+            else:
+                st.error(f"Detection error: {exc}")
         except Exception as exc:
             st.error(f"Unexpected detection error: {exc}")
 
