@@ -129,9 +129,7 @@ MDG_FIELD_ALIASES: dict[str, list[str]] = {
 
 
 GCI_REQUIRED_FIELDS: dict[str, str] = {
-    "program_name": "program name",
     "item_number": "item number",
-    "quantity": "qty",
     "barcode_value": "barcode value / upc",
     "description": "description",
 }
@@ -139,6 +137,9 @@ GCI_REQUIRED_FIELDS: dict[str, str] = {
 GCI_FIELD_ALIASES: dict[str, list[str]] = {
     "program_name": ["program name", "program", "program_name"],
     "item_number": [
+        "sam's item #",
+        "sams item #",
+        "sam item #",
         "item #",
         "item#",
         "item number",
@@ -147,7 +148,14 @@ GCI_FIELD_ALIASES: dict[str, list[str]] = {
         "item",
         "item_number",
     ],
-    "quantity": ["qty", "quantity", "qty ordered", "order qty", "ordered quantity"],
+    "quantity": [
+        "qty",
+        "quantity",
+        "qty ordered",
+        "order qty",
+        "ordered quantity",
+        "per display",
+    ],
     "barcode_value": [
         "barcode",
         "barcode value",
@@ -159,6 +167,7 @@ GCI_FIELD_ALIASES: dict[str, list[str]] = {
         "upc #",
         "upc#",
         "upc number",
+        "barcode value upc",
     ],
     "description": ["description", "desc", "item description", "product description"],
 }
@@ -201,6 +210,8 @@ def _resolve_columns(
                 match = normalized_to_actual[normalized_alias]
                 break
         if match is None:
+            if logical_field not in required_fields:
+                continue
             missing.append(required_fields[logical_field])
             continue
         resolved[logical_field] = match
@@ -259,8 +270,8 @@ def _parse_gci_bottom_rows(
 
     for _, row in gci_df.iterrows():
         values = {
-            field: _coerce_to_string(row[column_map[field]])
-            for field in GCI_REQUIRED_FIELDS
+            field: _coerce_to_string(row[column_map[field]]) if field in column_map else ""
+            for field in GCI_FIELD_ALIASES
         }
 
         if not any(values.values()):

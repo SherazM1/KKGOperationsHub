@@ -101,3 +101,46 @@ def test_read_excel_sams_gci_accepts_loose_header_variations() -> None:
     assert payload.mdg_labels[0].po_number == "PO-1"
     assert payload.bottom_rows[0].program_name == "Program A"
     assert payload.bottom_rows[0].barcode_value == "123456789012"
+
+
+def test_read_excel_sams_gci_accepts_second_workbook_without_program_or_qty_header() -> None:
+    mdg_file = _workbook(
+        [
+            {
+                "SHIPPER NAME": "KKG",
+                "SHIPPER ADDRESS": "123 Main",
+                "SHIPPER CITY": "Green Bay",
+                "SHIPPER STATE": "WI",
+                "SHIPPER ZIP": "54301",
+                "SHIP TO NAME": "Sam's Club",
+                "SHIP TO ADDRESS": "456 Club",
+                "CITY": "Bentonville",
+                "STATE": "AR",
+                "ZIP": "72712",
+                "PO #": "PO-1",
+                "CLUB#": "6612",
+                "WHSE": "WH1",
+                "ITEM #": "1001",
+                "DESC": "Display",
+                "QTY": "24",
+            }
+        ]
+    )
+    gci_file = _workbook(
+        [
+            {
+                "SAM'S ITEM #": "990553354",
+                "UPC": "849219096356",
+                "ITEM DESCRIPTION": "2Pk Boxes Trees",
+                "PER DISPLAY": "12",
+            }
+        ]
+    )
+
+    payload = read_excel_sams_gci(mdg_file, gci_file)
+
+    assert payload.bottom_rows[0].program_name == ""
+    assert payload.bottom_rows[0].item_number == "990553354"
+    assert payload.bottom_rows[0].barcode_value == "849219096356"
+    assert payload.bottom_rows[0].description == "2Pk Boxes Trees"
+    assert payload.bottom_rows[0].quantity == "12"
