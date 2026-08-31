@@ -376,13 +376,23 @@ def _draw_bottom_row_box(
     # Left text block stays inside row bounds with top padding.
     title_font = 7.0 if row_height < 26 else 7.4
     title_y = inner_top - (title_font * 0.9)
+    title_line_height = title_font + 1.2
+    item_text = f"ITEM#: {item_value}"
+    quantity_text = f"QTY: {quantity_value}"
     c.setFont("Helvetica-Bold", title_font)
-    c.drawString(text_left_x, title_y, f"ITEM#: {item_value}")
-    c.drawRightString(text_right_x, title_y, f"QTY: {quantity_value}")
+    if c.stringWidth(item_text, "Helvetica-Bold", title_font) + c.stringWidth(
+        quantity_text, "Helvetica-Bold", title_font
+    ) + 3.0 <= text_width:
+        c.drawString(text_left_x, title_y, item_text)
+        c.drawRightString(text_right_x, title_y, quantity_text)
+        desc_y = title_y - max(4.8, title_font * 0.92)
+    else:
+        c.drawString(text_left_x, title_y, item_text)
+        c.drawString(text_left_x, title_y - title_line_height, quantity_text)
+        desc_y = title_y - title_line_height - max(4.8, title_font * 0.92)
 
     desc_font = 6.6 if row_height < 23 else 7.0
     desc_line_height = desc_font + 1.1
-    desc_y = title_y - max(4.8, title_font * 0.92)
     desc_max_lines = 2 if (desc_y - inner_bottom) >= (desc_line_height * 1.65) else 1
     c.setFont("Helvetica", desc_font)
     _draw_wrapped(
