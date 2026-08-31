@@ -64,12 +64,12 @@ def test_read_excel_sams_gci_accepts_loose_header_variations() -> None:
         [
             {
                 "Shipper": "KKG",
-                "SHIPPER_ADDR": "123 Main",
+                "SHIPPER ADDRERSS": "123 Main",
                 "SHIPPER_CITY": "Green Bay",
                 "SHIPPER_STATE": "WI",
                 "SHIPPER_POSTAL_CODE": "54301",
                 "ShipTo Name": "Sam's Club",
-                "SHIPTO ADDR": "456 Club",
+                "SHIPTO_ADDRERSS": "456 Club",
                 "SHIPTO_CITY": "Bentonville",
                 "SHIPTO_STATE": "AR",
                 "SHIPTO_ZIP_CODE": "72712",
