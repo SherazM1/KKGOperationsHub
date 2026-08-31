@@ -38,26 +38,90 @@ MDG_REQUIRED_FIELDS: dict[str, str] = {
 }
 
 MDG_FIELD_ALIASES: dict[str, list[str]] = {
-    "shipper_name": ["shipper name"],
-    "shipper_address": ["shipper address", "shipper adress"],
-    "shipper_city": ["shipper city"],
-    "shipper_state": ["shipper state"],
-    "shipper_zip": ["shipper zip"],
-    "ship_to_name": ["ship to name"],
+    "shipper_name": ["shipper name", "shipper", "shipper_name"],
+    "shipper_address": [
+        "shipper address",
+        "shipper adress",
+        "shipper adderss",
+        "shipper addr",
+        "shipper street",
+        "shipper street address",
+        "shipper_address",
+    ],
+    "shipper_city": ["shipper city", "shipper_city"],
+    "shipper_state": ["shipper state", "shipper_state"],
+    "shipper_zip": [
+        "shipper zip",
+        "shipper zip code",
+        "shipper postal code",
+        "shipper_zip",
+    ],
+    "ship_to_name": ["ship to name", "shipto name", "ship_to_name"],
     "ship_to_address": [
         "ship to address",
         "ship to adderss",
         "ship to adress",
+        "ship to addr",
+        "ship to street",
+        "ship to street address",
+        "shipto address",
+        "shipto adderss",
+        "shipto adress",
+        "shipto addr",
+        "ship_to_address",
     ],
-    "ship_to_city": ["city", "ship to city"],
-    "ship_to_state": ["state", "ship to state"],
-    "ship_to_zip": ["zip", "ship to zip"],
-    "po_number": ["po #", "po#", "po number", "po"],
-    "club_number": ["club#", "club #", "club", "club number"],
-    "whse": ["whse", "warehouse", "whse #", "whse#"],
-    "item_number": ["item #", "item#", "item number", "item"],
-    "description": ["desc", "description"],
-    "quantity": ["qty", "quantity"],
+    "ship_to_city": ["city", "ship to city", "shipto city", "ship_to_city"],
+    "ship_to_state": ["state", "ship to state", "shipto state", "ship_to_state"],
+    "ship_to_zip": [
+        "zip",
+        "zip code",
+        "postal code",
+        "ship to zip",
+        "ship to zip code",
+        "ship to postal code",
+        "shipto zip",
+        "shipto zip code",
+        "shipto postal code",
+        "ship_to_zip",
+    ],
+    "po_number": [
+        "po #",
+        "po#",
+        "po number",
+        "po no",
+        "po num",
+        "po",
+        "p o",
+        "po_number",
+    ],
+    "club_number": [
+        "club#",
+        "club #",
+        "club",
+        "club number",
+        "club no",
+        "club num",
+        "club_number",
+    ],
+    "whse": [
+        "whse",
+        "warehouse",
+        "whse #",
+        "whse#",
+        "warehouse #",
+        "warehouse number",
+    ],
+    "item_number": [
+        "item #",
+        "item#",
+        "item number",
+        "item no",
+        "item num",
+        "item",
+        "item_number",
+    ],
+    "description": ["desc", "description", "item description", "product description"],
+    "quantity": ["qty", "quantity", "qty ordered", "order qty", "ordered quantity"],
 }
 
 
@@ -71,21 +135,35 @@ GCI_REQUIRED_FIELDS: dict[str, str] = {
 
 GCI_FIELD_ALIASES: dict[str, list[str]] = {
     "program_name": ["program name", "program", "program_name"],
-    "item_number": ["item #", "item#", "item number", "item"],
-    "quantity": ["qty", "quantity"],
+    "item_number": [
+        "item #",
+        "item#",
+        "item number",
+        "item no",
+        "item num",
+        "item",
+        "item_number",
+    ],
+    "quantity": ["qty", "quantity", "qty ordered", "order qty", "ordered quantity"],
     "barcode_value": [
         "barcode",
         "barcode value",
         "barcode value / upc",
+        "barcode upc",
+        "upc barcode",
         "upc",
         "upc code",
+        "upc #",
+        "upc#",
+        "upc number",
     ],
-    "description": ["description", "desc"],
+    "description": ["description", "desc", "item description", "product description"],
 }
 
 
 def _normalize_header(header: str) -> str:
     value = str(header or "").strip().lower()
+    value = value.replace("_", " ")
     value = re.sub(r"[^\w\s]", " ", value)
     value = " ".join(value.split())
     return value
