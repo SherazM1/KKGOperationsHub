@@ -456,6 +456,10 @@ def _pdf_result_matches_docx_result(docx_result: StandardDocxGenerationResult) -
         return False
     if pdf_result.failed_count > 0:
         return False
+    if {Path(pdf.file_path).stem for pdf in pdf_result.converted_files} != {
+        Path(docx.file_path).stem for docx in docx_result.generated_files
+    }:
+        return False
     if st.session_state.get("bol_pdf_source_signature") != _docx_result_signature(docx_result):
         return False
     return all(Path(pdf_file.file_path).exists() for pdf_file in pdf_result.converted_files)
@@ -1200,6 +1204,11 @@ def render_bol_generator_view() -> None:
         isinstance(docx_result, StandardDocxGenerationResult)
         and docx_result.generated_count > 0
     )
+    if pdf_generation_mode_supported and not generate_pdf_disabled:
+        st.success(
+            f"DOCX set ready — {docx_result.generated_count} document(s) generated. "
+            "You can now click Generate PDF Set below."
+        )
     if st.button(
         "Generate PDF Set",
         disabled=(not pdf_generation_mode_supported) or generate_pdf_disabled,

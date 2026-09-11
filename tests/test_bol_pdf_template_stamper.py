@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
+from zipfile import ZipFile
+
+import pytest
 
 from pypdf import PdfReader
 
@@ -10,8 +14,8 @@ from app.models.bol_standard_record import (
     BolStandardItemLine,
     BolStandardRecord,
 )
-from app.services.bol_file_bundle_service import create_standard_bundles
-from app.services.bol_multistop_docx_generator import MultistopGeneratedDocxFile
+from app.services.bol_file_bundle_service import create_standard_bundles, create_multistop_bundles
+from app.services.bol_multistop_docx_generator import MultistopGeneratedDocxFile, generate_multistop_docx_set
 from app.services.bol_pdf_template_stamper import (
     MULTISTOP_CONFIG,
     NO_RECOURSE_CONFIG,
@@ -22,7 +26,7 @@ from app.services.bol_pdf_template_stamper import (
     _standard_totals,
     stamp_bol_pdf_set,
 )
-from app.services.bol_standard_docx_generator import GeneratedDocxFile, StandardDocxGenerationResult
+from app.services.bol_standard_docx_generator import GeneratedDocxFile, StandardDocxGenerationResult, resolve_template_path_for_mode
 from app.services.bol_standard_pdf_converter import StandardPdfConversionResult
 from app.ui import bol_generator
 from app.utils.bol_facilities import BOL_FACILITY_LOOKUP, BOL_FACILITY_OPTIONS
@@ -606,6 +610,82 @@ def test_no_recourse_multistop_preserves_reference_form_and_three_stops(tmp_path
     assert "The property described below" not in text
     assert text.count("BROKER PAYMENT & NO RECOURSE NOTICE") == 1
     assert text.count("TOTALS") == 1
+
+
+@pytest.mark.parametrize("template_mode", ["Standard", "No Recourse"])
+def test_multistop_full_set_includes_individual_stop_pdfs(tmp_path: Path, template_mode: str) -> None:
+    record = _multistop_record()
+    record.selected_for_generation = True
+    facility = BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]]
+    template = resolve_template_path_for_mode(template_mode)
+    docx_result = generate_multistop_docx_set(
+        [record], facility, template_path=template,
+        individual_stop_template_path=template, master_template_mode=template_mode,
+        output_dir=tmp_path / "docx", batch_comment="Keep dry", bol_type="PLT",
+    )
+    assert docx_result.failed_count == 0
+    assert docx_result.generated_count == 3
+    result = stamp_bol_pdf_set(
+        [record], facility, docx_result.generated_files, mode="Multistop",
+        output_dir=tmp_path / "pdf", batch_comment="Keep dry", bol_type="PLT",
+    )
+    assert result.failed_count == 0
+    assert result.converted_count == 3
+    assert [file.document_type for file in result.converted_files] == ["combined", "stop", "stop"]
+    for index, pdf in enumerate(result.converted_files[1:]):
+        stop = record.stops[index]
+        other_stop = record.stops[1 - index]
+        text = _pdf_text(pdf.file_path)
+        assert len(PdfReader(pdf.file_path).pages) == 1
+        for value in (stop.bol_number, stop.delivery_address, stop.delivery_city_state_zip,
+                      stop.target_po_number, stop.pallet_description, "Keep dry"):
+            assert value in text
+        assert text.count(stop.item_number) == 1
+        assert text.count(stop.upc) == 1
+        assert other_stop.target_po_number not in text
+        assert other_stop.delivery_address not in text
+        assert text.count("TOTALS") == 1
+        assert "\u00ab" not in text and "\u00bb" not in text
+        assert pdf.stop_number == stop.stop_number
+        assert pdf.kk_load_number == record.kk_load_number
+        assert ("BROKER PAYMENT & NO RECOURSE NOTICE" in text) == (template_mode == "No Recourse")
+
+    bundles = create_multistop_bundles(docx_result.generated_files, result.converted_files,
+                                       output_dir=tmp_path / "bundles")
+    assert bundles.pdf_bundle.file_count == 3
+    assert bundles.pdf_bundle.stop_count == 2
+    assert bundles.pdf_bundle.combined_count == 1
+    with ZipFile(bundles.pdf_bundle.file_path) as archive:
+        assert all(name.startswith("KK_Load_1/") for name in archive.namelist())
+    assert len(PdfReader(bundles.combined_pdf.file_path).pages) == 3
+    assert bundles.all_files_bundle.file_count == 6
+
+    # Older combined-only results must not suppress the newly supported stop PDFs.
+    bol_generator.st.session_state["bol_pdf_source_signature"] = bol_generator._docx_result_signature(docx_result)
+    bol_generator.st.session_state["bol_pdf_result"] = replace(result, converted_files=result.converted_files[:1])
+    assert not bol_generator._pdf_result_matches_docx_result(docx_result)
+    bol_generator.st.session_state["bol_pdf_result"] = result
+    assert bol_generator._pdf_result_matches_docx_result(docx_result)
+
+
+def test_multistop_stop_pdf_matches_load_and_reports_missing_stop(tmp_path: Path) -> None:
+    record = _multistop_record()
+    other = replace(record, kk_load_number="2", stops=[replace(record.stops[0], delivery_address="Other load street")])
+    source = tmp_path / "stop_1.docx"
+    source.write_bytes(b"placeholder")
+    generated = MultistopGeneratedDocxFile(
+        bol_number=record.stops[0].bol_number, file_name=source.name, file_path=str(source),
+        document_type="stop", load_number=record.load_number, kk_load_number="2", stop_number=1,
+    )
+    result = stamp_bol_pdf_set(
+        [record, other], BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]],
+        [generated, replace(generated, stop_number=99, file_path=str(tmp_path / "missing.docx"))],
+        mode="Multistop", output_dir=tmp_path / "pdf",
+    )
+    assert result.converted_count == 1
+    assert result.failed_count == 1
+    assert "Other load street" in _pdf_text(result.converted_files[0].file_path)
+    assert "1 Stop Way" not in _pdf_text(result.converted_files[0].file_path)
 
 
 def test_multistop_template_stamper_does_not_configure_whiteout_boxes() -> None:

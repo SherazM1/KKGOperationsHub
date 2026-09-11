@@ -17,7 +17,10 @@ from reportlab.pdfgen import canvas
 
 from app.models.bol_multistop_record import BolMultistopRecord
 from app.models.bol_standard_record import BolStandardItemLine, BolStandardRecord
-from app.services.bol_multistop_docx_generator import _format_multistop_item_description
+from app.services.bol_multistop_docx_generator import (
+    _build_individual_stop_standard_record,
+    _format_multistop_item_description,
+)
 from app.services.bol_standard_docx_generator import (
     GeneratedDocxFile,
     _format_number,
@@ -1713,6 +1716,40 @@ def _template_unavailable_result(template_path: Path, output_root: Path) -> Stan
     )
 
 
+def _individual_stop_pdf_record(
+    records: list[BolMultistopRecord],
+    generated_file: GeneratedDocxFile,
+    bol_type: str | None,
+) -> BolStandardRecord:
+    """Use the DOCX stop mapping, matching the stop within its original load."""
+    matches = [
+        (record, index)
+        for record in records
+        if _safe_text(record.load_number) == _safe_text(getattr(generated_file, "load_number", ""))
+        and (
+            not _safe_text(getattr(generated_file, "kk_load_number", ""))
+            or _safe_text(record.kk_load_number) == _safe_text(generated_file.kk_load_number)
+        )
+        for index, stop in enumerate(record.stops)
+        if stop.stop_number == getattr(generated_file, "stop_number", None)
+        and (_safe_text(stop.bol_number) or _safe_text(record.bol_number))
+        == _safe_text(generated_file.bol_number)
+    ]
+    if len(matches) != 1:
+        raise RuntimeError("A unique matching multistop stop was not found for PDF stamping.")
+    record, stop_index = matches[0]
+    stop_record = _build_individual_stop_standard_record(
+        record,
+        stop_index,
+        bol_type=bol_type,
+        display_bol_number=generated_file.bol_number,
+    )
+    # The standard PDF renderer draws item/UPC details separately; the DOCX
+    # mapping embeds those details in the description for its table layout.
+    stop_record.item_lines[0].item_description = record.stops[stop_index].pallet_description
+    return stop_record
+
+
 def stamp_bol_pdf_set(
     records: list[Any],
     selected_facility: BolFacilityRecord | None,
@@ -1755,14 +1792,38 @@ def stamp_bol_pdf_set(
         if progress_callback is not None:
             progress_callback(index, total_files, generated_file)
 
-        if mode == "Multistop" and getattr(generated_file, "document_type", "") == "stop":
-            continue
-
         source_docx = Path(generated_file.file_path)
         destination_pdf = output_root / f"{source_docx.stem}.pdf"
 
         try:
-            if mode == "Multistop":
+            if mode == "Multistop" and getattr(generated_file, "document_type", "") == "stop":
+                stop_record = _individual_stop_pdf_record(records, generated_file, bol_type)
+                stop_record.comments = _safe_text(stop_record.comments) or _safe_text(batch_comment)
+                no_recourse = _resolve_multistop_no_recourse(
+                    explicit=multistop_no_recourse,
+                    mode=mode,
+                    bol_type=bol_type,
+                    generated_file=generated_file,
+                    record=stop_record,
+                    source_docx=source_docx,
+                )
+                stop_config = _config_for_mode("No Recourse" if no_recourse else "Standard")
+                _stamp_template_pdf(
+                    template_path=stop_config.template_path,
+                    destination_pdf=destination_pdf,
+                    strip_known_tokens=True,
+                    draw_callback=lambda canv: _draw_standard_overlay(
+                        canv,
+                        stop_config,
+                        stop_record,
+                        selected_facility,
+                        bol_type=bol_type,
+                        qty_type=qty_type,
+                        batch_comment=batch_comment,
+                        render_pickup_number=render_pickup_number,
+                    ),
+                )
+            elif mode == "Multistop":
                 record = multistop_lookup.get(
                     (
                         _safe_text(generated_file.bol_number),
