@@ -1,2 +1,0 @@
-"""Display Compliance feature package."""
-
