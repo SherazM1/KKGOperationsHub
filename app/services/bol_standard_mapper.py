@@ -219,12 +219,15 @@ def map_standard_rows_to_records(
         if missing_required:
             record.is_ready = False
             record.status = "Missing Required Data"
-        elif warnings:
+        elif any(
+            "No separate pallet/skid count supplied; review required." not in warning
+            for warning in warnings
+        ):
             record.is_ready = False
             record.status = "Warning"
         else:
             record.is_ready = True
-            record.status = "Ready"
+            record.status = "Ready (pallet count needs review)" if warnings else "Ready"
 
         records.append(record)
 
