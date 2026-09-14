@@ -209,7 +209,7 @@ ADDITIONAL_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "item_description": ("Item Description", "Product Description", "Description", "Pallet Desc", "Item Desc", "Pallet Descripton", "Pallet Desciption", "Item Descripton"),
     "unit_qty": ("Unit Quantity", "Units", "Total Units", "Quantity", "Unit Quanity", "Unit Quanitity"),
     "plt_qty": ("Pallet Quantity", "PLT Quantity", "Pallet Count", "Number of Pallets", "Pallets", "Pallet Quanity", "Pallet Quanitity"),
-    "weight_each": ("Each Weight", "Unit Weight", "Weight Per Unit", "Weight EA", "WT Each", "Each WT", "Wieght Each", "Weigth Each"),
+    "weight_each": ("PLT Weight", "Pallet Weight", "Each Weight", "Unit Weight", "Weight Per Unit", "Weight EA", "WT Each", "Each WT", "Wieght Each", "Weigth Each"),
     "carrier_pro_number": ("Load Number", "Load No", "Carrier PRO", "Carrier PRO Number", "PRO #", "PRO Number"),
     "total_weight": ("Weight", "Total WT", "Total Weight Lbs", "Total Wieght", "Total Weigth"),
     "pickup_number": ("Pickup Number", "Pick Up Number", "Pickup No", "Delivery Appt No", "Delivery Appointment No", "Delivery Appoinment #"),
@@ -454,6 +454,12 @@ def _resolve_columns_with_missing(
         if resolved_name is None:
             if logical_name == "wm_po":
                 continue
+            if logical_name == "dc_number" and _resolve_column_name(
+                lookups, "DC NAME", ADDITIONAL_COLUMN_ALIASES["dc_name"]
+            ):
+                continue
+            if logical_name == "plt_qty" and _resolve_column_name(lookups, "Units", ()) and _resolve_column_name(lookups, "PLT Weight", ("Pallet Weight",)):
+                continue
             if logical_name == "dc_city_state_zip":
                 component_columns = _resolve_dc_city_state_zip_components(lookups)
                 if len(component_columns) == len(DC_CITY_STATE_ZIP_COMPONENT_SPECS):
@@ -653,8 +659,10 @@ def _iter_openpyxl_standard_rows(
     worksheet: Any,
     column_map: dict[str, str],
     kk_load_columns: list[str],
+    header_values: list[str] | None = None,
+    first_data_row: int = 2,
 ) -> list[BolStandardRow]:
-    header_values = [
+    header_values = header_values or [
         _coerce_to_string(value)
         for value in next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), [])
     ]
@@ -675,11 +683,11 @@ def _iter_openpyxl_standard_rows(
 
     for row_number, values in enumerate(
         worksheet.iter_rows(
-            min_row=2,
-            max_col=max_needed_index + 1,
+            min_row=first_data_row,
+            max_col=len(header_values),
             values_only=True,
         ),
-        start=2,
+        start=first_data_row,
     ):
         row_values: dict[str, str] = {}
         for logical_name, source_column in column_map.items():
@@ -707,6 +715,7 @@ def _iter_openpyxl_standard_rows(
 
         found_data = True
         blank_streak = 0
+        notes = _complete_derived_fields(row_values)
         parsed_rows.append(
             BolStandardRow(
                 source_row_number=row_number,
@@ -729,10 +738,66 @@ def _iter_openpyxl_standard_rows(
                 total_weight=row_values.get("total_weight", ""),
                 pickup_number=row_values.get("pickup_number", ""),
                 carrier_pro_number=row_values.get("carrier_pro_number", ""),
+                source_values={header: _coerce_to_string(values[i]) for i, header in enumerate(header_values) if header},
+                column_mapping=_source_column_mapping(column_map),
+                parsing_notes=notes,
             )
         )
 
     return parsed_rows
+
+
+def _source_column_mapping(column_map: dict[str, str]) -> dict[str, str]:
+    mapping = dict(column_map)
+    if "dc_number" not in mapping:
+        mapping["dc_number"] = "Derived from explicit DC number in " + mapping.get("dc_name", "DC Name")
+    if "plt_qty" not in mapping:
+        mapping["plt_qty"] = "Not provided; requires review"
+    return mapping
+
+
+def _complete_derived_fields(values: dict[str, str]) -> list[str]:
+    notes = []
+    if "dc_number" not in values:
+        matches = re.findall(r"\bDC\s*#?\s*(\d+)\b", values.get("dc_name", ""), re.IGNORECASE)
+        values["dc_number"] = matches[0] if len(matches) == 1 else ""
+        notes.append("DC number derived from DC Name." if values["dc_number"] else "DC Name has no unambiguous DC number; review required.")
+    if "plt_qty" not in values:
+        values["plt_qty"] = ""
+        notes.append("No separate pallet/skid count supplied; review required.")
+    return notes
+
+
+def _read_standard_headers(worksheet: Any) -> tuple[list[str], int]:
+    """Join a recognized header continuation without consuming a shipment row."""
+    top_rows = list(worksheet.iter_rows(min_row=1, max_row=2, values_only=True))
+    return _standard_headers_from_rows(top_rows)
+
+
+def _standard_headers_from_rows(top_rows: list[Any]) -> tuple[list[str], int]:
+    headers = [_coerce_to_string(value) for value in top_rows[0]] if top_rows else []
+    if len(top_rows) < 2:
+        return headers, 2
+    continuations = {
+        ("DC", "ST"), ("DC", "STATE"), ("DC", "ZIP"),
+        ("PALLET", "DESCRIPTION"), ("VALUE", "EACH"),
+        ("LOAD", "VALUE"), ("0.03", "CHARGE BACK"),
+    }
+    parts = [(i, _coerce_to_string(value)) for i, value in enumerate(top_rows[1]) if _coerce_to_string(value)]
+    if len(parts) >= 2 and all((_normalize_header(headers[i]), _normalize_header(value)) in continuations for i, value in parts):
+        for i, value in parts:
+            headers[i] = f"{headers[i]} {value}"
+        return headers, 3
+    return headers, 2
+
+
+def _standard_dataframe(raw: pd.DataFrame) -> pd.DataFrame:
+    headers, first_data_row = _standard_headers_from_rows(list(raw.head(2).itertuples(index=False, name=None)))
+    df = raw.iloc[first_data_row - 1:].copy()
+    df.columns = headers
+    # The dataframe reader adds two to the index for the original Excel row.
+    df.index = range(first_data_row - 2, first_data_row - 2 + len(df))
+    return df
 
 
 def _combine_city_state_zip_from_values(row_values: dict[str, str]) -> str:
@@ -778,10 +843,7 @@ def _parse_standard_bol_excel_openpyxl(
         )
 
         worksheet = workbook[resolved_sheet_name]
-        header_values = [
-            _coerce_to_string(value)
-            for value in next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), [])
-        ]
+        header_values, first_data_row = _read_standard_headers(worksheet)
         header_loaded_at = perf_counter()
         print(
             "BOL parse timing: header_row_openpyxl="
@@ -799,7 +861,7 @@ def _parse_standard_bol_excel_openpyxl(
             f"{columns_resolved_at - header_loaded_at:.3f}s"
         )
 
-        parsed_rows = _iter_openpyxl_standard_rows(worksheet, column_map, kk_load_columns)
+        parsed_rows = _iter_openpyxl_standard_rows(worksheet, column_map, kk_load_columns, header_values, first_data_row)
         rows_parsed_at = perf_counter()
         print(
             "BOL parse timing: row_stream_openpyxl="
@@ -834,6 +896,7 @@ def _parse_standard_dataframe_rows(
         if not any(row_values.values()):
             continue
 
+        notes = _complete_derived_fields(row_values)
         parsed_rows.append(
             BolStandardRow(
                 source_row_number=row_number,
@@ -856,6 +919,9 @@ def _parse_standard_dataframe_rows(
                 total_weight=row_values.get("total_weight", ""),
                 pickup_number=row_values.get("pickup_number", ""),
                 carrier_pro_number=row_values.get("carrier_pro_number", ""),
+                source_values={str(header): _coerce_to_string(value) for header, value in row.items()},
+                column_mapping=_source_column_mapping(column_map),
+                parsing_notes=notes,
             )
         )
 
@@ -866,10 +932,10 @@ def _parse_standard_bol_csv(file: Any) -> list[BolStandardRow]:
     started_at = perf_counter()
     file.seek(0)
     try:
-        df = pd.read_csv(file, dtype=object)
+        df = _standard_dataframe(pd.read_csv(file, dtype=object, header=None))
     except UnicodeDecodeError:
         file.seek(0)
-        df = pd.read_csv(file, dtype=object, encoding="utf-8-sig")
+        df = _standard_dataframe(pd.read_csv(file, dtype=object, encoding="utf-8-sig", header=None))
     csv_loaded_at = perf_counter()
     print(
         "BOL parse timing: csv_load="
@@ -944,7 +1010,7 @@ def parse_standard_bol_excel(
         f"{sheet_resolved_at - workbook_loaded_at:.3f}s sheet={resolved_sheet_name!r}"
     )
 
-    df = workbook.parse(sheet_name=resolved_sheet_name, dtype=object)
+    df = _standard_dataframe(workbook.parse(sheet_name=resolved_sheet_name, dtype=object, header=None))
     sheet_loaded_at = perf_counter()
     print(
         "BOL parse timing: sheet_load="

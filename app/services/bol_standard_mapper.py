@@ -206,6 +206,11 @@ def map_standard_rows_to_records(
 
         missing_required = _missing_required_fields(record)
         warnings = _inconsistent_shipment_warnings(bol_rows)
+        warnings.extend(dict.fromkeys(
+            f"Row {row.source_row_number}: {note}"
+            for row in bol_rows for note in row.parsing_notes
+            if "review required" in note
+        ))
         issues = _required_shipment_issues(record)
         record.missing_required_fields = missing_required
         record.warnings = warnings

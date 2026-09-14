@@ -991,6 +991,23 @@ def render_bol_generator_view() -> None:
         ready_count = sum(1 for record in grouped_records if record.is_ready)
         issue_count = len(grouped_records) - ready_count
         st.success("Parse complete.")
+        source_rows = [row for row in parsed_rows if getattr(row, "source_values", None)]
+        if source_rows:
+            with st.expander("Source columns and import audit", expanded=False):
+                st.caption("All source shipment columns are retained below. Columns without a BOL destination remain available here for review and download.")
+                mapping = source_rows[0].column_mapping
+                st.dataframe([
+                    {"Source column": header, "BOL field": ", ".join(key for key, value in mapping.items() if value == header) or "Retained for source review"}
+                    for header in source_rows[0].source_values
+                ], use_container_width=True)
+                for note in dict.fromkeys(note for row in source_rows for note in row.parsing_notes):
+                    st.write(note)
+                source_df = pd.DataFrame([
+                    {"Excel row": row.source_row_number, **row.source_values}
+                    for row in source_rows
+                ])
+                st.dataframe(source_df, use_container_width=True)
+                st.download_button("Download source column audit", source_df.to_csv(index=False).encode("utf-8-sig"), file_name="bol_source_column_audit.csv", mime="text/csv")
         st.write(
             {
                 "source_file": (

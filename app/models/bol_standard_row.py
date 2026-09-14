@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
@@ -29,3 +29,6 @@ class BolStandardRow:
     total_weight: str = ""
     pickup_number: str = ""
     carrier_pro_number: str = ""
+    source_values: dict[str, str] = field(default_factory=dict)
+    column_mapping: dict[str, str] = field(default_factory=dict)
+    parsing_notes: list[str] = field(default_factory=list)
