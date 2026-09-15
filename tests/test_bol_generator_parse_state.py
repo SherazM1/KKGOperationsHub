@@ -8,6 +8,23 @@ from app.models.bol_standard_record import BolAddressBlock
 from app.ui import bol_generator
 
 
+def test_bulk_selection_updates_widgets_records_and_persists():
+    from tests.test_bol_standard_pdf_generator import _ready_record
+    records = [_ready_record(), _ready_record()]
+    records[1].is_ready = False
+    bol_generator.st.session_state.clear()
+    bol_generator._initialize_bol_state()
+    bol_generator._sync_review_state(records)
+    for selected in (True, False):
+        bol_generator._select_all_review_records(records, selected)
+        bol_generator._sync_review_state(records)
+        for index, record in enumerate(records):
+            key = bol_generator._record_key(record, index)
+            assert record.selected_for_generation is selected
+            assert bol_generator.st.session_state["bol_record_selection"][key] is selected
+            assert bol_generator.st.session_state[f"bol_include_{index}_{bol_generator._widget_safe_key(key)}"] is selected
+
+
 def test_prepare_parse_state_only_clears_artifact_references(monkeypatch) -> None:
     def fail_if_called(*args, **kwargs):
         raise AssertionError("Parse preparation must not build bundles, stamp PDFs, or delete folders.")

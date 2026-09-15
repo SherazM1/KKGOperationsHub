@@ -3,15 +3,19 @@
 import re
 
 
+def is_duplicate_bol_company(company: str, value: str) -> bool:
+    def key(text: str) -> str:
+        text = re.sub(r"\s*\(\d+\)\s*$", "", text)
+        text = re.sub(r"[^a-z0-9]", "", text.lower())
+        return re.sub(r"^samsclub(?=dc)", "sams", text)
+
+    return bool(key(company)) and key(company) == key(value)
+
+
 def normalize_bol_address(company: str, street: str, city_state_zip: str) -> tuple[str, str]:
     """Remove a repeated company and recover a shifted street without guessing a city."""
-    def key(value: str) -> str:
-        return re.sub(r"[^a-z0-9]", "", value.lower())
-
-    names = {key(company), key(re.sub(r"\s*\(\d+\)\s*$", "", company))} - {""}
-    street_lines = [line.strip() for line in street.splitlines() if line.strip()]
-    while street_lines and key(street_lines[0]) in names:
-        street_lines.pop(0)
+    street_lines = [line.strip() for line in street.splitlines()
+                    if line.strip() and not is_duplicate_bol_company(company, line)]
     street = "\n".join(street_lines)
     city_state_zip = city_state_zip.strip()
     if not street and re.match(r"^(?:\d+\s|P\.?\s*O\.?\s+BOX\b)", city_state_zip, re.I):

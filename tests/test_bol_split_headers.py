@@ -52,7 +52,10 @@ def test_split_headers_keep_all_columns_and_exclude_footer():
     assert row.source_values["Load Value"] == "17650.6"
     assert row.source_values["0.03 Charge Back"] == "529.518"
     assert row.source_values["NOTES"] == "Keep this note"
-    assert map_standard_rows_to_records(rows)[0].status == "Warning"
+    record = map_standard_rows_to_records(rows)[0]
+    assert record.status == "Ready (pallet count needs review)"
+    assert record.is_ready
+    assert any("No separate pallet/skid count supplied" in warning for warning in record.warnings)
 
 
 def test_explicit_skid_count_is_used_and_record_is_ready():

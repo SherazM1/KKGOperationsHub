@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import re
 
 from app.models.bol_standard_record import (
     BolAddressBlock,
@@ -53,6 +54,11 @@ def _required_shipment_issues(record: BolStandardRecord) -> list[str]:
 
     if not record.item_lines:
         issues.append("No item lines found for this BOL.")
+
+    if record.consignee_street.strip() and not re.search(r"[A-Za-z]", record.consignee_street):
+        issues.append("Invalid DC STREET: street address must include a street name.")
+    if re.match(r"^\d", record.consignee_city_state_zip):
+        issues.append("Invalid DC CITY, STATE, ZIP: city cannot start with a number.")
 
     for line in record.item_lines:
         if not line.item_description.strip():
@@ -219,6 +225,9 @@ def map_standard_rows_to_records(
         if missing_required:
             record.is_ready = False
             record.status = "Missing Required Data"
+        elif issues:
+            record.is_ready = False
+            record.status = "Invalid Required Data"
         elif any(
             "No separate pallet/skid count supplied; review required." not in warning
             for warning in warnings

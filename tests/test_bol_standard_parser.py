@@ -43,6 +43,58 @@ def _standard_load_row() -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize("csv", [False, True])
+@pytest.mark.parametrize("duplicate", ["SAM'S DC# 8235", "Sams Club DC 8235", "SAMS DC 8235"])
+def test_sams_shifted_address_columns(csv, duplicate):
+    row = _standard_load_row()
+    row.update({"DC NAME": "SAM'S DC# 8235", "DC STREET": duplicate,
+                "DC CITY": "2122 NORTH STEMMONS", "DCCITY\n": "SANGER"})
+    upload = _csv_with_rows([row]) if csv else _workbook_with_sheet("Load Sheet", [row])
+    parsed = parse_standard_bol_excel(upload)
+    record = map_standard_rows_to_records(parsed)[0]
+    assert record.is_ready
+    assert record.consignee_street == "2122 NORTH STEMMONS"
+    assert record.consignee_city_state_zip == "SANGER, TX 75001"
+    assert parsed[0].column_mapping["dc_street"] == "DC CITY"
+    assert parsed[0].column_mapping["dc_city"] == "DCCITY"
+
+
+def test_extra_city_column_does_not_shift_correct_address():
+    row = _standard_load_row()
+    row["DCCITY"] = "Unrelated"
+    parsed = parse_standard_bol_excel(_workbook_with_sheet("Load Sheet", [row]))[0]
+    assert parsed.dc_street == "123 Test St"
+    assert parsed.dc_city_state_zip == "Dallas, TX 75001"
+
+
+def test_combined_address_column_keeps_priority_over_extra_city():
+    row = _standard_load_row()
+    row.update({"DC CITY, STATE, ZIP": "Dallas, TX 75001", "DCCITY": "Unrelated"})
+    parsed = parse_standard_bol_excel(_workbook_with_sheet("Load Sheet", [row]))[0]
+    assert parsed.dc_city_state_zip == "Dallas, TX 75001"
+    assert "dc_city_alternate" not in parsed.column_mapping
+
+
+def test_shifted_incomplete_street_does_not_pass_validation():
+    row = _standard_load_row()
+    row.update({"DC NAME": "SAM'S DC# 8235", "DC STREET": "Sams Club DC 8235",
+                "DC CITY": 2, "DCCITY": "SANGER"})
+    parsed = parse_standard_bol_excel(_workbook_with_sheet("Load Sheet", [row]))
+    record = map_standard_rows_to_records(parsed)[0]
+    assert record.consignee_street == "2"
+    assert record.consignee_city_state_zip == "SANGER, TX 75001"
+    assert not record.is_ready
+    assert any("street name" in issue for issue in record.issues)
+
+
+@pytest.mark.parametrize("field,value", [("DC STREET", "2"), ("DC ZIP", ""), ("UPC", ""), ("ITEM #", ""), ("QTY", ""), ("weight each", "")])
+def test_incomplete_required_data_is_not_ready(field, value):
+    row = _standard_load_row()
+    row[field] = value
+    parsed = parse_standard_bol_excel(_workbook_with_sheet("Load Sheet", [row]))
+    assert not map_standard_rows_to_records(parsed)[0].is_ready
+
+
 @pytest.mark.parametrize(
     ("field", "alias"),
     [(field, alias) for field, aliases in ADDITIONAL_COLUMN_ALIASES.items() for alias in aliases],

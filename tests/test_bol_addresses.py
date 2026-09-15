@@ -27,6 +27,13 @@ def test_correct_address_is_preserved():
     )
 
 
+def test_sams_club_duplicate_removed_without_removing_other_dc():
+    assert normalize_bol_address("SAM'S DC# 8235", "Sams Club DC 8235\n2122 NORTH STEMMONS\nSAMS DC 8235", "Sanger, TX 76266") == (
+        "2122 NORTH STEMMONS", "Sanger, TX 76266"
+    )
+    assert normalize_bol_address("SAM'S DC# 8235", "Sams Club DC 8234", "Sanger, TX 76266")[0] == "Sams Club DC 8234"
+
+
 def test_missing_street_does_not_invent_address():
     assert normalize_bol_address("Test DC", "Test DC", "Dallas, TX 75001") == ("", "Dallas, TX 75001")
 

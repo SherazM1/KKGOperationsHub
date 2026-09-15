@@ -11,6 +11,7 @@ from openpyxl.utils.exceptions import InvalidFileException
 import pandas as pd
 
 from app.models.bol_standard_row import BolStandardRow
+from app.utils.bol_addresses import is_duplicate_bol_company
 
 
 STANDARD_SHEET_NAME = "MAIN LOAD SHEET"
@@ -485,6 +486,11 @@ def _resolve_columns_with_missing(
         if resolved_name is not None:
             resolved[logical_name] = resolved_name
 
+    # Some Sam's sheets label the street DC CITY and the real city DCCITY.
+    # Retain both independently; only shift them when row contents confirm it.
+    city_candidates = [c for c in resolved_columns if _normalize_header(c) == "DCCITY"]
+    if city_candidates and "dc_city" in resolved and resolved["dc_city"] != city_candidates[0]:
+        resolved["dc_city_alternate"] = city_candidates[0]
     return resolved, missing
 
 
@@ -715,6 +721,7 @@ def _iter_openpyxl_standard_rows(
 
         found_data = True
         blank_streak = 0
+        source_mapping = _normalize_source_address(row_values, column_map)
         notes = _complete_derived_fields(row_values)
         parsed_rows.append(
             BolStandardRow(
@@ -739,7 +746,7 @@ def _iter_openpyxl_standard_rows(
                 pickup_number=row_values.get("pickup_number", ""),
                 carrier_pro_number=row_values.get("carrier_pro_number", ""),
                 source_values={header: _coerce_to_string(values[i]) for i, header in enumerate(header_values) if header},
-                column_mapping=_source_column_mapping(column_map),
+                column_mapping=source_mapping,
                 parsing_notes=notes,
             )
         )
@@ -756,8 +763,26 @@ def _source_column_mapping(column_map: dict[str, str]) -> dict[str, str]:
     return mapping
 
 
+def _normalize_source_address(values: dict[str, str], column_map: dict[str, str]) -> dict[str, str]:
+    mapping = _source_column_mapping(column_map)
+    if "dc_city_alternate" in values and is_duplicate_bol_company(
+        values.get("dc_name", ""), values.get("dc_street", "")
+    ):
+        values["dc_street"] = values.get("dc_city", "")
+        values["dc_city"] = values["dc_city_alternate"]
+        mapping["dc_street"] = column_map["dc_city"]
+        mapping["dc_city"] = column_map["dc_city_alternate"]
+    mapping.pop("dc_city_alternate", None)
+    return mapping
+
+
 def _complete_derived_fields(values: dict[str, str]) -> list[str]:
     notes = []
+    if values.get("dc_street", "").strip() and not re.search(r"[A-Za-z]", values["dc_street"]):
+        notes.append("DC STREET must include a street name; review required.")
+    for component in ("dc_city", "dc_state", "dc_zip"):
+        if component in values and not values[component].strip():
+            notes.append(f"Missing {component.replace('_', ' ').upper()}; review required.")
     if "dc_number" not in values:
         matches = re.findall(r"\bDC\s*#?\s*(\d+)\b", values.get("dc_name", ""), re.IGNORECASE)
         values["dc_number"] = matches[0] if len(matches) == 1 else ""
@@ -896,6 +921,7 @@ def _parse_standard_dataframe_rows(
         if not any(row_values.values()):
             continue
 
+        source_mapping = _normalize_source_address(row_values, column_map)
         notes = _complete_derived_fields(row_values)
         parsed_rows.append(
             BolStandardRow(
@@ -909,7 +935,7 @@ def _parse_standard_dataframe_rows(
                 dc_number=row_values["dc_number"],
                 dc_name=row_values["dc_name"],
                 dc_street=row_values["dc_street"],
-                dc_city_state_zip=_combine_city_state_zip(row, column_map),
+                dc_city_state_zip=_combine_city_state_zip_from_values(row_values),
                 item_number=row_values["item_number"],
                 upc=row_values["upc"],
                 item_description=row_values["item_description"],
@@ -920,7 +946,7 @@ def _parse_standard_dataframe_rows(
                 pickup_number=row_values.get("pickup_number", ""),
                 carrier_pro_number=row_values.get("carrier_pro_number", ""),
                 source_values={str(header): _coerce_to_string(value) for header, value in row.items()},
-                column_mapping=_source_column_mapping(column_map),
+                column_mapping=source_mapping,
                 parsing_notes=notes,
             )
         )

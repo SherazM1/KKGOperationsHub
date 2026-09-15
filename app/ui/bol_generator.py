@@ -591,6 +591,14 @@ def _widget_safe_key(raw_key: str) -> str:
     return "".join(char if char.isalnum() else "_" for char in raw_key)
 
 
+def _select_all_review_records(records: list[Any], selected: bool) -> None:
+    for index, record in enumerate(records):
+        key = _record_key(record, index)
+        st.session_state["bol_record_selection"][key] = selected
+        record.selected_for_generation = selected
+        st.session_state[f"bol_include_{index}_{_widget_safe_key(key)}"] = selected
+
+
 def _sync_review_state(records: list[Any]) -> None:
     comments_state: dict[str, str] = st.session_state["bol_record_comments"]
     selection_state: dict[str, bool] = st.session_state["bol_record_selection"]
@@ -1208,6 +1216,12 @@ def render_bol_generator_view() -> None:
 
         comments_state: dict[str, str] = st.session_state["bol_record_comments"]
         selection_state: dict[str, bool] = st.session_state["bol_record_selection"]
+
+        select_cols = st.columns(2)
+        select_all = select_cols[0].button("Select all", disabled=not grouped_records)
+        deselect_all = select_cols[1].button("Deselect all", disabled=not grouped_records)
+        if select_all or deselect_all:
+            _select_all_review_records(grouped_records, select_all)
 
         for index, record in enumerate(grouped_records):
             key = _record_key(record, index)
