@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from app.utils.bol_addresses import normalize_bol_address
 
 
 @dataclass(slots=True)
@@ -13,6 +14,11 @@ class BolAddressBlock:
     street: str
     city_state_zip: str
     attn: str = ""
+
+    def __post_init__(self) -> None:
+        self.street, self.city_state_zip = normalize_bol_address(
+            self.company, self.street, self.city_state_zip
+        )
 
 
 @dataclass(slots=True)
@@ -61,3 +67,8 @@ class BolStandardRecord:
     issues: list[str] = field(default_factory=list)
     carrier_pro_number: str = ""
     pickup_number: str = ""
+
+    def __post_init__(self) -> None:
+        self.consignee_street, self.consignee_city_state_zip = normalize_bol_address(
+            self.consignee_company, self.consignee_street, self.consignee_city_state_zip
+        )

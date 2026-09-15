@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from app.utils.bol_addresses import normalize_bol_address
 
 from app.models.bol_standard_record import BolAddressBlock, BolStandardItemLine
 
@@ -25,6 +26,11 @@ class BolMultistopStop:
     upc: str
     total_pallets: str
     weight: str
+
+    def __post_init__(self) -> None:
+        self.delivery_address, self.delivery_city_state_zip = normalize_bol_address(
+            self.delivery_dc, self.delivery_address, self.delivery_city_state_zip
+        )
 
 
 @dataclass(slots=True)
@@ -102,3 +108,8 @@ class BolMultistopRecord:
     conversion_skip_reason: str | None = None
     issues: list[str] = field(default_factory=list)
     is_supported: bool = True
+
+    def __post_init__(self) -> None:
+        self.consignee_street, self.consignee_city_state_zip = normalize_bol_address(
+            self.consignee_company, self.consignee_street, self.consignee_city_state_zip
+        )
