@@ -930,6 +930,26 @@ def _postprocess_comments_in_document_xml(
     return updated_xml, populated
 
 
+def _populate_broker_of_record(doc: Document, broker_name: str) -> None:
+    """Fill the notice when present, including names split across Word runs."""
+    for paragraph in doc.element.findall(".//w:p", doc.element.nsmap):
+        nodes = paragraph.findall(".//w:t", paragraph.nsmap)
+        text = "".join(node.text or "" for node in nodes)
+        match = re.search(r"(?<=Broker of Record: )TRIDENT TRANSPORT,\s+LLC", text)
+        if match is None:
+            continue
+        offset = 0
+        for node in nodes:
+            value = node.text or ""
+            end = offset + len(value)
+            if offset < match.end() and end > match.start():
+                before = value[:max(0, match.start() - offset)]
+                after = value[max(0, match.end() - offset):]
+                replacement = broker_name.upper() if offset <= match.start() else ""
+                node.text = before + replacement + after
+            offset = end
+
+
 def _apply_template_record_values(
     doc: Document,
     record: BolStandardRecord,
@@ -943,6 +963,7 @@ def _apply_template_record_values(
     filter_blank_item_lines: bool = False,
 ) -> list[str]:
     notices: list[str] = []
+    _populate_broker_of_record(doc, record.bill_to.company)
     has_explicit_pickup_token = _document_contains_token(doc, _tok("Pick_Up_"))
     pickup_number = record.pickup_number if render_pickup_number else ""
     replacements = {

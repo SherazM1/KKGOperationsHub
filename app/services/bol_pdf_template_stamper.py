@@ -914,6 +914,22 @@ def _draw_no_recourse_first_row_description(
     )
 
 
+def _clear_multistop_consignee_rules(canv: canvas.Canvas, template_mode: str) -> None:
+    """Cover only the thin consignee writing rules before drawing Multistop values."""
+    # These measured template coordinates exclude the heading, labels, and outer section border.
+    rule_tops = {
+        "Multistop": (237.44, 255.32, 272.54, 289.04, 306.92, 326.18),
+        "Standard": (254.48, 272.42, 289.64, 306.14, 327.86, 347.12),
+        "No Recourse": (203.6, 215.6, 227.54, 239.54, 271.58, 283.58),
+    }
+    left = 98.1 if template_mode == "Multistop" else 107.12
+    canv.saveState()
+    canv.setFillColor(colors.white)
+    for top in rule_tops[template_mode]:
+        canv.rect(left - 0.2, PAGE_HEIGHT - top - 1.6, 335.94 - left, 2.2, stroke=0, fill=1)
+    canv.restoreState()
+
+
 def _draw_standard_overlay(
     canv: canvas.Canvas,
     config: PdfTemplateConfig,
@@ -924,9 +940,17 @@ def _draw_standard_overlay(
     qty_type: str,
     batch_comment: str | None,
     render_pickup_number: bool = True,
+    multistop: bool = False,
 ) -> None:
+    # Individual stop PDFs use the standard templates but receive Multistop-only line removal.
+    if multistop:
+        _clear_multistop_consignee_rules(canv, config.mode)
     if config.mode == "No Recourse":
         _draw_no_recourse_driver_date(canv)
+        # Print the selected broker in the notice after removing the template's fixed broker text.
+        _draw_box_value(canv, _box_for_baseline(
+            x=34, baseline=78, width=550, font_size=9, align="center",
+        ), f"Broker of Record: {_safe_text(record.bill_to.company).upper()}")
     record_values = (
         _no_recourse_record_values(
             record,
@@ -1342,6 +1366,7 @@ def _draw_multistop_overlay(
     if no_recourse:
         _draw_no_recourse_multistop_overlay(canv, record, selected_facility, batch_comment)
         return
+    _clear_multistop_consignee_rules(canv, "Multistop")
     # Draw the top Multistop fields
     values = _multistop_record_values(
         record,
@@ -1460,12 +1485,7 @@ def _draw_no_recourse_multistop_overlay(
     canv.restoreState()
     for index in range(1, 4):
         baseline = 588.0 - (index - 1) * 32.0
-        canv.saveState()
-        canv.setStrokeColor(colors.black)
-        canv.setLineWidth(0.5)
-        canv.line(107, baseline - 3, 335.5, baseline - 3)
-        canv.line(107, baseline - 25, 335.5, baseline - 25)
-        canv.restoreState()
+        # Keep each delivery label and address without adding black writing rules beneath them.
         _draw_box_value(canv, _without_whiteout(_box_for_baseline(
             x=29, baseline=baseline, width=78, font_size=8.0, bold=True,
         )), f"DELIVERY #{index}")
@@ -1812,11 +1832,15 @@ def stamp_bol_pdf_set(
                     template_path=stop_config.template_path,
                     destination_pdf=destination_pdf,
                     strip_known_tokens=True,
+                    template_text_replacements={
+                        "Broker of Record: ": "", "TRIDENT TRANSPORT,  LLC": "",
+                    } if no_recourse else None,
                     draw_callback=lambda canv: _draw_standard_overlay(
                         canv,
                         stop_config,
                         stop_record,
                         selected_facility,
+                        multistop=True,
                         bol_type=bol_type,
                         qty_type=qty_type,
                         batch_comment=batch_comment,
@@ -1872,6 +1896,9 @@ def stamp_bol_pdf_set(
                     template_path=config.template_path,
                     destination_pdf=destination_pdf,
                     strip_known_tokens=True,
+                    template_text_replacements={
+                        "Broker of Record: ": "", "TRIDENT TRANSPORT,  LLC": "",
+                    } if mode == "No Recourse" else None,
                     draw_callback=lambda canv, record=record: _draw_standard_overlay(
                         canv,
                         config,

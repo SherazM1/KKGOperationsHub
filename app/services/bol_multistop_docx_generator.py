@@ -418,6 +418,41 @@ def format_bol_item_detail_table(table: Table) -> None:
             break
 
 
+def _remove_multistop_consignee_rules(doc: Document) -> None:
+    """Remove writing rules from consignee value cells while retaining the section outline."""
+    for table in doc.tables:
+        in_consignee = False
+        left_width = 0
+        for row in table.rows:
+            cells = _row_unique_cells(row)
+            if not cells:
+                continue
+            if "TO (CONSIGNEE)" in cells[0][1].text.upper():
+                in_consignee = True
+                left_width = int(cells[0][1]._tc.grid_span)
+                continue
+            if not in_consignee:
+                continue
+            # A merged left-hand cell marks the end of the consignee section.
+            if cells[0][1]._tc.grid_span >= left_width:
+                in_consignee = False
+                continue
+            for index, cell in cells:
+                if not 0 < index < left_width:
+                    continue
+                properties = cell._tc.get_or_add_tcPr()
+                borders = properties.find(qn("w:tcBorders"))
+                if borders is None:
+                    borders = OxmlElement("w:tcBorders")
+                    properties.append(borders)
+                for edge in ("top", "bottom"):
+                    border = borders.find(qn(f"w:{edge}"))
+                    if border is None:
+                        border = OxmlElement(f"w:{edge}")
+                        borders.append(border)
+                    border.set(qn("w:val"), "nil")
+
+
 def _compact_standard_family_multistop_table(doc: Document) -> None:
     for table in doc.tables:
         header_idx = None
@@ -996,6 +1031,7 @@ def _save_multistop_docx(
     notices: list[DocxGenerationNotice],
 ) -> MultistopGeneratedDocxFile:
     doc = Document(str(resolved_template))
+    _remove_multistop_consignee_rules(doc)
     is_standard_family_template = resolved_template.name in {
         STANDARD_TEMPLATE_PATH.name,
         NO_RECOURSE_TEMPLATE_PATH.name,
@@ -1103,6 +1139,7 @@ def _save_individual_stop_docx(
         display_bol_number=display_bol_number,
     )
     doc = Document(str(resolved_template))
+    _remove_multistop_consignee_rules(doc)
     is_standard_template = resolved_template.name == STANDARD_TEMPLATE_PATH.name
     is_no_recourse_template = resolved_template.name == NO_RECOURSE_TEMPLATE_PATH.name
     resolved_comment = _resolve_comment_for_record(record.comments, batch_comment)

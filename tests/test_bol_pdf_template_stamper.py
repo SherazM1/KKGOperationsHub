@@ -269,6 +269,63 @@ def test_standard_pdf_can_suppress_pickup_number_without_changing_record(tmp_pat
     assert "PU-123" not in _pdf_text(result.converted_files[0].file_path)
 
 
+@pytest.mark.parametrize("mode", ["Standard", "No Recourse"])
+def test_batch_broker_name_in_docx_and_pdf(tmp_path: Path, mode: str) -> None:
+    from app.services.bol_standard_docx_generator import generate_standard_docx_set
+
+    original = _standard_record()
+    records = bol_generator._records_with_broker_name([original], mode, "  Acme Freight  ")
+    facility = BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]]
+    docx = generate_standard_docx_set(
+        records, selected_facility=facility,
+        template_path=resolve_template_path_for_mode(mode), output_dir=tmp_path / "docx",
+    )
+    assert docx.failed_count == 0
+    with ZipFile(docx.generated_files[0].file_path) as archive:
+        xml = archive.read("word/document.xml").decode("utf-8")
+    assert "Acme Freight" in xml
+    assert "505 Riverfront Pkwy" in xml
+    assert "Chattanooga, TN 37402" in xml
+    if mode == "No Recourse":
+        assert "ACME FREIGHT" in xml
+        assert "TRIDENT TRANSPORT" not in xml
+    pdf = stamp_bol_pdf_set(
+        records, selected_facility=facility, generated_docx_files=docx.generated_files,
+        mode=mode, output_dir=tmp_path / "pdf",
+    )
+    assert pdf.failed_count == 0
+    text = _pdf_text(pdf.converted_files[0].file_path)
+    assert "Acme Freight" in text
+    assert "505 Riverfront Pkwy" in text
+    assert "Chattanooga, TN 37402" in text
+    if mode == "No Recourse":
+        assert "Broker of Record: ACME FREIGHT" in text
+    else:
+        assert "Broker of Record:" not in text
+    assert original.bill_to.company == "Trident Transport, LLC"
+    assert bol_generator._records_with_broker_name([original], mode, " ")[0] is original
+
+
+@pytest.mark.parametrize("mode", ["Standard", "No Recourse", "Multistop"])
+def test_manual_billing_address_replaces_old_address_without_affecting_library(mode: str) -> None:
+    """Manual address edits replace old lines, while saved broker selections retain their own address."""
+    original = _multistop_record() if mode == "Multistop" else _standard_record()
+    updated = bol_generator._records_with_broker_name(
+        [original], mode, "New Broker", bill_to_street="  PO Box 42  ",
+        bill_to_city_state_zip="  Dallas, TX 75001  ",
+    )[0]
+    assert updated.bill_to == BolAddressBlock("New Broker", "PO Box 42", "Dallas, TX 75001")
+    partial = bol_generator._records_with_broker_name(
+        [original], mode, "New Broker", bill_to_city_state_zip="Dallas, TX 75001",
+    )[0]
+    assert partial.bill_to.street == ""
+    saved = bol_generator._records_with_broker_name(
+        [updated], mode, "New Broker", "Rite Way Logistics", bill_to_street="PO Box 42",
+    )[0]
+    assert saved.bill_to == BolAddressBlock("Rite Way Logistics", "", "")
+    assert original.bill_to.street == "505 Riverfront Pkwy"
+
+
 def test_standard_pdf_renders_pickup_number_by_default(tmp_path: Path) -> None:
     record = _standard_record()
     docx_file = _docx_file(tmp_path, "standard_bol_10001859231-0553.docx", "10001859231-0553")
@@ -284,6 +341,57 @@ def test_standard_pdf_renders_pickup_number_by_default(tmp_path: Path) -> None:
     )
 
     assert "PU-123" in _pdf_text(result.converted_files[0].file_path)
+
+
+@pytest.mark.parametrize("mode", ["Standard", "No Recourse", "Multistop"])
+@pytest.mark.parametrize("broker_name", ["TQL", "Rite Way Logistics"])
+def test_broker_library_outputs_matching_or_blank_address(tmp_path: Path, mode: str, broker_name: str) -> None:
+    from xml.etree import ElementTree
+    from app.services.bol_standard_docx_generator import generate_standard_docx_set
+    from app.utils.bol_brokers import BOL_BROKER_LOOKUP
+
+    original = _multistop_record() if mode == "Multistop" else _standard_record()
+    records = bol_generator._records_with_broker_name([original], mode, "Old manual broker", broker_name)
+    broker = BOL_BROKER_LOOKUP[broker_name]
+    assert records[0].bill_to == broker
+    assert records[0].bill_to is not broker
+    assert original.bill_to.company != broker_name
+    facility = BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]]
+    template_mode = "No Recourse" if mode == "Multistop" else mode
+    template = resolve_template_path_for_mode(template_mode)
+    if mode == "Multistop":
+        docx = generate_multistop_docx_set(
+            records, facility, template_path=template,
+            individual_stop_template_path=template, master_template_mode=template_mode,
+            output_dir=tmp_path / "docx",
+        )
+    else:
+        docx = generate_standard_docx_set(
+            records, facility, template_path=template, output_dir=tmp_path / "docx",
+        )
+    assert docx.failed_count == 0
+    assert docx.generated_count == (3 if mode == "Multistop" else 1)
+    pdf = stamp_bol_pdf_set(
+        records, facility, docx.generated_files, mode=mode, output_dir=tmp_path / "pdf",
+    )
+    assert pdf.failed_count == 0
+    texts = [_pdf_text(file.file_path) for file in pdf.converted_files]
+    for file in docx.generated_files:
+        with ZipFile(file.file_path) as archive:
+            root = ElementTree.fromstring(archive.read("word/document.xml"))
+        texts.append("".join(root.itertext()))
+    for text in texts:
+        assert broker_name in text
+        assert "505 Riverfront" not in text
+        assert "Chattanooga" not in text
+        if broker.street:
+            assert broker.street in text
+            assert broker.city_state_zip in text
+        else:
+            assert "PO Box 1160" not in text
+            assert "Smithville" not in text
+        if template_mode == "No Recourse":
+            assert broker_name.upper() in text
 
 
 def test_standard_pdf_item_row_weight_uses_weight_each_when_total_weight_exists() -> None:
@@ -616,6 +724,11 @@ def test_no_recourse_multistop_preserves_reference_form_and_three_stops(tmp_path
 def test_multistop_full_set_includes_individual_stop_pdfs(tmp_path: Path, template_mode: str) -> None:
     record = _multistop_record()
     record.selected_for_generation = True
+    original = record
+    record = bol_generator._records_with_broker_name(
+        [record], "Multistop", "  Acme Freight  "
+    )[0]
+    assert original.bill_to.company != "Acme Freight"
     facility = BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]]
     template = resolve_template_path_for_mode(template_mode)
     docx_result = generate_multistop_docx_set(
@@ -625,12 +738,32 @@ def test_multistop_full_set_includes_individual_stop_pdfs(tmp_path: Path, templa
     )
     assert docx_result.failed_count == 0
     assert docx_result.generated_count == 3
+    for generated in docx_result.generated_files:
+        with ZipFile(generated.file_path) as archive:
+            xml = archive.read("word/document.xml").decode("utf-8")
+        assert "Acme Freight" in xml
+        assert "505 Riverfront Pkwy" in xml
+        assert "Chattanooga, TN 37402" in xml
+        if template_mode == "No Recourse":
+            assert "ACME FREIGHT" in xml
+            assert "TRIDENT TRANSPORT" not in xml
+        else:
+            assert "Broker of Record:" not in xml
     result = stamp_bol_pdf_set(
         [record], facility, docx_result.generated_files, mode="Multistop",
         output_dir=tmp_path / "pdf", batch_comment="Keep dry", bol_type="PLT",
     )
     assert result.failed_count == 0
     assert result.converted_count == 3
+    for pdf in result.converted_files:
+        text = _pdf_text(pdf.file_path)
+        assert "Acme Freight" in text
+        assert "505 Riverfront Pkwy" in text
+        assert "Chattanooga, TN 37402" in text
+        if template_mode == "No Recourse":
+            assert "Broker of Record: ACME FREIGHT" in text
+        else:
+            assert "Broker of Record:" not in text
     assert [file.document_type for file in result.converted_files] == ["combined", "stop", "stop"]
     for index, pdf in enumerate(result.converted_files[1:]):
         stop = record.stops[index]

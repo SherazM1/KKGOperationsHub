@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -48,6 +49,7 @@ from app.utils.bol_facilities import (
     BolFacilityRecord,
     facility_to_ship_from,
 )
+from app.utils.bol_brokers import BOL_BROKER_LOOKUP, BOL_BROKER_MANUAL_OPTION
 
 
 BOL_TEMP_OUTPUT_PREFIXES = (
@@ -128,6 +130,23 @@ def _initialize_bol_state() -> None:
         st.session_state["bol_render_pickup_number"] = "Yes"
     if "bol_batch_name" not in st.session_state:
         st.session_state["bol_batch_name"] = ""
+    if "bol_broker_name" not in st.session_state:
+        # Keep manual broker entry available alongside the saved broker address library.
+        st.session_state["bol_broker_name"] = ""
+    st.session_state.setdefault("bol_broker_selection", BOL_BROKER_MANUAL_OPTION)
+    st.session_state.setdefault("bol_manual_bill_to_street", "")
+    st.session_state.setdefault("bol_manual_bill_to_city_state_zip", "")
+    if "bol_from_company_suffix" not in st.session_state:
+        st.session_state["bol_from_company_suffix"] = ""
+    # Retain manual facility details between reruns so users can switch back to the dropdown safely.
+    for key, default in {
+        "bol_use_manual_facility": False,
+        "bol_manual_facility_name": "",
+        "bol_manual_facility_street": "",
+        "bol_manual_facility_location": "",
+        "bol_manual_facility_zip": "",
+    }.items():
+        st.session_state.setdefault(key, default)
     if "bol_multistop_individual_template_mode" not in st.session_state:
         st.session_state["bol_multistop_individual_template_mode"] = "Standard"
 
@@ -364,8 +383,34 @@ def _set_selected_facility(facility_label: str | None) -> None:
         _clear_generation_state_references()
 
 
+# Use complete manual facility details when enabled, otherwise use the selected facility, then apply any From Company override to all BOL outputs.
+def _generation_facility() -> BolFacilityRecord | None:
+    facility = st.session_state.get("bol_selected_facility")
+    if st.session_state.get("bol_use_manual_facility", False):
+        # Require a complete manual address before enabling generation for the batch.
+        name, street, location, zip_code = (
+            st.session_state.get(key, "").strip()
+            for key in (
+                "bol_manual_facility_name", "bol_manual_facility_street",
+                "bol_manual_facility_location", "bol_manual_facility_zip",
+            )
+        )
+        if not all((name, street, location, zip_code)):
+            return None
+        facility = {
+            "facility": name,
+            "facility_name": f"Kendal King C/O {name}",
+            "location": location,
+            "address": f"{street} {location} {zip_code}",
+        }
+    suffix = st.session_state.get("bol_from_company_suffix", "").strip()
+    if not facility or not suffix:
+        return facility
+    return {**facility, "facility_name": f"Kendal King C/O {suffix}"}
+
+
 def _apply_selected_facility_to_grouped_records() -> None:
-    selected_facility = st.session_state.get("bol_selected_facility")
+    selected_facility = _generation_facility()
     grouped_records = st.session_state.get("bol_grouped_records", [])
     if not selected_facility or not isinstance(grouped_records, list):
         return
@@ -380,6 +425,39 @@ def _resolve_generation_context() -> tuple[str, Path]:
     mode = st.session_state["bol_mode"]
     template_path = resolve_template_path_for_mode(mode)
     return mode, template_path
+
+
+def _records_with_broker_name(
+    records: list[Any], mode: str, broker_name: str, broker_selection: str | None = None,
+    *, bill_to_street: str = "", bill_to_city_state_zip: str = "",
+) -> list[Any]:
+    """Apply a batch override without changing the imported billing details."""
+    if mode not in ("Standard", "No Recourse", "Multistop"):
+        return records
+    # A library selection replaces the entire billing block so missing addresses never inherit old details.
+    if broker_selection in BOL_BROKER_LOOKUP:
+        broker = BOL_BROKER_LOOKUP[broker_selection]
+        return [replace(record, bill_to=replace(broker)) for record in records]
+    name = broker_name.strip()
+    street = bill_to_street.strip()
+    city_state_zip = bill_to_city_state_zip.strip()
+    # A supplied manual address replaces both address lines; empty fields retain the existing address.
+    manual_address = bool(street or city_state_zip)
+    if not name and not manual_address:
+        return records
+    return [
+        replace(
+            record,
+            bill_to=replace(
+                record.bill_to,
+                company=name or record.bill_to.company,
+                street=street if manual_address else record.bill_to.street,
+                city_state_zip=city_state_zip if manual_address else record.bill_to.city_state_zip,
+                attn="" if manual_address else record.bill_to.attn,
+            ),
+        )
+        for record in records
+    ]
 
 
 def _artifact_exists(path: str | None) -> bool:
@@ -474,7 +552,7 @@ def _generate_pdf_result(
 ) -> StandardPdfConversionResult:
     return stamp_bol_pdf_set(
         grouped_records,
-        selected_facility=st.session_state["bol_selected_facility"],
+        selected_facility=_generation_facility(),
         generated_docx_files=docx_result.generated_files,
         mode=mode,
         bol_type=st.session_state.get("bol_type_selector", "PLT"),
@@ -724,6 +802,50 @@ def render_bol_generator_view() -> None:
         placeholder="Optional name for download bundles.",
         on_change=_clear_generation_state,
     )
+    if st.session_state["bol_mode"] in ("Standard", "No Recourse", "Multistop"):
+        # Selecting a broker fills its saved billing address and clears previously generated downloads.
+        st.selectbox(
+            "Bill to broker",
+            options=[BOL_BROKER_MANUAL_OPTION, *BOL_BROKER_LOOKUP],
+            key="bol_broker_selection",
+            on_change=_clear_generation_state,
+        )
+        selected_broker = BOL_BROKER_LOOKUP.get(st.session_state["bol_broker_selection"])
+        if selected_broker:
+            st.caption(" | ".join(filter(None, (
+                selected_broker.company, selected_broker.street, selected_broker.city_state_zip,
+            ))))
+            if not selected_broker.street and not selected_broker.city_state_zip:
+                st.caption("No address on file; the billing address will print blank.")
+        st.text_input(
+            "Broker name",
+            key="bol_broker_name",
+            disabled=selected_broker is not None,
+            placeholder="Optional broker name for this batch",
+            help="Prints in Bill to and, for No Recourse, Broker of Record. "
+            "Enter the corresponding billing address below, or leave both address fields blank to keep the existing address. "
+            "For Multistop, applies to the master BOL and each stop. "
+            "Leave blank to use the existing billing details.",
+            on_change=_clear_generation_state,
+        )
+
+        # Manual address fields apply to the batch only; library selections always use their saved address.
+        st.text_input(
+            "Manual Bill to street address / PO box",
+            key="bol_manual_bill_to_street",
+            disabled=selected_broker is not None,
+            placeholder="123 Main Street, Suite 100",
+            on_change=_clear_generation_state,
+        )
+        st.text_input(
+            "Manual Bill to city, state and ZIP",
+            key="bol_manual_bill_to_city_state_zip",
+            disabled=selected_broker is not None,
+            placeholder="Dallas, TX 75001",
+            help="Leave both address fields blank to keep the existing billing address. "
+            "Entering either field replaces both address lines.",
+            on_change=_clear_generation_state,
+        )
 
     st.markdown("---")
 
@@ -883,6 +1005,50 @@ def render_bol_generator_view() -> None:
                 )
 
     st.markdown("---")
+
+    st.checkbox(
+        "Use a new facility (manual entry)",
+        key="bol_use_manual_facility",
+        on_change=_clear_generation_state,
+    )
+    if st.session_state["bol_use_manual_facility"]:
+        # Collect a temporary batch facility without changing the shared facility dropdown library.
+        st.caption("Enter the ship-from details for this batch.")
+        for label, key, placeholder in (
+            ("Facility name (after Kendal King C/O)", "bol_manual_facility_name", "New warehouse name"),
+            ("Street address", "bol_manual_facility_street", "123 Main Street, Suite 100"),
+            ("City, state", "bol_manual_facility_location", "Dallas, TX"),
+            ("ZIP code", "bol_manual_facility_zip", "75001"),
+        ):
+            st.text_input(label, key=key, placeholder=placeholder, on_change=_clear_generation_state)
+        if _generation_facility() is None:
+            st.info("Complete all four facility fields before generating BOLs.")
+
+    st.markdown("**From Company**")
+    # This optional suffix changes the printed company name while keeping the chosen address.
+    prefix_column, company_column = st.columns([1, 3])
+    with prefix_column:
+        st.markdown("Kendal King C/O")
+    with company_column:
+        st.text_input(
+            "Company name after C/O",
+            key="bol_from_company_suffix",
+            placeholder="Optional company name",
+            label_visibility="collapsed",
+            help="Enter the name to print after Kendal King C/O on every BOL. "
+            "The selected ship-from address stays the same. "
+            "Leave blank to use the original company name.",
+            on_change=_clear_generation_state,
+        )
+    _apply_selected_facility_to_grouped_records()
+
+    if st.session_state["bol_use_manual_facility"]:
+        effective_facility = _generation_facility()
+        if effective_facility:
+            st.caption(
+                f"Ship from: {effective_facility['facility_name']} | "
+                f"{effective_facility['address']}"
+            )
 
     st.subheader("Batch Comment")
     st.caption("Optional comment for entire BOL program.")
@@ -1098,6 +1264,15 @@ def render_bol_generator_view() -> None:
     st.markdown("---")
 
     st.subheader("Generate")
+    grouped_records = _records_with_broker_name(
+        grouped_records,
+        st.session_state["bol_mode"],
+        st.session_state.get("bol_broker_name", ""),
+        st.session_state.get("bol_broker_selection"),
+        bill_to_street=st.session_state.get("bol_manual_bill_to_street", ""),
+        bill_to_city_state_zip=st.session_state.get("bol_manual_bill_to_city_state_zip", ""),
+    )
+    # Both generation actions below use these copies so master and stop downloads share billing details.
     selected_records_total = sum(1 for record in grouped_records if record.selected_for_generation)
 
     if grouped_records and selected_records_total == 0:
@@ -1126,6 +1301,7 @@ def render_bol_generator_view() -> None:
     generate_docx_disabled = (not docx_generation_mode_supported) or not any(
         record.selected_for_generation for record in grouped_records
     )
+    generate_docx_disabled = generate_docx_disabled or _generation_facility() is None
 
     if st.session_state["bol_mode"] == "Multistop":
         individual_template_options = ["Standard", "No Recourse"]
@@ -1156,7 +1332,7 @@ def render_bol_generator_view() -> None:
                 )
                 result = generate_multistop_docx_set(
                     grouped_records,
-                    selected_facility=st.session_state["bol_selected_facility"],
+                    selected_facility=_generation_facility(),
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
                     bol_type=st.session_state.get("bol_type_selector", "PLT"),
                     template_path=resolve_template_path_for_mode(individual_template_mode),
@@ -1171,7 +1347,7 @@ def render_bol_generator_view() -> None:
                 _, template_path = _resolve_generation_context()
                 result = generate_standard_docx_set(
                     grouped_records,
-                    selected_facility=st.session_state["bol_selected_facility"],
+                    selected_facility=_generation_facility(),
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
                     bol_type=st.session_state.get("bol_type_selector", "PLT"),
                     qty_type=st.session_state.get("bol_qty_type_selector", "PLT"),
@@ -1221,6 +1397,7 @@ def render_bol_generator_view() -> None:
         isinstance(docx_result, StandardDocxGenerationResult)
         and docx_result.generated_count > 0
     )
+    generate_pdf_disabled = generate_pdf_disabled or _generation_facility() is None
     if pdf_generation_mode_supported and not generate_pdf_disabled:
         st.success(
             f"DOCX set ready — {docx_result.generated_count} document(s) generated. "
@@ -1315,7 +1492,7 @@ def render_bol_generator_view() -> None:
                 )
                 docx_result_all = generate_multistop_docx_set(
                     grouped_records,
-                    selected_facility=st.session_state["bol_selected_facility"],
+                    selected_facility=_generation_facility(),
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
                     bol_type=st.session_state.get("bol_type_selector", "PLT"),
                     template_path=resolve_template_path_for_mode(individual_template_mode),
@@ -1330,7 +1507,7 @@ def render_bol_generator_view() -> None:
                 _, template_path = _resolve_generation_context()
                 docx_result_all = generate_standard_docx_set(
                     grouped_records,
-                    selected_facility=st.session_state["bol_selected_facility"],
+                    selected_facility=_generation_facility(),
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
                     bol_type=st.session_state.get("bol_type_selector", "PLT"),
                     qty_type=st.session_state.get("bol_qty_type_selector", "PLT"),

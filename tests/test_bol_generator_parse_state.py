@@ -45,6 +45,43 @@ def test_initialize_bol_state_stores_selected_worksheet() -> None:
     assert bol_generator.st.session_state["bol_selected_worksheet"] is None
     assert bol_generator.st.session_state["bol_parsed_worksheet"] is None
     assert bol_generator.st.session_state["bol_render_pickup_number"] == "Yes"
+    assert bol_generator.st.session_state["bol_from_company_suffix"] == ""
+
+
+def test_manual_from_company_preserves_facility_address_and_can_be_cleared() -> None:
+    bol_generator.st.session_state.clear()
+    bol_generator._initialize_bol_state()
+    original = bol_generator.st.session_state["bol_selected_facility"].copy()
+    bol_generator.st.session_state["bol_from_company_suffix"] = "  Example Warehouse  "
+
+    facility = bol_generator._generation_facility()
+    assert facility == {**original, "facility_name": "Kendal King C/O Example Warehouse"}
+    assert bol_generator.st.session_state["bol_selected_facility"] == original
+
+    bol_generator.st.session_state["bol_from_company_suffix"] = " "
+    assert bol_generator._generation_facility() == original
+
+
+def test_manual_facility_requires_complete_details_and_restores_dropdown() -> None:
+    from app.utils.bol_facilities import facility_to_ship_from
+
+    bol_generator.st.session_state.clear()
+    bol_generator._initialize_bol_state()
+    original = bol_generator._generation_facility().copy()
+    bol_generator.st.session_state["bol_use_manual_facility"] = True
+    assert bol_generator._generation_facility() is None
+    bol_generator.st.session_state.update({
+        "bol_manual_facility_name": "  New Warehouse  ",
+        "bol_manual_facility_street": "123 Main Street, Suite 100",
+        "bol_manual_facility_location": "Dallas, TX",
+        "bol_manual_facility_zip": "75001",
+    })
+    address = facility_to_ship_from(bol_generator._generation_facility())
+    assert address.company == "Kendal King C/O New Warehouse"
+    assert address.street == "123 Main Street, Suite 100"
+    assert address.city_state_zip == "Dallas, TX 75001"
+    bol_generator.st.session_state["bol_use_manual_facility"] = False
+    assert bol_generator._generation_facility() == original
 
 
 def test_default_worksheet_selection_prefers_previous_then_named_defaults() -> None:
