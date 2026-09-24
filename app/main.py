@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-
+import hmac
 import streamlit as st
 
 from app.services.excel_reader import read_excel
@@ -26,6 +26,33 @@ from app.services.pdf_generator_skid_tags import generate_skid_tags_pdf
 from app.spec_sheet_extractor.page import render_spec_sheet_extractor_view
 from app.ui.bol_generator import render_bol_generator_view
 from app.ui.truck_inventory import render_truck_inventory_view
+
+
+
+def require_access_code() -> None:
+    expected_code = st.secrets.get("APP_ACCESS_CODE")
+
+    if not expected_code:
+        st.error("Access has not been configured. Contact the app owner.")
+        st.stop()
+
+    if st.session_state.get("access_granted"):
+        return
+
+    st.title("Kendal King Operations Hub")
+    st.write("Enter the access code to continue.")
+
+    with st.form("access_code_form"):
+        entered_code = st.text_input("Access code", type="password")
+        submitted = st.form_submit_button("Continue")
+
+    if submitted:
+        if hmac.compare_digest(entered_code, str(expected_code)):
+            st.session_state["access_granted"] = True
+            st.rerun()
+        st.error("Incorrect access code.")
+
+    st.stop()
 
 
 def _uploaded_file_signature(uploaded_file: object) -> tuple[object, ...] | None:
@@ -677,6 +704,7 @@ def render_skid_tags() -> None:
 def main() -> None:
     """Run the Streamlit user interface."""
     st.set_page_config(page_title="Kendal King Operations Hub", layout="centered")
+    require_access_code()
     _apply_theme_styles()
 
     if "page" not in st.session_state:
