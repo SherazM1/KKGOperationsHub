@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from docx import Document
+import pytest
 
 from app.models.bol_standard_record import (
     BolAddressBlock,
@@ -77,6 +78,34 @@ def _generated_docx(mode: str, tmp_path: Path, *, bol_type: str, qty_type: str) 
 
     assert result.generated_count == 1
     return Document(result.generated_files[0].file_path)
+
+
+@pytest.mark.parametrize("mode", ["Standard", "No Recourse"])
+@pytest.mark.parametrize("shipwell", ["SW-001234", ""])
+def test_shipwell_header_between_pickup_and_comments(tmp_path: Path, mode: str, shipwell: str) -> None:
+    record = _ready_record()
+    record.shipwell_number = shipwell
+    record.comments = "Keep upright"
+    result = generate_standard_docx_set(
+        [record],
+        selected_facility=BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]],
+        template_path=resolve_template_path_for_mode(mode),
+        output_dir=tmp_path,
+    )
+    assert result.failed_count == 0
+    doc = Document(result.generated_files[0].file_path)
+    table = doc.tables[0]
+    if mode == "Standard":
+        assert table.rows[9].cells[8].paragraphs[-1].text == "Shipwell #"
+        assert table.rows[9].cells[9].paragraphs[-1].text == shipwell
+        assert "APPT #" in table.rows[10].cells[8].text
+    else:
+        assert table.rows[10].cells[8].text == "Shipwell #"
+        assert table.rows[10].cells[9].text == shipwell
+    assert "PU-123" in doc.element.xml
+    assert "Comments: Keep upright" in doc.element.xml
+    if mode == "No Recourse":
+        assert len(table.rows[10].cells) == len(table.rows[9].cells)
 
 
 def _item_header_text(doc: Document) -> str:

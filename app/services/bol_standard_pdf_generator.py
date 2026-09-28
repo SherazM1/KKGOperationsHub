@@ -319,8 +319,9 @@ def _draw_right_field(
     *,
     label_cols: tuple[int, int] = (8, 9),
     value_cols: tuple[int, int] = (9, 14),
+    y_offset: float = 0,
 ) -> None:
-    y = _row_bottom(row) + 3.2
+    y = _row_bottom(row) + 3.2 + y_offset
     _draw_text(
         canv,
         _col_x(label_cols[0]) + 2,
@@ -361,6 +362,7 @@ def _draw_header_and_fields(
         _draw_right_field(canv, 7, "KK Load #", record.kk_load_number)
         _draw_right_field(canv, 8, "Seal #", record.seal_number_blank)
         _draw_right_field(canv, 9, "Pick Up #", getattr(record, "pickup_number", ""), value_cols=(9, 15))
+        _draw_right_field(canv, 10, "Shipwell #", record.shipwell_number, value_cols=(9, 15))
         if resolved_comment:
             _draw_right_field(canv, 11, "Comments", resolved_comment, value_cols=(9, 18))
     else:
@@ -368,6 +370,7 @@ def _draw_header_and_fields(
         _draw_right_field(canv, 7, "KK PO #", record.kk_po_number)
         _draw_right_field(canv, 8, "KKG Load #", record.kk_load_number, value_cols=(9, 15))
         _draw_right_field(canv, 9, "Delivery Appt.", getattr(record, "pickup_number", ""), value_cols=(9, 15))
+        _draw_right_field(canv, 9, "Shipwell #", record.shipwell_number, value_cols=(9, 15), y_offset=-7)
         _draw_right_field(canv, 10, "APPT #", getattr(record, "pickup_number", ""), value_cols=(9, 15))
         _draw_right_field(canv, 12, "Seal #", record.seal_number_blank)
         if resolved_comment:

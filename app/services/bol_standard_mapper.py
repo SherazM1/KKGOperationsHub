@@ -208,6 +208,7 @@ def map_standard_rows_to_records(
             issues=[],
             carrier_pro_number=_first_non_empty(bol_rows, "carrier_pro_number"),
             pickup_number=_first_non_empty(bol_rows, "pickup_number"),
+            shipwell_number=_first_non_empty(bol_rows, "shipwell_number"),
         )
 
         missing_required = _missing_required_fields(record)

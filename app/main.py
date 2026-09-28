@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import hmac
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 
 from app.services.excel_reader import read_excel
 from app.services.excel_reader_albertsons import read_excel_albertsons
@@ -30,7 +31,10 @@ from app.ui.truck_inventory import render_truck_inventory_view
 
 
 def require_access_code() -> None:
-    expected_code = st.secrets.get("APP_ACCESS_CODE")
+    try:
+        expected_code = st.secrets.get("APP_ACCESS_CODE")
+    except StreamlitSecretNotFoundError:
+        expected_code = None
 
     if not expected_code:
         st.error("Access has not been configured. Contact the app owner.")

@@ -206,6 +206,30 @@ def _pdf_text(path: str) -> str:
     return "\n".join(page.extract_text() or "" for page in reader.pages)
 
 
+@pytest.mark.parametrize("mode", ["Standard", "No Recourse"])
+@pytest.mark.parametrize("shipwell", ["SW-001234", ""])
+def test_downloaded_pdf_has_shipwell_header(tmp_path: Path, mode: str, shipwell: str) -> None:
+    record = _standard_record()
+    record.shipwell_number = shipwell
+    result = stamp_bol_pdf_set(
+        [record],
+        selected_facility=BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]],
+        generated_docx_files=[_docx_file(tmp_path, "bol.docx", record.bol_number)],
+        mode=mode,
+        output_dir=tmp_path / "pdf",
+    )
+    assert result.failed_count == 0
+    text = _pdf_text(result.converted_files[0].file_path)
+    assert "Shipwell #" in text
+    if mode == "Standard":
+        for label in ("APPT #", "Delivery Appt.", "Tracker #", "Seal #", "Comments:"):
+            assert label in text
+    if shipwell:
+        assert shipwell in text
+    assert "PU-123" in text
+    assert "Handle cleanly" in text
+
+
 def test_standard_template_stamper_creates_pdf_and_bundle(tmp_path: Path) -> None:
     docx_file = _docx_file(tmp_path, "standard_bol_10001859231-0553.docx", "10001859231-0553")
 

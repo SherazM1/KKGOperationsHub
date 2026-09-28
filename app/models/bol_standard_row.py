@@ -28,6 +28,7 @@ class BolStandardRow:
     weight_each: str
     total_weight: str = ""
     pickup_number: str = ""
+    shipwell_number: str = ""
     carrier_pro_number: str = ""
     source_values: dict[str, str] = field(default_factory=dict)
     column_mapping: dict[str, str] = field(default_factory=dict)

@@ -147,6 +147,10 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
 }
 
 OPTIONAL_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
+    "shipwell_number": {
+        "primary": "Shipwell #",
+        "fallback_aliases": ["Shipwell", "Shipwell Number", "Shipwell No", "Shipwell ID"],
+    },
     "carrier_pro_number": {
         "primary": "load#",
         "fallback_aliases": [
@@ -744,6 +748,7 @@ def _iter_openpyxl_standard_rows(
                 weight_each=row_values["weight_each"],
                 total_weight=row_values.get("total_weight", ""),
                 pickup_number=row_values.get("pickup_number", ""),
+                shipwell_number=row_values.get("shipwell_number", ""),
                 carrier_pro_number=row_values.get("carrier_pro_number", ""),
                 source_values={header: _coerce_to_string(values[i]) for i, header in enumerate(header_values) if header},
                 column_mapping=source_mapping,
@@ -944,6 +949,7 @@ def _parse_standard_dataframe_rows(
                 weight_each=row_values["weight_each"],
                 total_weight=row_values.get("total_weight", ""),
                 pickup_number=row_values.get("pickup_number", ""),
+                shipwell_number=row_values.get("shipwell_number", ""),
                 carrier_pro_number=row_values.get("carrier_pro_number", ""),
                 source_values={str(header): _coerce_to_string(value) for header, value in row.items()},
                 column_mapping=source_mapping,

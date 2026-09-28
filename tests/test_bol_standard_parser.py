@@ -618,6 +618,23 @@ def test_standard_bol_mapping_preserves_total_weight_and_first_pickup() -> None:
     assert records[0].item_lines[0].total_weight == "306 lbs."
 
 
+@pytest.mark.parametrize("csv", [False, True])
+@pytest.mark.parametrize("header", [
+    "Shipwell #", "SHIPWELL", "Shipwell", "SHIPwell", "shipwell", "shipweLL",
+    "SHIPWELL NUMBER", "Shipwell ID",
+])
+def test_shipwell_number_survives_parsing_and_mapping(csv: bool, header: str) -> None:
+    row = _standard_load_row()
+    row[header] = "SW-001234"
+    row["Pick Up #"] = "PU-001"
+    upload = _csv_with_rows([row]) if csv else _workbook_with_sheet("Load Sheet", [row])
+    rows = parse_standard_bol_excel(upload)
+    assert rows[0].shipwell_number == "SW-001234"
+    record = map_standard_rows_to_records(rows)[0]
+    assert record.shipwell_number == "SW-001234"
+    assert record.pickup_number == "PU-001"
+
+
 def test_standard_bol_mapping_applies_selected_facility_ship_from() -> None:
     workbook = _workbook_with_sheet("LOAD SHEET", [_standard_load_row()])
     rows = parse_standard_bol_excel(workbook)

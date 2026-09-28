@@ -12,9 +12,10 @@ import re
 import zipfile
 
 from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
-from docx.table import Table
+from docx.table import Table, _Cell
 
 from app.models.bol_standard_record import BolStandardItemLine, BolStandardRecord
 from app.utils.bol_facilities import BolFacilityRecord, facility_to_ship_from
@@ -452,6 +453,7 @@ def _apply_header_fit_cleanup(doc: Document, record: BolStandardRecord) -> None:
             record.kk_po_number,
             record.kk_load_number,
             record.pickup_number,
+            record.shipwell_number,
         )
         if len((value or "").strip()) >= 11
     }
@@ -466,6 +468,7 @@ def _apply_header_fit_cleanup(doc: Document, record: BolStandardRecord) -> None:
         "KKG LOAD #",
         "KK LOAD #",
         "PICK UP #",
+        "SHIPWELL #",
         "DELIVERY APPT.",
         "APPT #",
     )
@@ -950,6 +953,62 @@ def _populate_broker_of_record(doc: Document, broker_name: str) -> None:
             offset = end
 
 
+def _populate_shipwell_header(doc: Document, shipwell_number: str) -> None:
+    """Add Shipwell below pickup while preserving existing appointment fields."""
+    for table in doc.tables:
+        for index, row in enumerate(table.rows[:-1]):
+            if len(row.cells) < 10:
+                continue
+            label = row.cells[8].text.strip().upper()
+            if label not in {"PICK UP #", "DELIVERY APPT."}:
+                continue
+            if label == "DELIVERY APPT.":
+                # The next line holds APPT # in Standard; retain it intact.
+                for cell, value, bold in (
+                    (row.cells[8], "Shipwell #", True),
+                    (row.cells[9], shipwell_number, False),
+                ):
+                    paragraph = cell.add_paragraph()
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT if bold else WD_ALIGN_PARAGRAPH.LEFT
+                    paragraph.paragraph_format.space_before = Pt(0)
+                    paragraph.paragraph_format.space_after = Pt(0)
+                    run = paragraph.add_run(value)
+                    run.bold = bold
+                    run.font.size = Pt(9)
+                return
+            target = table.rows[index + 1]
+            # Preserve the shipper cells; copy the pickup line's right-hand grid.
+            for cell in list(target._tr.tc_lst)[3:]:
+                target._tr.remove(cell)
+            for source, value, bold in (
+                (row.cells[8], "Shipwell #", True),
+                (row.cells[9], shipwell_number, False),
+            ):
+                element = deepcopy(source._tc)
+                cell = _Cell(element, table)
+                for paragraph in list(cell.paragraphs)[1:]:
+                    element.remove(paragraph._p)
+                paragraph = cell.paragraphs[0]
+                paragraph.clear()  # Also remove pickup's floating Comments shape.
+                paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT if bold else WD_ALIGN_PARAGRAPH.LEFT
+                paragraph.paragraph_format.first_line_indent = Pt(0)
+                paragraph.paragraph_format.left_indent = Pt(0)
+                paragraph.paragraph_format.right_indent = Pt(0)
+                run = paragraph.add_run(value)
+                run.bold = bold
+                run.font.size = Pt(9)
+                target._tr.append(element)
+            target_pr = target._tr.get_or_add_trPr()
+            for tag in ("gridAfter", "wAfter"):
+                for node in list(target_pr.findall(qn(f"w:{tag}"))):
+                    target_pr.remove(node)
+                source_pr = row._tr.trPr
+                if source_pr is not None:
+                    for node in source_pr.findall(qn(f"w:{tag}")):
+                        target_pr.append(deepcopy(node))
+            return
+
+
 def _apply_template_record_values(
     doc: Document,
     record: BolStandardRecord,
@@ -963,6 +1022,7 @@ def _apply_template_record_values(
     filter_blank_item_lines: bool = False,
 ) -> list[str]:
     notices: list[str] = []
+    _populate_shipwell_header(doc, record.shipwell_number)
     _populate_broker_of_record(doc, record.bill_to.company)
     has_explicit_pickup_token = _document_contains_token(doc, _tok("Pick_Up_"))
     pickup_number = record.pickup_number if render_pickup_number else ""

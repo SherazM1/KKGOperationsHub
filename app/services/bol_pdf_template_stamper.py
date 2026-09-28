@@ -349,6 +349,7 @@ def _standard_fields() -> dict[str, TextBox]:
         "kk_po_number": _top_value_box(666.1),
         "kk_load_number": _top_value_box(653.2, width=150.0),
         "delivery_appt": _top_value_box(629.7, width=150.0),
+        "shipwell_number": _top_value_box(618.0, width=150.0),
         "appt_number": _top_value_box(606.2, width=150.0),
         "comments": _box_for_baseline(
             x=444.4,
@@ -376,6 +377,7 @@ def _no_recourse_fields() -> dict[str, TextBox]:
         "kk_load_number": _no_recourse_top_value_box(674.7),
         "seal_number": _no_recourse_top_value_box(662.7),
         "pickup_number": _no_recourse_top_value_box(650.7, width=150.0),
+        "shipwell_number": _no_recourse_top_value_box(638.7, width=150.0),
         "comments": _box_for_baseline(
             x=444.4,
             baseline=626.4,
@@ -414,7 +416,7 @@ STANDARD_CONFIG = PdfTemplateConfig(
         {
             "qty_header": _box_for_baseline(x=31.0, baseline=278.2, width=56.0, height=10.0, font_size=7.4, min_font_size=6.0, align="center"),
             "qty": TextBox(37.0, 0, 50.0, 0, 9.2, min_font_size=6.8, align="center"),
-            "type": _item_box(1, 3, font_size=7.0, align="center"),
+            "type": _item_box(1, 3, font_size=8.8, align="center"),
             "po": TextBox(144.0, 0, 68.0, 0, 8.4, min_font_size=6.8, align="center"),
             "description": TextBox(238.0, 0, 236.0, 0, 8.6, min_font_size=7.0, multiline=True, leading=10.6, vertical_align="middle"),
             "skids": TextBox(490.0, 0, 44.0, 0, 9.2, min_font_size=6.8, align="center"),
@@ -671,6 +673,7 @@ def _standard_record_values(
         "kk_load_number": record.kk_load_number,
         "seal_number": record.seal_number_blank,
         "pickup_number": pickup_number,
+        "shipwell_number": _safe_text(getattr(record, "shipwell_number", "")),
         "delivery_appt": pickup_number,
         "appt_number": pickup_number,
         "appointment_number": pickup_number,
@@ -930,6 +933,50 @@ def _clear_multistop_consignee_rules(canv: canvas.Canvas, template_mode: str) ->
     canv.restoreState()
 
 
+STANDARD_HEADER_FIELDS = (
+    ("bol_number", "BOL #"),
+    ("ship_date", "Ship Date"),
+    ("carrier", "Carrier"),
+    ("carrier_pro_number", "Carrier Pro #"),
+    ("po_number", "PO #"),
+    ("tracker_number", "Tracker #"),
+    ("kk_po_number", "KK PO #"),
+    ("kk_load_number", "KKG Load #"),
+    ("delivery_appt", "Delivery Appt."),
+    ("appt_number", "APPT #"),
+    ("seal_number", "Seal #"),
+    ("shipwell_number", "Shipwell #"),
+    ("comments", "Comments:"),
+)
+
+
+def _draw_aligned_standard_header(canv: canvas.Canvas, values: dict[str, str]) -> None:
+    # Clear the old header completely, then restore the freight box's top rule.
+    whiteout_box(canv, TextBox(348.0, 571.24, 255.12, 184.76))
+    whiteout_box(canv, TextBox(348.22, 762.0, 254.9, 17.0))
+    canv.saveState()
+    canv.setFillColor(colors.black)
+    canv.setFont(FONT_BOLD, 9.8)
+    canv.drawCentredString((348.22 + 603.12) / 2, 766.0, "UNIFORM BILL OF LADING")
+    canv.setStrokeColor(colors.black)
+    canv.setLineWidth(0.96)
+    canv.line(348.22, 571.24, 603.12, 571.24)
+    canv.restoreState()
+    for index, (field, label) in enumerate(STANDARD_HEADER_FIELDS):
+        baseline = 744.0 - index * 12.0
+        label_box = _box_for_baseline(
+            x=357.0, baseline=baseline, width=77.0,
+            font_size=8.8, bold=True, align="right",
+        )
+        _draw_box_value(canv, replace(label_box, whiteout=False), label)
+        value_box = _box_for_baseline(
+            x=444.4, baseline=baseline, width=147.0, font_size=8.8,
+            min_font_size=6.5, height=25.0 if field == "comments" else 10.5,
+            multiline=field == "comments", leading=10.0,
+        )
+        _draw_box_value(canv, replace(value_box, whiteout=False), values.get(field, ""))
+
+
 def _draw_standard_overlay(
     canv: canvas.Canvas,
     config: PdfTemplateConfig,
@@ -943,6 +990,13 @@ def _draw_standard_overlay(
     multistop: bool = False,
 ) -> None:
     # Individual stop PDFs use the standard templates but receive Multistop-only line removal.
+    if config.mode == "No Recourse":
+        shipwell_box = config.fields["shipwell_number"]
+        _draw_box_value(
+            canv,
+            replace(shipwell_box, x=365.0, width=69.0, bold=True, align="right", whiteout=True),
+            "Shipwell #",
+        )
     if multistop:
         _clear_multistop_consignee_rules(canv, config.mode)
     if config.mode == "No Recourse":
@@ -966,7 +1020,12 @@ def _draw_standard_overlay(
             render_pickup_number=render_pickup_number,
         )
     )
+    aligned_header_fields = {field for field, _ in STANDARD_HEADER_FIELDS} if config.mode == "Standard" else set()
+    if aligned_header_fields:
+        _draw_aligned_standard_header(canv, record_values)
     for field_name, box in config.fields.items():
+        if field_name in aligned_header_fields:
+            continue
         _draw_box_value(
             canv,
             box,
