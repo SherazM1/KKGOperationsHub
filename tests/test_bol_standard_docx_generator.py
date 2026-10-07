@@ -242,3 +242,29 @@ def test_no_recourse_docx_type_case_has_no_inserted_spaces_or_line_breaks(tmp_pa
     assert type_value == "CASE"
     assert "C A S E" not in _document_text(doc)
     assert "CAS\nE" not in _document_text(doc)
+
+
+@pytest.mark.parametrize("mode", ["Standard", "No Recourse"])
+@pytest.mark.parametrize("override", ["", "Use the rear dock"])
+def test_dynamic_comments_preserve_batch_fallback_and_line_breaks(tmp_path, mode, override):
+    from docx.oxml.ns import qn
+    record = _ready_record()
+    record.comments = override
+    batch = "Keep frozen & handle carefully. " * 20 + "\nCall before delivery."
+    result = generate_standard_docx_set(
+        [record], selected_facility=BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]],
+        batch_comment=batch, template_path=resolve_template_path_for_mode(mode),
+        output_dir=tmp_path,
+    )
+    assert result.failed_count == 0
+    doc = Document(result.generated_files[0].file_path)
+    paragraphs = [p for p in doc.element.findall(".//w:p", doc.element.nsmap)
+                  if "Comments:" in "".join(p.itertext())
+                  and any(a.tag == qn("w:txbxContent") for a in p.iterancestors())]
+    assert len(paragraphs) == 2
+    paragraph = paragraphs[0]
+    from docx.text.paragraph import Paragraph
+    assert Paragraph(paragraph, doc).text.rstrip() == "Comments: " + (override or batch)
+    assert any(a.tag == qn("w:txbxContent") for a in paragraph.iterancestors())
+    assert "spAutoFit" in doc.element.xml
+    assert "mso-fit-shape-to-text:t" in doc.element.xml

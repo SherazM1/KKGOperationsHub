@@ -11,6 +11,8 @@ from xml.sax.saxutils import escape
 import re
 import zipfile
 
+from lxml import etree
+
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
@@ -50,6 +52,7 @@ ITEM_PLACEHOLDER_TOKENS: tuple[str, ...] = tuple(
     _tok(alias) for aliases in ITEM_TOKEN_ALIASES.values() for alias in aliases
 )
 DOCUMENT_FONT_NAME = "Arial"
+COMMENT_FONT_SIZE_PT = 6
 
 
 def resolve_template_path_for_mode(mode: str) -> Path:
@@ -922,6 +925,75 @@ def _populate_first_comment_label(xml_text: str, resolved_comment: str) -> tuple
     return updated_xml, replacement_count > 0
 
 
+
+def _make_comment_area_dynamic(xml_text: str) -> str:
+    """Keep the template's bottom comment position and let its text box grow."""
+    root = etree.fromstring(xml_text.encode("utf-8"))
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+          "mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
+          "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+          "wps": "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
+          "v": "urn:schemas-microsoft-com:vml"}
+    for alternate in root.findall(".//mc:AlternateContent", ns):
+        if not any(re.match(r"^COMMENTS?:", node.text or "", re.I)
+                   for node in alternate.findall(".//w:t", ns)):
+            continue
+        for paragraph in alternate.findall(".//w:txbxContent/w:p", ns):
+            for run in paragraph.findall("w:r", ns):
+                properties = run.find("w:rPr", ns)
+                if properties is None:
+                    properties = etree.Element(qn("w:rPr"))
+                    run.insert(0, properties)
+                for highlight in properties.findall("w:highlight", ns):
+                    properties.remove(highlight)
+                if any((text.text or "").strip() for text in run.findall("w:t", ns)):
+                    highlight = etree.SubElement(properties, qn("w:highlight"))
+                    highlight.set(qn("w:val"), "yellow")
+                for size_tag in ("w:sz", "w:szCs"):
+                    size = properties.find(qn(size_tag))
+                    if size is None:
+                        size = etree.SubElement(properties, qn(size_tag))
+                    size.set(qn("w:val"), str(int(COMMENT_FONT_SIZE_PT * 2)))
+                for text in list(run.findall("w:t", ns)):
+                    lines = (text.text or "").splitlines()
+                    if len(lines) <= 1:
+                        continue
+                    position = run.index(text)
+                    run.remove(text)
+                    for index, line in enumerate(lines):
+                        if index:
+                            run.insert(position, etree.Element(qn("w:br")))
+                            position += 1
+                        replacement = etree.Element(qn("w:t"))
+                        replacement.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+                        replacement.text = line
+                        run.insert(position, replacement)
+                        position += 1
+        # Transparent shapes leave nearby labels visible; only glyphs are highlighted.
+        for shape_properties in alternate.findall(".//wps:spPr", ns):
+            for fill_name in ("solidFill", "gradFill", "blipFill", "pattFill", "grpFill", "noFill"):
+                for fill in shape_properties.findall("a:" + fill_name, ns):
+                    shape_properties.remove(fill)
+            transform = shape_properties.find("a:xfrm", ns)
+            geometry = shape_properties.find("a:prstGeom", ns)
+            insertion_index = shape_properties.index(geometry) + 1 if geometry is not None else (shape_properties.index(transform) + 1 if transform is not None else 0)
+            shape_properties.insert(insertion_index, etree.Element("{" + ns["a"] + "}noFill"))
+        for shape in alternate.findall(".//v:shape", ns):
+            shape.set("filled", "f")
+            for fill in shape.findall("v:fill", ns):
+                fill.set("on", "f")
+        for body in alternate.findall(".//wps:bodyPr", ns):
+            for name in ("noAutofit", "normAutofit", "spAutoFit"):
+                for fit in body.findall("a:" + name, ns):
+                    body.remove(fit)
+            etree.SubElement(body, "{" + ns["a"] + "}spAutoFit")
+        for textbox in alternate.findall(".//v:textbox", ns):
+            style = textbox.get("style", "")
+            if "mso-fit-shape-to-text" not in style:
+                textbox.set("style", style.rstrip(";") + ";mso-fit-shape-to-text:t")
+    return etree.tostring(root, encoding="unicode")
+
+
 def _postprocess_comments_in_document_xml(
     xml_text: str,
     resolved_comment: str,
@@ -930,6 +1002,7 @@ def _postprocess_comments_in_document_xml(
     updated_xml = _clear_comment_placeholders(updated_xml)
     updated_xml = _clear_existing_comment_label_values(updated_xml)
     updated_xml, populated = _populate_first_comment_label(updated_xml, resolved_comment.strip())
+    updated_xml = _make_comment_area_dynamic(updated_xml)
     return updated_xml, populated
 
 
