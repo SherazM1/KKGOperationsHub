@@ -354,8 +354,8 @@ def _standard_fields() -> dict[str, TextBox]:
         "comments": _box_for_baseline(
             x=444.4,
             baseline=589.6,
-            width=128.0,
-            height=18.0,
+            width=117.0,
+            height=16.0,
             font_size=7.8,
             min_font_size=5.2,
             multiline=True,
@@ -703,7 +703,7 @@ def _no_recourse_record_values(
         batch_comment,
         render_pickup_number=render_pickup_number,
     )
-    no_recourse_comment = _safe_text(record.comments)
+    no_recourse_comment = _safe_text(record.comments) or _safe_text(batch_comment)
     no_recourse_bill_to = "\n".join(
         part
         for part in (

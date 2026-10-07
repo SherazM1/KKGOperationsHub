@@ -620,13 +620,14 @@ def test_no_recourse_template_stamper_keeps_pickup_comments_and_dc_separate(tmp_
         mode="No Recourse",
         bol_type="PLT",
         qty_type="PLT",
-        batch_comment="39860370",
+        batch_comment="Keep frozen",
         output_dir=tmp_path / "pdf",
     )
 
     assert result.converted_count == 1
     text = _pdf_text(result.converted_files[0].file_path)
     assert text.count("39860370") == 1
+    assert "Keep frozen" in text
     assert "0553" in text
     assert "Handle cleanly" not in text
 
@@ -894,3 +895,14 @@ def test_ui_pdf_generation_routes_supported_modes_to_template_stamper(monkeypatc
         )
 
     assert calls == ["Standard", "No Recourse", "Multistop"]
+
+
+@pytest.mark.parametrize("record_comment, expected", [("", "Keep frozen"), ("   ", "Keep frozen"), ("Use dock 2", "Use dock 2")])
+def test_no_recourse_comments_use_record_override_or_batch_fallback(record_comment, expected):
+    from app.services.bol_pdf_template_stamper import _no_recourse_record_values
+    values = _no_recourse_record_values(
+        _standard_record(comments=record_comment),
+        BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]],
+        "Keep frozen",
+    )
+    assert values["comments"] == expected
