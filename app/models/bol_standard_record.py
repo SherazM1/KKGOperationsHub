@@ -73,3 +73,22 @@ class BolStandardRecord:
         self.consignee_street, self.consignee_city_state_zip = normalize_bol_address(
             self.consignee_company, self.consignee_street, self.consignee_city_state_zip
         )
+
+
+    @property
+    def total_pallet(self) -> float | None:
+        return self._sum_item_values("skids")
+
+    @property
+    def total_ship_weight(self) -> float | None:
+        return self._sum_item_values("total_weight")
+
+    def _sum_item_values(self, field_name: str) -> float | None:
+        """Keep incomplete totals unavailable rather than showing a partial sum."""
+        if not self.item_lines:
+            return None
+        try:
+            return sum(float(getattr(line, field_name).replace(",", "").strip())
+                       for line in self.item_lines)
+        except ValueError:
+            return None

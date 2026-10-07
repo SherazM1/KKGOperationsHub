@@ -35,3 +35,8 @@ def normalize_bol_address(company: str, street: str, city_state_zip: str) -> tup
         if match:
             return match.group(1), match.group(2)
     return street, city_state_zip
+
+
+def is_mclane_destination(company: str) -> bool:
+    """McLane load sheets identify destinations by name rather than DC number."""
+    return bool(re.match(r"^MCLANE(?:\b|_)", company.strip(), re.IGNORECASE))

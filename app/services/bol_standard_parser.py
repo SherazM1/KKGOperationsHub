@@ -11,7 +11,7 @@ from openpyxl.utils.exceptions import InvalidFileException
 import pandas as pd
 
 from app.models.bol_standard_row import BolStandardRow
-from app.utils.bol_addresses import is_duplicate_bol_company
+from app.utils.bol_addresses import is_duplicate_bol_company, is_mclane_destination
 
 
 STANDARD_SHEET_NAME = "MAIN LOAD SHEET"
@@ -791,7 +791,10 @@ def _complete_derived_fields(values: dict[str, str]) -> list[str]:
     if "dc_number" not in values:
         matches = re.findall(r"\bDC\s*#?\s*(\d+)\b", values.get("dc_name", ""), re.IGNORECASE)
         values["dc_number"] = matches[0] if len(matches) == 1 else ""
-        notes.append("DC number derived from DC Name." if values["dc_number"] else "DC Name has no unambiguous DC number; review required.")
+        if values["dc_number"]:
+            notes.append("DC number derived from DC Name.")
+        elif not is_mclane_destination(values.get("dc_name", "")):
+            notes.append("DC Name has no unambiguous DC number; review required.")
     if "plt_qty" not in values:
         values["plt_qty"] = ""
         notes.append("No separate pallet/skid count supplied; review required.")

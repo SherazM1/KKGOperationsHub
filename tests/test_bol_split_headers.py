@@ -88,3 +88,33 @@ def test_split_csv_uses_same_headers_and_source_row_numbers():
     assert rows[0].source_row_number == 3
     assert rows[0].dc_city_state_zip == "City, TX 012345678"
     assert rows[0].source_values["Load Value"] == "17650.6"
+
+
+@pytest.mark.parametrize("name", ["MCLANE OCALA", "McLane High Plains"])
+def test_mclane_named_destination_does_not_require_dc_number(name):
+    rows = parse_standard_bol_excel(_split_workbook(dc_name=name, explicit_skids=5))
+    record = map_standard_rows_to_records(rows)[0]
+    assert rows[0].dc_number == ""
+    assert record.is_ready
+    assert record.status == "Ready"
+    assert record.missing_required_fields == []
+    assert record.warnings == []
+    assert record.total_pallet == 5
+    assert record.total_ship_weight == 12496
+
+
+def test_mclane_destination_still_requires_street_address():
+    rows = parse_standard_bol_excel(_split_workbook(dc_name="MCLANE OCALA", explicit_skids=5))
+    rows[0].dc_street = ""
+    record = map_standard_rows_to_records(rows)[0]
+    assert not record.is_ready
+    assert "DC STREET" in record.missing_required_fields
+
+
+def test_standard_totals_do_not_hide_missing_line_values():
+    rows = parse_standard_bol_excel(_split_workbook(explicit_skids=5))
+    record = map_standard_rows_to_records(rows)[0]
+    record.item_lines[0].skids = ""
+    record.item_lines[0].total_weight = ""
+    assert record.total_pallet is None
+    assert record.total_ship_weight is None

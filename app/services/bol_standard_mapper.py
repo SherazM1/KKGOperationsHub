@@ -11,6 +11,7 @@ from app.models.bol_standard_record import (
     BolStandardRecord,
 )
 from app.models.bol_standard_row import BolStandardRow
+from app.utils.bol_addresses import is_mclane_destination
 from app.utils.bol_facilities import BolFacilityRecord, facility_to_ship_from
 
 
@@ -49,6 +50,8 @@ def _required_shipment_issues(record: BolStandardRecord) -> list[str]:
     ]
 
     for field_name, value in required_fields:
+        if field_name == "DC #" and is_mclane_destination(record.consignee_company):
+            continue
         if not value.strip():
             issues.append(f"Missing required shipment field: {field_name}.")
 
@@ -90,6 +93,8 @@ def _missing_required_fields(record: BolStandardRecord) -> list[str]:
         ("DC CITY, STATE, ZIP", record.consignee_city_state_zip),
     ]
     for field_name, value in required_fields:
+        if field_name == "DC #" and is_mclane_destination(record.consignee_company):
+            continue
         if not value.strip():
             missing.append(field_name)
     if not record.item_lines:

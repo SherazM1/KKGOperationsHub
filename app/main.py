@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 import hmac
+import sys
+
+# Streamlit executes this file as a script, so the repository root may not
+# be on the import path when launched from another directory.
+_project_root = str(Path(__file__).resolve().parents[1])
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
