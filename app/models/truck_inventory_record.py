@@ -12,6 +12,7 @@ class TruckInventoryRecord:
     source_type: str  # "pure" or "cdw"
     source_file: str
     po_number: str
+    store_number: str | None = None
     kkg_load_number: str | None = None
     retailer_po_number: str | None = None
     po_date: str | None = None
@@ -61,6 +62,7 @@ class TruckInventoryRecord:
         return {
             "source_type": self.source_type,
             "source_file": self.source_file,
+            "store_number": self.store_number,
             "kkg_load_number": self.kkg_load_number,
             "retailer_po_number": self.retailer_po_number or self.po_number,
             "po_number": self.po_number,

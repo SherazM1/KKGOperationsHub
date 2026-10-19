@@ -20,6 +20,21 @@ LEGACY_PRESET_NAMES = {
 }
 
 
+def normalize_editor_rows(rows: list[dict]) -> list[dict]:
+    """Translate checkbox values into the saved stacking configuration."""
+    normalized_rows = []
+    for row in rows:
+        normalized = dict(row)
+        if "Double Stack" in normalized:
+            double_stack = bool(normalized.pop("Double Stack"))
+            normalized["Is Stackable?"] = "Yes" if double_stack else "No"
+            normalized["Stack Qty"] = 2 if double_stack else 1
+        if str(normalized.get("Color", "")) not in ITEM_SETUP_COLOR_OPTIONS:
+            normalized["Color"] = "Orange"
+        normalized_rows.append(normalized)
+    return normalized_rows
+
+
 def get_distinct_item_numbers(records: list[TruckInventoryRecord]) -> list[str]:
     """Return sorted distinct Item # values from normalized business rows."""
     return sorted({record.item_number for record in records if record.item_number})
@@ -31,6 +46,12 @@ def build_default_item_setup(records: list[TruckInventoryRecord]) -> list[dict]:
     for item_number in get_distinct_item_numbers(records):
         preset_key = infer_item_preset_key(item_number)
         preset = ITEM_PRESETS[preset_key]
+        item_records = [record for record in records if record.item_number == item_number]
+        imported = {}
+        for label, attr in [("Length", "item_length"), ("Width", "item_width"), ("Height", "item_height"), ("Weight", "item_weight")]:
+            values = {getattr(record, attr) for record in item_records if getattr(record, attr) is not None}
+            if values:
+                imported[label] = next(iter(values)) if len(values) == 1 else 0.0
         setup_rows.append({
             "Item #": item_number,
             "Preset": preset.name,
@@ -41,6 +62,7 @@ def build_default_item_setup(records: list[TruckInventoryRecord]) -> list[dict]:
             "Is Stackable?": "No",
             "Stack Qty": 1,
             "Color": infer_item_color(item_number),
+            **imported,
         })
     return setup_rows
 

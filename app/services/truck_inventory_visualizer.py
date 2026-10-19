@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 from matplotlib.colors import to_rgb
-from matplotlib.patches import Polygon
+from matplotlib.patches import Polygon, Rectangle
 
 from app.models.truck_summary import TruckSummary
 
@@ -31,6 +31,41 @@ PROJECTION_Y_SCALE = 0.55
 
 
 def visualize_truck(truck: TruckSummary, fig_width: float = 12) -> plt.Figure:
+    """Draw a proportional overhead plan with compact item references."""
+    length = max(truck.truck_length, 1.0)
+    width = max(truck.truck_width, 1.0)
+    fig, ax = plt.subplots(figsize=(fig_width, max(3.6, fig_width * width / length + 1.1)))
+    fig.patch.set_facecolor('#FFFFFF')
+    ax.add_patch(Rectangle((0, 0), length, width, facecolor='#F1F5F9', edgecolor='#94A3B8', linewidth=1.5))
+    # A faint centerline makes the two trailer lanes easy to follow.
+    ax.plot([0, length], [width / 2, width / 2], color='#CBD5E1', linewidth=0.8, linestyle='--', zorder=1)
+    references = {item: index + 1 for index, item in enumerate(sorted({b.item_number or 'UNKNOWN' for b in truck.boxes}))}
+    for box in truck.boxes:
+        x, y = box.x * length, box.y * width
+        w, h = box.width * length, box.height * width
+        ax.add_patch(Rectangle((x, y), w, h, facecolor=box.color, edgecolor='#FFFFFF', linewidth=1.6, zorder=2))
+        # Only show labels that fit comfortably at the rendered figure size.
+        if w / length * fig_width >= 0.30 and h / width >= 0.14:
+            label = f"{references[box.item_number or 'UNKNOWN']:02d}"
+            if box.represented_qty > 1:
+                label += f"\n×{box.represented_qty}"
+            red, green, blue = to_rgb(box.color)
+            ink = '#FFFFFF' if 0.2126 * red + 0.7152 * green + 0.0722 * blue < 0.48 else '#172B4D'
+            ax.text(x + w / 2, y + h / 2, label, ha='center', va='center', fontsize=8, color=ink, fontweight='bold', zorder=3)
+    ax.text(0, -width * 0.14, 'REAR / DOORS', fontsize=8, color='#64748B', ha='left')
+    ax.text(length, -width * 0.14, 'FRONT / CAB', fontsize=8, color='#64748B', ha='right')
+    ax.text(length / 2, width * 1.12, f'{length:g} in long × {width:g} in wide', ha='center', color='#64748B', fontsize=9)
+    if not truck.boxes:
+        ax.text(length / 2, width / 2, 'No pallets placed — review fit notes', ha='center', color='#64748B', fontsize=10)
+    ax.set_xlim(-length * 0.015, length * 1.015)
+    ax.set_ylim(-width * 0.25, width * 1.25)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    fig.tight_layout(pad=0.6)
+    return fig
+
+
+def _visualize_projected_truck(truck: TruckSummary, fig_width: float = 12) -> plt.Figure:
     """Create a scaled projected item layout for one truck."""
     truck_length = max(truck.truck_length, 1.0)
     truck_width = max(truck.truck_width, 1.0)
@@ -93,18 +128,23 @@ def render_truck_visualization(trucks: list[TruckSummary]) -> None:
         return
 
     _render_selected_load_summary(trucks)
-    st.caption(
-        "Truck view shows the current evaluated KKG Load # only. "
-        "Each colored block is one grouped stack unit; the x-count on a block is the item quantity represented by that unit."
-    )
-    _render_item_legend(trucks)
-    st.divider()
+    st.caption("Overhead view. Each block is one pallet position; ×2 indicates a double stack. Numbers match the item key below. Empty floor is light gray.")
 
     for truck in trucks:
         _render_truck_header(truck)
         fig = visualize_truck(truck, fig_width=12)
         st.pyplot(fig, use_container_width=True)
-        _render_item_counts(truck)
+        plt.close(fig)
+        with st.expander("Item key", expanded=len({box.item_number for box in truck.boxes}) <= 8):
+            _render_item_legend([truck])
+        with st.expander("Pallet dimensions and quantities"):
+            _render_item_counts(truck)
+        with st.expander("Store / DC / PO details"):
+            st.dataframe(pd.DataFrame([{
+                "Position": index, "Store #": box.store_number, "DC #": box.dc_number,
+                "Load": box.kkg_load_number, "PO": box.retailer_po_number,
+                "Item #": box.item_number, "Qty": box.represented_qty,
+            } for index, box in enumerate(truck.boxes, start=1)]), hide_index=True, use_container_width=True)
         st.divider()
 
 
@@ -223,49 +263,32 @@ def _render_selected_load_summary(trucks: list[TruckSummary]) -> None:
     total_render_units = sum(len(truck.boxes) for truck in trucks)
     total_weight = sum(truck.total_weight for truck in trucks)
 
-    st.markdown("**Selected Load Summary**")
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    st.caption("Truck: " + ", ".join(truck_types))
+    with st.expander("Selected loads / DC groups"):
+        st.write(", ".join(load_numbers) if load_numbers else "No loads selected")
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("KKG Load #", ", ".join(load_numbers) if load_numbers else "-")
+        st.metric("Item Types Placed", len(unique_items))
     with col2:
-        st.metric("Truck Type", ", ".join(truck_types) if truck_types else "-")
-    with col3:
-        st.metric("Unique Items", len(unique_items))
-    with col4:
         st.metric("Total Qty", total_qty)
-    with col5:
+    with col3:
         st.metric("Total Weight", f"{total_weight:,.0f} lb")
-    with col6:
+    with col4:
         st.metric("Fit Status", "Fail" if failed else "Fit")
 
     if failed:
         st.error("This load does not fit the selected truck rules. Review the fit notes below the visualization.")
-    else:
-        st.success("This load fits the selected truck rules.")
-
-    st.caption(f"Grouped render units placed: {total_render_units}")
+    st.caption(f"Pallet positions placed: {total_render_units}")
 
 
 def _render_truck_header(truck: TruckSummary) -> None:
     status_label = "Fits" if truck.validation_status == "valid" else "Does Not Fit"
-    if truck.validation_status == "valid":
-        st.success(f"Visualization: KKG Load {truck.kkg_load_number} on {truck.truck_preset} | {status_label}")
-    else:
-        st.error(f"Visualization: KKG Load {truck.kkg_load_number} on {truck.truck_preset} | {status_label}")
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Truck Interior", f"{truck.truck_length:g} x {truck.truck_width:g} in")
-    with col2:
-        st.metric("Interior Height", f"{truck.truck_height:g} in")
-    with col3:
-        st.metric("Floor Use", truck.utilization_display)
-    with col4:
-        st.metric("Weight", f"{truck.total_weight:,.0f}/{truck.truck_max_weight:,.0f} lb")
+    st.markdown(f"**Truck {truck.truck_id} · {escape(truck.truck_preset)} · {status_label}**")
+    st.caption(f"Floor use {truck.utilization_display} · Interior height {truck.truck_height:g} in · Weight {truck.total_weight:,.0f} / {truck.truck_max_weight:,.0f} lb")
 
     if truck.validation_notes:
-        st.markdown("**Why this load does not fit:**")
-        st.markdown("\n".join(f"- {note}" for note in truck.validation_notes))
+        with st.expander("Fit issues", expanded=True):
+            st.markdown("\n".join(f"- {note}" for note in truck.validation_notes))
 
 
 def _render_item_counts(truck: TruckSummary) -> None:
@@ -308,6 +331,7 @@ def _render_item_legend(trucks: list[TruckSummary]) -> None:
         "<table style='width:100%;border-collapse:collapse;font-size:0.92rem;'>"
         "<thead>"
         "<tr style='border-bottom:1px solid #D0D5DD;text-align:left;'>"
+        "<th style='padding:6px 8px;'>Key</th>"
         "<th style='padding:6px 8px;'>Color</th>"
         "<th style='padding:6px 8px;'>Item #</th>"
         "<th style='padding:6px 8px;'>Type</th>"
@@ -319,7 +343,7 @@ def _render_item_legend(trucks: list[TruckSummary]) -> None:
         + "</tbody></table>"
     )
     st.markdown(legend_html, unsafe_allow_html=True)
-    st.caption("Colors identify Item # values in the selected load; PURE is teal and CDW is pink for the current sample mapping.")
+    st.caption("Each item has its own color. Key numbers match the layout. Quantities include placed pallets only.")
 
 
 def _item_legend_rows(trucks: list[TruckSummary]) -> list[dict]:
@@ -338,13 +362,14 @@ def _item_legend_rows(trucks: list[TruckSummary]) -> list[dict]:
             items[item_number]["qty"] += box.represented_qty
             items[item_number]["render_units"] += 1
 
-    return [items[item_number] for item_number in sorted(items)]
+    return [dict(items[item_number], reference=f"{index:02d}") for index, item_number in enumerate(sorted(items), start=1)]
 
 
 def _legend_row_html(row: dict) -> str:
     color = escape(str(row["color"]))
     return (
         "<tr style='border-bottom:1px solid #EAECF0;'>"
+        f"<td style='padding:7px 8px;font-weight:600;'>{row['reference']}</td>"
         "<td style='padding:7px 8px;'>"
         f"<span style='display:inline-block;width:18px;height:18px;background:{color};"
         "border:1px solid #111827;vertical-align:middle;'></span>"

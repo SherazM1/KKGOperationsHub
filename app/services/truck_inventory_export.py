@@ -180,7 +180,7 @@ def export_required_columns_csv(records: list[TruckInventoryRecord]) -> bytes:
 
 
 def export_required_columns_excel(records: list[TruckInventoryRecord]) -> bytes:
-    """Export only KKG Load #, Retailer PO #, Item #, and Qty as an Excel file."""
+    """Export planning identifiers, retaining store inventory details when present."""
     rows = [
         {
             "KKG Load #": record.kkg_load_number,
@@ -190,6 +190,17 @@ def export_required_columns_excel(records: list[TruckInventoryRecord]) -> bytes:
         }
         for record in records
     ]
+    if any(record.store_number is not None for record in records):
+        for row, record in zip(rows, records):
+            row.update({
+                "Store #": record.store_number,
+                "DC #": record.dc_number,
+                "Pallet Type": record.pallet_type,
+                "Pallet Length": record.item_length,
+                "Pallet Width": record.item_width,
+                "Pallet Height": record.item_height,
+                "Weight": record.item_weight,
+            })
     df = pd.DataFrame(rows)
 
     buffer = io.BytesIO()

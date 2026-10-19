@@ -115,7 +115,8 @@ def normalize_combined_row(row: dict, source_file: str) -> TruckInventoryRecord:
         kkg_load_number=_get_load_number(row),
         retailer_po_number=_get_retailer_po(row),
         delivery_date=_get_field(row, ["Delivery Date", "delivery_date"], None),
-        dc_number=_get_field(row, ["DC", "dc_number"], None),
+        dc_number=_get_field(row, ["DC", "DC #", "DC Number", "dc_number"], None),
+        store_number=_get_field(row, ["Store #", "Store Number", "Store"], None),
         dc_name=_get_field(row, ["DC Name", "dc_name"], None),
         item_number=_get_field(row, ["Item", "Item #", "ITEM #", "Item Number", "item_number"], None),
         description=_get_field(row, ["Description", "description"], None),
@@ -131,7 +132,11 @@ def normalize_combined_row(row: dict, source_file: str) -> TruckInventoryRecord:
         truck_max_weight=_parse_float(row, _field_names("truck_max_weight")),
         estimated_pallets=_parse_float(row, ["Pallets", "pallets", "Estimated Pallets"]),
         load_group=_get_field(row, ["Load Group", "load_group", "Group"], None),
+        pallet_type=_get_field(row, ["Pallet Type"], None),
     )
+    if any(_normalize_key(k) in {"store", "storenumber"} for k in row) and not record.kkg_load_number:
+        record.source_type = "store_inventory"
+        record.kkg_load_number = f"DC-{record.dc_number}" if record.dc_number else None
     _finalize_record(record)
     
     return record
@@ -186,7 +191,8 @@ def _get_field(row: dict, possible_names: list[str], default=None) -> str | None
     for name in possible_names:
         normalized_name = _normalize_key(name)
         if normalized_name in normalized_row and normalized_row[normalized_name] not in ("", None):
-            return str(normalized_row[normalized_name]).strip()
+            value = normalized_row[normalized_name]
+            return str(int(value)) if isinstance(value, float) and value.is_integer() else str(value).strip()
     return default
 
 
@@ -220,9 +226,9 @@ def _get_retailer_po(row: dict) -> str | None:
 
 def _field_names(field: str) -> list[str]:
     aliases = {
-        "length": ["Length", "Item Length", "item_length", "length", "L"],
-        "width": ["Width", "Item Width", "item_width", "width", "W"],
-        "height": ["Height", "Item Height", "item_height", "height", "H"],
+        "length": ["Pallet Length", "Length", "Item Length", "item_length", "length", "L"],
+        "width": ["Pallet Width", "Width", "Item Width", "item_width", "width", "W"],
+        "height": ["Pallet Height", "Height", "Item Height", "item_height", "height", "H"],
         "weight": ["Weight", "Item Weight", "item_weight", "Unit Weight", "unit_weight"],
         "truck_type": ["Truck Type", "truck_type", "Truck", "Trailer Type"],
         "truck_length": ["Truck Length", "truck_length", "Trailer Length"],

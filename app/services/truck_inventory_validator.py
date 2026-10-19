@@ -47,7 +47,12 @@ def validate_records(records: list[TruckInventoryRecord]) -> tuple[list[TruckInv
         if not record.kkg_load_number:
             issues.append("Missing KKG Load #")
         
-        if not record.retailer_po_number and not record.po_number:
+        if record.source_type == "store_inventory":
+            if not record.store_number:
+                issues.append("Missing Store #")
+            if not record.dc_number:
+                issues.append("Missing DC #")
+        elif not record.retailer_po_number and not record.po_number:
             issues.append("Missing Retailer PO #")
         
         if not record.item_number:

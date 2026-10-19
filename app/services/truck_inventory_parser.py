@@ -25,6 +25,16 @@ COMBINED_REQUIRED_COLUMNS = {
 
 COMBINED_SHEET_PRIORITY = ["FINAL LS", "REVISED LS", "LOAD SHEET"]
 
+STORE_REQUIRED_COLUMNS = {
+    "Store #": ["Store #", "Store Number", "Store"],
+    "DC #": ["DC #", "DC Number", "DC"],
+    "Item #": COMBINED_REQUIRED_COLUMNS["Item #"],
+    "Qty": COMBINED_REQUIRED_COLUMNS["Qty"],
+    "Pallet Length": ["Pallet Length", "Length", "Item Length"],
+    "Pallet Width": ["Pallet Width", "Width", "Item Width"],
+    "Pallet Height": ["Pallet Height", "Height", "Item Height"],
+}
+
 
 def detect_file_type(df: pd.DataFrame, filename: str) -> str:
     """Detect if file is PURE or CDW based on content and filename."""
@@ -125,7 +135,7 @@ def parse_combined_load_sheet(uploaded_file) -> FileParseResult:
         if selected is None:
             return FileParseResult(
                 success=False,
-                error_message=_combined_sheet_error(workbook),
+                error_message=_combined_sheet_error(workbook) + " Store inventory files can instead use Store #, DC #, Item #, Quantity, Pallet Length, Pallet Width, and Pallet Height.",
             )
 
         sheet_name, header_row, df = selected
@@ -155,14 +165,20 @@ def _select_combined_load_sheet(workbook: pd.ExcelFile) -> tuple[str, int, pd.Da
     for sheet_name in workbook.sheet_names:
         for header_row in range(0, 6):
             try:
-                df = pd.read_excel(workbook, sheet_name=sheet_name, header=header_row)
+                df = pd.read_excel(workbook, sheet_name=sheet_name, header=header_row, dtype=object)
             except ValueError:
                 continue
             if df.empty:
                 continue
             matched = _matched_required_columns(df.columns)
             priority = _sheet_priority(sheet_name)
-            candidates.append((len(matched), priority, sheet_name, header_row, df))
+            columns = {_normalize_column(c) for c in df.columns}
+            store_format = all(
+                any(_normalize_column(alias) in columns for alias in aliases)
+                for aliases in STORE_REQUIRED_COLUMNS.values()
+            )
+            score = len(COMBINED_REQUIRED_COLUMNS) if store_format else len(matched)
+            candidates.append((score, priority, sheet_name, header_row, df.dropna(how="all")))
 
     usable = [candidate for candidate in candidates if candidate[0] == len(COMBINED_REQUIRED_COLUMNS)]
     if not usable:

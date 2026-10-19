@@ -32,6 +32,8 @@ class BoxLayout:
     stack_level: int = 1
     stack_qty: int = 1
     item_type: str = ""
+    store_number: str = ""
+    dc_number: str = ""
 
 
 @dataclass

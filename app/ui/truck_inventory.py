@@ -12,6 +12,7 @@ from app.services.truck_inventory_item_setup import (
     apply_item_setup,
     build_default_item_setup,
     merge_item_setup,
+    normalize_editor_rows as _normalize_editor_rows,
     preset_to_setup_values,
     validate_item_setup,
 )
@@ -52,8 +53,8 @@ def _initialize_truck_state() -> None:
 def render_inputs_tab() -> None:
     """Render file upload and parsing controls."""
     st.subheader("Main Input")
-    st.markdown("**Combined Load Sheet**")
-    st.caption("Required for truck planning. This workbook drives KKG Load # grouping, Item Setup, visualization, and export.")
+    st.markdown("**Load Sheet or Store Inventory**")
+    st.caption("Upload a load sheet or a store inventory file with Store #, DC #, Item #, Quantity, Pallet Length, Pallet Width, Pallet Height, and optional Weight. Dimensions are inches; weight is pounds per pallet. Store files without load numbers are grouped by DC.")
     combined_file = st.file_uploader(
         "Upload combined load sheet",
         type=["xlsx", "xlsm", "xls"],
@@ -108,7 +109,7 @@ def render_inputs_tab() -> None:
         st.info(st.session_state.truck_last_validation_summary)
 
     if st.session_state.truck_normalized_records:
-        st.success("Input parsed. Select a KKG Load #, complete Item Setup for that load, then build the truck plan.")
+        st.success("Input parsed. Select one or more KKG loads, complete Item Setup, then build the truck plan.")
 
 
 def _process_truck_files() -> None:
@@ -142,6 +143,13 @@ def _process_truck_files() -> None:
     st.session_state.truck_raw_records = records
     st.session_state.truck_validated_records = validated
     st.session_state.truck_normalized_records = validated
+    # A newly parsed file may change dimensions for an existing item or DC.
+    # Discard setup derived from the previous parse so imported values refresh.
+    for key in ("truck_item_setup_by_load", "truck_item_setup_draft_by_load", "truck_item_setup_confirmed_by_load"):
+        st.session_state[key] = {}
+    st.session_state.truck_item_setup_editor_revision = {
+        key: value + 1 for key, value in st.session_state.truck_item_setup_editor_revision.items()
+    }
     load_numbers = _get_load_numbers(validated)
     if not load_numbers:
         st.error("No KKG Load # values were found in the Combined Load Sheet.")
@@ -181,15 +189,21 @@ def render_normalized_data_tab() -> None:
     with col2:
         st.metric("Source Types", df["source_type"].nunique())
     with col3:
-        st.metric("Selected Load", st.session_state.truck_selected_load_number or "-")
+        st.metric("Selected Loads", _selection_label() or "-")
     with col4:
         st.metric("Total Qty", f"{df['qty'].sum():.0f}")
 
     preview_columns = [
         "kkg_load_number",
+        "store_number",
+        "dc_number",
         "retailer_po_number",
         "item_number",
         "qty",
+        "item_length",
+        "item_width",
+        "item_height",
+        "item_weight",
         "source_type",
         "validation_status",
         "validation_notes",
@@ -244,7 +258,7 @@ def render_truck_builder_tab() -> None:
 
     selected_load = st.session_state.truck_selected_load_number
     st.caption(
-        f"Active KKG Load # {selected_load} drives Item Setup, Build / Evaluate, Visualization, and Export."
+        f"Selected KKG loads: {_selection_label()}. Item Setup, evaluation, visualization, and export use these loads."
     )
     _render_item_setup_section()
     st.divider()
@@ -259,8 +273,8 @@ def _render_item_setup_section() -> None:
     selected_records = _get_selected_records()
     _ensure_item_setup_for_selected_load()
     st.caption(
-        f"Generated from unique Item # values in selected KKG Load # {selected_load}. "
-        "Known sample items start with pallet-size presets; unknown items stay Custom and need manual setup. "
+        f"Generated from unique Item # values in selected KKG loads: {_selection_label()}. "
+        "Imported dimensions and weight prefill the table. Missing values need manual setup. If an item has conflicting dimensions or weights, the affected field is zero for review. "
         "Item # is parsed from the load sheet and is read-only."
     )
 
@@ -269,6 +283,8 @@ def _render_item_setup_section() -> None:
     saved_setup = st.session_state.truck_item_setup_by_load.get(selected_load, [])
     draft_setup = st.session_state.truck_item_setup_draft_by_load.get(selected_load, [])
     setup_df = pd.DataFrame(draft_setup)
+    setup_df["Double Stack"] = [str(row.get("Is Stackable?", "No")).lower() == "yes" for row in draft_setup]
+    setup_df = setup_df.drop(columns=["Is Stackable?", "Stack Qty", "Color"], errors="ignore")
     editor_revision = st.session_state.truck_item_setup_editor_revision.get(selected_load, 0)
     editor_key = f"truck_item_setup_editor_{selected_load}_{editor_revision}"
 
@@ -285,8 +301,7 @@ def _render_item_setup_section() -> None:
                 "Width": st.column_config.NumberColumn("Width", min_value=0.0, step=0.1),
                 "Height": st.column_config.NumberColumn("Height", min_value=0.0, step=0.1),
                 "Weight": st.column_config.NumberColumn("Weight", min_value=0.0, step=0.1),
-                "Is Stackable?": st.column_config.SelectboxColumn("Is Stackable?", options=["No", "Yes"]),
-                "Stack Qty": st.column_config.NumberColumn("Stack Qty", min_value=1, step=1),
+                "Double Stack": st.column_config.CheckboxColumn("Double Stack", help="Allow two units of this item per stack. Combined height must fit the truck."),
                 "Color": st.column_config.SelectboxColumn("Color", options=color_names),
             },
             key=editor_key,
@@ -319,7 +334,7 @@ def _render_item_setup_section() -> None:
         if setup_issues:
             st.session_state.truck_build_message = "Saved Item Setup has validation issues."
         else:
-            st.session_state.truck_build_message = f"Item Setup saved for KKG Load # {selected_load}."
+            st.session_state.truck_build_message = f"Item Setup saved for KKG loads: {_selection_label()}."
         st.session_state.truck_item_setup_editor_revision[selected_load] = editor_revision + 1
         st.rerun()
 
@@ -331,8 +346,8 @@ def _render_item_setup_section() -> None:
         st.warning("Saved Item Setup needs attention before building the truck plan.")
         st.markdown("\n".join(f"- {issue}" for issue in saved_issues))
     else:
-        st.success(f"Item Setup saved for KKG Load # {selected_load}.")
-    st.caption("Edits in this table are draft values until Save Item Setup is clicked. Color is manual for now and drives the truck render and legend.")
+        st.success(f"Item Setup saved for KKG loads: {_selection_label()}.")
+    st.caption("Check Double Stack for items that can be stacked two high. Stacks stay within each load/PO row. Height and total weight are checked when building. Colors are assigned automatically by item number. Save Item Setup to apply edits.")
 
 
 def _apply_selected_item_presets(setup_rows: list[dict]) -> list[dict]:
@@ -368,56 +383,27 @@ def _apply_preset_changes(previous_rows: list[dict], edited_rows: list[dict]) ->
     return updated_rows, preset_changed
 
 
-def _normalize_editor_rows(rows: list[dict]) -> list[dict]:
-    normalized_rows = []
-    for row in rows:
-        normalized = dict(row)
-        if str(normalized.get("Color", "")) not in ITEM_SETUP_COLOR_OPTIONS:
-            normalized["Color"] = "Orange"
-        normalized_rows.append(normalized)
-    return normalized_rows
-
-
 def _render_load_selection() -> None:
     load_numbers = _get_load_numbers(st.session_state.truck_normalized_records)
     if not load_numbers:
         st.warning("No KKG Load # values were found in the parsed Combined Load Sheet.")
         return
 
-    previous_selected_load = st.session_state.truck_selected_load_number
-    current_load = previous_selected_load
-    if current_load not in load_numbers:
-        current_load = load_numbers[0]
-        st.session_state.truck_selected_load_number = current_load
-
-    selector_key = "truck_load_selector"
-    selector_value = st.session_state.get(selector_key)
-    if selector_value in load_numbers:
-        current_load = selector_value
-        st.session_state.truck_selected_load_number = current_load
-        if current_load != previous_selected_load:
-            _ensure_item_setup_for_selected_load()
-            st.session_state.truck_trucks = []
-            st.session_state.truck_build_message = "Selected load changed. Build the truck plan for this load."
+    st.markdown("**Loads / DC groups to combine in one truck**")
+    st.caption("Select one or more groups. Store inventory uses DC groups when no load number is supplied. Original store, DC, item, load, and PO numbers are preserved.")
+    selector_key = "truck_loads_selector"
+    if selector_key not in st.session_state:
+        st.session_state[selector_key] = [load for load in _selected_load_numbers() if load in load_numbers] or [load_numbers[0]]
     else:
-        st.session_state[selector_key] = current_load
-
-    st.markdown("**Active KKG Load Context**")
-    st.caption(
-        "Select the KKG Load # before configuring Item Setup. Everything below uses this selected load."
-    )
-    selected_load = st.selectbox(
-        "Select KKG Load #",
-        options=load_numbers,
-        index=load_numbers.index(current_load),
-        key=selector_key,
-    )
+        st.session_state[selector_key] = [load for load in st.session_state[selector_key] if load in load_numbers]
+    selected = sorted(st.multiselect("Select loads / DC groups", options=load_numbers, key=selector_key))
+    selected_load = selected[0] if len(selected) == 1 else tuple(selected) if selected else None
 
     if selected_load != st.session_state.truck_selected_load_number:
         st.session_state.truck_selected_load_number = selected_load
         _ensure_item_setup_for_selected_load()
         st.session_state.truck_trucks = []
-        st.session_state.truck_build_message = "Selected load changed. Build the truck plan for this load."
+        st.session_state.truck_build_message = "Load selection changed. Save Item Setup and build the combined truck plan."
 
     selected_records = _get_selected_records()
     unique_items = len({record.item_number for record in selected_records if record.item_number})
@@ -467,13 +453,20 @@ def _get_load_numbers(records) -> list[str]:
     })
 
 
+def _selected_load_numbers() -> list[str]:
+    selected = st.session_state.get("truck_selected_load_number")
+    return list(selected) if isinstance(selected, tuple) else [selected] if selected else []
+
+
+def _selection_label() -> str:
+    return ", ".join(_selected_load_numbers())
+
+
 def _get_selected_records():
-    selected_load = st.session_state.get("truck_selected_load_number")
-    if not selected_load:
-        return []
+    selected_loads = _selected_load_numbers()
     return [
         record for record in st.session_state.truck_normalized_records
-        if record.kkg_load_number == selected_load
+        if record.kkg_load_number in selected_loads
     ]
 
 
@@ -486,7 +479,7 @@ def _replace_selected_records(updated_records) -> None:
     updated_iter = iter(updated_by_key.values())
     merged = []
     for record in st.session_state.truck_normalized_records:
-        if record.kkg_load_number == selected_load:
+        if record.kkg_load_number in _selected_load_numbers():
             merged.append(next(updated_iter))
         else:
             merged.append(record)
@@ -554,7 +547,7 @@ def _evaluate_truck_plan(truck_preset: str, threshold: float) -> None:
     trucks = assign_to_trucks(
         records,
         preset_key=truck_preset,
-        grouping_rule="kkg_load_number",
+        grouping_rule="combined",
         operational_weight_threshold_lbs=threshold,
     )
     _replace_selected_records(records)
@@ -638,8 +631,8 @@ def render_export_tab() -> None:
 
     st.markdown("**Required Excel Export**")
     st.caption(
-        f"Export contains only selected KKG Load # {st.session_state.truck_selected_load_number} "
-        "with KKG Load #, Retailer PO #, Item #, and Qty."
+        f"Export contains selected KKG loads: {_selection_label()} "
+        "with load, PO, item, and quantity. Store inventory also includes Store #, DC #, pallet dimensions, type, and weight."
     )
     st.download_button(
         label="Download Required Excel",
@@ -659,7 +652,7 @@ def render_truck_inventory_view() -> None:
     _initialize_truck_state()
 
     st.markdown("### Truck Inventory Module")
-    st.markdown("Upload the Combined Load Sheet, choose the KKG Load #, then set up items and evaluate truck fit.")
+    st.markdown("Upload the Combined Load Sheet, choose loads to combine, then set up items and evaluate truck fit.")
     if st.session_state.truck_normalized_records:
         _render_load_selection()
     _render_workflow_status()

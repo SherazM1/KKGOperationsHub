@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from colorsys import hsv_to_rgb
 
 
 @dataclass
@@ -33,8 +34,8 @@ class TruckPreset:
 
 # Standard truck presets
 TRUCK_PRESETS = {
-    "dry_van": TruckPreset(
-        name="Dry Van",
+    "dry_van_53_foot": TruckPreset(
+        name="Dry Van (53 Foot)",
         pallet_capacity=26.0,
         length_in=636.0,
         width_in=96.0,
@@ -43,8 +44,8 @@ TRUCK_PRESETS = {
         operational_weight_threshold_lbs=45000.0,
         description="Dry van trailer",
     ),
-    "reefer": TruckPreset(
-        name="Reefer",
+    "reefer_48_foot": TruckPreset(
+        name="Reefer (48 Foot)",
         pallet_capacity=22.0,
         length_in=515.75,
         width_in=90.0,
@@ -53,8 +54,8 @@ TRUCK_PRESETS = {
         operational_weight_threshold_lbs=43000.0,
         description="Refrigerated trailer",
     ),
-    "box_truck_26ft": TruckPreset(
-        name="Standard 26 Foot Box Truck",
+    "straight_box_truck_26_foot": TruckPreset(
+        name="Straight Box Truck (26 Foot)",
         pallet_capacity=13.0,
         length_in=312.0,
         width_in=96.0,
@@ -163,7 +164,7 @@ LOAD_GROUP_COLORS = [
 
 def get_preset(preset_key: str) -> TruckPreset:
     """Get a truck preset by key, default to Dry Van."""
-    return TRUCK_PRESETS.get(preset_key, TRUCK_PRESETS["dry_van"])
+    return TRUCK_PRESETS.get(preset_key, next(iter(TRUCK_PRESETS.values())))
 
 
 def get_load_group_color(load_group: str, group_index: int) -> str:
@@ -182,11 +183,11 @@ def get_color_for_group(load_group: str, group_map: dict[str, int]) -> str:
 def get_color_for_item(item_number: str, item_map: dict[str, int]) -> str:
     """Get a stable color for an item number during one planning run."""
     item_key = item_number or "UNKNOWN"
-    if item_key in ITEM_COLOR_BY_ITEM_NUMBER:
-        return ITEM_SETUP_COLOR_OPTIONS.get(
-            ITEM_COLOR_BY_ITEM_NUMBER[item_key],
-            ITEM_SETUP_COLOR_OPTIONS[UNKNOWN_ITEM_COLOR],
-        )
     if item_key not in item_map:
         item_map[item_key] = len(item_map)
-    return LOAD_GROUP_COLORS[item_map[item_key] % len(LOAD_GROUP_COLORS)]
+    index = item_map[item_key]
+    if index < len(LOAD_GROUP_COLORS):
+        return LOAD_GROUP_COLORS[index]
+    # Extend the palette instead of repeating colors on larger inventories.
+    red, green, blue = hsv_to_rgb((index * 0.61803398875) % 1.0, 0.62, 0.82)
+    return "#{:02X}{:02X}{:02X}".format(round(red * 255), round(green * 255), round(blue * 255))

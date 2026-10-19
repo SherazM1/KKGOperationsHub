@@ -11,12 +11,12 @@ from app.utils.truck_presets import ITEM_PRESETS, ITEM_TYPE_BY_ITEM_NUMBER, get_
 
 def assign_to_trucks(
     records: list[TruckInventoryRecord],
-    preset_key: str = "dry_van",
+    preset_key: str = "Straight_Box_Truck_26_Foot",
     grouping_rule: str = "kkg_load_number",
     operational_weight_threshold_lbs: float | None = None,
 ) -> list[TruckSummary]:
     """
-    Build one truck plan per KKG Load #.
+    Build one truck plan per group, or combine all records into one truck.
 
     MVP assumptions:
     - one visual box is one grouped stack unit
@@ -26,7 +26,9 @@ def assign_to_trucks(
     """
     preset = get_preset(preset_key)
     trucks: list[TruckSummary] = []
-    item_color_map: dict[str, int] = {}
+    item_color_map = {
+        item: index for index, item in enumerate(sorted({r.item_number or "UNKNOWN" for r in records}))
+    }
 
     for truck_id, (load_number, group_records) in enumerate(
         _group_records(records, grouping_rule).items(),
@@ -79,7 +81,7 @@ def assign_to_trucks(
             total_used_pallets=used_floor_area,
             utilization_percent=utilization,
             remaining_capacity=remaining_area,
-            load_groups=[load_number],
+            load_groups=list(dict.fromkeys(r.kkg_load_number or r.load_group or "UNASSIGNED" for r in group_records)),
             items_count=sum(r.qty or 0 for r in group_records),
             boxes=boxes,
             notes="; ".join(notes),
@@ -172,6 +174,8 @@ def _place_load_items(
                     width=length / truck_length if truck_length else 0.0,
                     height=width / truck_width if truck_width else 0.0,
                     kkg_load_number=record.kkg_load_number or "",
+                    store_number=record.store_number or "",
+                    dc_number=record.dc_number or "",
                     retailer_po_number=record.retailer_po_number or record.po_number,
                     item_number=item_number,
                     row_qty=qty,
@@ -283,8 +287,6 @@ def _unique_notes(notes: list[str]) -> list[str]:
 
 
 def _item_color(record: TruckInventoryRecord, item_color_map: dict[str, int]) -> str:
-    if record.color_group and str(record.color_group).startswith("#"):
-        return str(record.color_group)
     return get_color_for_item(record.item_number or "UNKNOWN", item_color_map)
 
 
@@ -301,7 +303,9 @@ def _group_records(
 ) -> OrderedDict[str, list[TruckInventoryRecord]]:
     grouped: OrderedDict[str, list[TruckInventoryRecord]] = OrderedDict()
     for record in records:
-        if grouping_rule == "po_number":
+        if grouping_rule == "combined":
+            key = ", ".join(dict.fromkeys(r.kkg_load_number or r.load_group or "UNASSIGNED" for r in records))
+        elif grouping_rule == "po_number":
             key = record.retailer_po_number or record.po_number or "UNSPECIFIED"
         elif grouping_rule == "none":
             key = f"{record.kkg_load_number or 'UNASSIGNED'}-{record.item_number or 'UNKNOWN'}"
