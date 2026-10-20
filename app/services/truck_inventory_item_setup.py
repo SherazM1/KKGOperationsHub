@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from math import isfinite
+from app.services.truck_inventory_stacking import is_half_pallet
 
 from app.models.truck_inventory_record import TruckInventoryRecord
 from app.utils.truck_presets import (
@@ -107,6 +109,8 @@ def apply_item_setup(
         record.item_weight = _to_float(setup.get("Weight"))
         record.is_stackable = str(setup.get("Is Stackable?", "No")).lower() == "yes"
         record.stack_qty = _effective_stack_qty(setup.get("Stack Qty"), record.is_stackable)
+        if is_half_pallet(record, str(setup.get("Preset", ""))):
+            record.pallet_type = "Half Pallet"
         record.color_group = setup_color_to_hex(setup.get("Color"))
         record.total_weight = (record.item_weight or 0.0) * (record.qty or 0)
 
@@ -137,6 +141,9 @@ def validate_item_setup(records: list[TruckInventoryRecord], setup_rows: list[di
             issues.add(f"Item # {item_number}: missing or invalid {', '.join(missing_fields)}")
 
         is_stackable = str(setup.get("Is Stackable?", "No")).lower() == "yes"
+        if is_stackable and any(is_half_pallet(record, str(setup.get("Preset", "")))
+                                for record in records if record.item_number == item_number):
+            issues.add(f"Item # {item_number}: half pallets cannot be double stacked; uncheck Double Stack")
         if is_stackable and _parse_stack_qty(setup.get("Stack Qty")) is None:
             issues.add(f"Item # {item_number}: stack qty must be a whole number greater than 0")
 
@@ -181,8 +188,11 @@ def _effective_stack_qty(value, is_stackable: bool) -> int:
 
 def _parse_stack_qty(value) -> int | None:
     try:
-        stack_qty = int(float(value))
-    except (TypeError, ValueError):
+        number = float(value)
+        if not isfinite(number) or not number.is_integer():
+            return None
+        stack_qty = int(number)
+    except (TypeError, ValueError, OverflowError):
         return None
     return stack_qty if stack_qty > 0 else None
 

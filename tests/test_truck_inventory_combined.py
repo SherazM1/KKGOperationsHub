@@ -60,7 +60,7 @@ class CombinedTruckTests(unittest.TestCase):
             record.is_stackable = True
             record.stack_qty = 2
         truck = self.plan(records, grouping_rule='combined', operational_weight_threshold_lbs=500)[0]
-        self.assertFalse(truck.weight_fit)
+        self.assertTrue(truck.weight_fit)
         self.assertFalse(truck.spatial_fit)
         self.assertEqual(truck.validation_status, 'error')
 

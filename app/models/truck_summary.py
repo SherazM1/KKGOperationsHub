@@ -61,8 +61,16 @@ class TruckSummary:
     weight_fit: bool = True
     validation_status: str = "pending"
     validation_notes: list[str] = field(default_factory=list)
+    pallet_positions_used: float | None = None
+    pallet_positions_capacity: float | None = None
 
     @property
     def utilization_display(self) -> str:
         """Format utilization for display."""
         return f"{self.utilization_percent:.1f}%"
+
+    @property
+    def load_capacity_display(self) -> str:
+        if self.pallet_positions_capacity:
+            return f"{(self.pallet_positions_used or 0) / self.pallet_positions_capacity * 100:.0f}%"
+        return self.utilization_display

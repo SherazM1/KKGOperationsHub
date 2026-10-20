@@ -56,7 +56,7 @@ TRUCK_PRESETS = {
     ),
     "straight_box_truck_26_foot": TruckPreset(
         name="Straight Box Truck (26 Foot)",
-        pallet_capacity=13.0,
+        pallet_capacity=10.0,
         length_in=312.0,
         width_in=96.0,
         height_in=84.0,

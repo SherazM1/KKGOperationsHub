@@ -179,7 +179,7 @@ def export_required_columns_csv(records: list[TruckInventoryRecord]) -> bytes:
     return csv_buffer.getvalue()
 
 
-def export_required_columns_excel(records: list[TruckInventoryRecord]) -> bytes:
+def export_required_columns_excel(records: list[TruckInventoryRecord], trucks: list[TruckSummary] | None = None) -> bytes:
     """Export planning identifiers, retaining store inventory details when present."""
     rows = [
         {
@@ -206,6 +206,22 @@ def export_required_columns_excel(records: list[TruckInventoryRecord]) -> bytes:
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Truck Export")
+        if trucks:
+            assignments = [{
+                "Truck #": truck.truck_id, "Truck Type": truck.truck_preset,
+                "KKG Load #": box.kkg_load_number, "Retailer PO #": box.retailer_po_number,
+                "Store #": box.store_number, "DC #": box.dc_number,
+                "Item #": box.item_number, "Qty": box.represented_qty,
+                "Pallet Length": box.item_length, "Pallet Width": box.item_width,
+                "Pallet Height": box.item_height,
+            } for truck in trucks for box in truck.boxes]
+            pd.DataFrame(assignments).to_excel(writer, index=False, sheet_name="Truck Assignments")
+            issues = [{"Truck #": truck.truck_id, "Loads": truck.kkg_load_number,
+                       "Qty Requiring Review": truck.items_count,
+                       "Issues": "; ".join(truck.validation_notes)}
+                      for truck in trucks if truck.validation_status == "error"]
+            if issues:
+                pd.DataFrame(issues).to_excel(writer, index=False, sheet_name="Unassigned Review")
     buffer.seek(0)
     return buffer.getvalue()
 

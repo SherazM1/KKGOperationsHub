@@ -44,13 +44,17 @@ def visualize_truck(truck: TruckSummary, fig_width: float = 12) -> plt.Figure:
         x, y = box.x * length, box.y * width
         w, h = box.width * length, box.height * width
         ax.add_patch(Rectangle((x, y), w, h, facecolor=box.color, edgecolor='#FFFFFF', linewidth=1.6, zorder=2))
+        red, green, blue = to_rgb(box.color)
+        ink = '#FFFFFF' if 0.2126 * red + 0.7152 * green + 0.0722 * blue < 0.48 else '#172B4D'
+        if box.represented_qty > 1:
+            # Two short horizontal bars mark a double stack, even on small blocks.
+            for offset in (0.73, 0.81):
+                ax.plot([x + w * 0.70, x + w * 0.88],
+                        [y + h * offset, y + h * offset],
+                        color=ink, linewidth=1.6, solid_capstyle='round', zorder=4)
         # Only show labels that fit comfortably at the rendered figure size.
         if w / length * fig_width >= 0.30 and h / width >= 0.14:
             label = f"{references[box.item_number or 'UNKNOWN']:02d}"
-            if box.represented_qty > 1:
-                label += f"\n×{box.represented_qty}"
-            red, green, blue = to_rgb(box.color)
-            ink = '#FFFFFF' if 0.2126 * red + 0.7152 * green + 0.0722 * blue < 0.48 else '#172B4D'
             ax.text(x + w / 2, y + h / 2, label, ha='center', va='center', fontsize=8, color=ink, fontweight='bold', zorder=3)
     ax.text(0, -width * 0.14, 'REAR / DOORS', fontsize=8, color='#64748B', ha='left')
     ax.text(length, -width * 0.14, 'FRONT / CAB', fontsize=8, color='#64748B', ha='right')
@@ -62,6 +66,53 @@ def visualize_truck(truck: TruckSummary, fig_width: float = 12) -> plt.Figure:
     ax.set_aspect('equal')
     ax.axis('off')
     fig.tight_layout(pad=0.6)
+    return fig
+
+
+def visualize_truck_3d(truck: TruckSummary, fig_width: float = 9) -> plt.Figure:
+    """Draw actual pallet heights inside a dimensioned, open trailer frame."""
+    length, width, height = (max(value, 1.0) for value in
+                             (truck.truck_length, truck.truck_width, truck.truck_height))
+    fig = plt.figure(figsize=(fig_width, 4.8), facecolor='white')
+    ax = fig.add_subplot(111, projection='3d', proj_type='ortho')
+    for box in truck.boxes:
+        x, y = box.x * length, box.y * width
+        dx, dy = box.width * length, box.height * width
+        # Separate blocks show the seam between the lower and upper pallets.
+        for level in range(max(1, box.represented_qty)):
+            ax.bar3d(x, y, level * box.item_height, dx, dy, box.item_height,
+                     color=box.color, edgecolor='#FFFFFF', linewidth=0.35, shade=True)
+        if box.represented_qty > 1:
+            ax.text(x + dx / 2, y + dy / 2, box.grouped_height + 1,
+                    '=', ha='center', va='bottom', fontsize=8, color='#172B4D')
+    frame = '#B5A800'
+    # All twelve edges preserve the empty space above and beside the cargo.
+    for z in (0, height):
+        for y in (0, width):
+            ax.plot([0, length], [y, y], [z, z], color=frame, linewidth=0.85)
+        for x in (0, length):
+            ax.plot([x, x], [0, width], [z, z], color=frame, linewidth=0.85)
+    for x in (0, length):
+        for y in (0, width):
+            ax.plot([x, x], [y, y], [0, height], color=frame, linewidth=0.85)
+    ink = '#475467'
+    ax.text2D(0.5, 0.96, f'Truck {truck.truck_id} · {truck.truck_preset}',
+              transform=ax.transAxes, ha='center', fontsize=11, fontweight='bold', color=ink)
+    # Screen-aligned measurements stay readable beside the 2D view and cannot
+    # overlap projected cargo, regardless of the trailer proportions.
+    for x, label, value in ((0.22, 'INTERIOR LENGTH', length),
+                             (0.50, 'INTERIOR WIDTH', width),
+                             (0.78, 'INTERIOR HEIGHT', height)):
+        fig.text(x, 0.145, label, ha='center', va='center', fontsize=9, color='#64748B')
+        fig.text(x, 0.09, f'{value:g} in', ha='center', va='center',
+                 fontsize=14, fontweight='bold', color='#172B4D')
+    ax.set_xlim(0, length)
+    ax.set_ylim(-width * 0.12, width)
+    ax.set_zlim(0, height * 1.08)
+    ax.set_box_aspect((length, width, height))
+    ax.view_init(elev=22, azim=-65)
+    ax.set_axis_off()
+    fig.subplots_adjust(left=0, right=1, bottom=0.21, top=1)
     return fig
 
 
@@ -128,13 +179,21 @@ def render_truck_visualization(trucks: list[TruckSummary]) -> None:
         return
 
     _render_selected_load_summary(trucks)
-    st.caption("Overhead view. Each block is one pallet position; ×2 indicates a double stack. Numbers match the item key below. Empty floor is light gray.")
+    st.caption("3D shows pallet heights and the truck frame. The 2D overhead view shows pallet positions and item key numbers. Both share item colors; = marks a double stack. Dimensions are inches.")
 
     for truck in trucks:
         _render_truck_header(truck)
-        fig = visualize_truck(truck, fig_width=12)
-        st.pyplot(fig, use_container_width=True)
-        plt.close(fig)
+        view_3d, view_2d = st.columns(2)
+        with view_3d:
+            st.markdown("**3D load view**")
+            fig = visualize_truck_3d(truck)
+            st.pyplot(fig, use_container_width=True)
+            plt.close(fig)
+        with view_2d:
+            st.markdown("**2D overhead view**")
+            fig = visualize_truck(truck, fig_width=9)
+            st.pyplot(fig, use_container_width=True)
+            plt.close(fig)
         with st.expander("Item key", expanded=len({box.item_number for box in truck.boxes}) <= 8):
             _render_item_legend([truck])
         with st.expander("Pallet dimensions and quantities"):
@@ -284,7 +343,10 @@ def _render_selected_load_summary(trucks: list[TruckSummary]) -> None:
 def _render_truck_header(truck: TruckSummary) -> None:
     status_label = "Fits" if truck.validation_status == "valid" else "Does Not Fit"
     st.markdown(f"**Truck {truck.truck_id} · {escape(truck.truck_preset)} · {status_label}**")
-    st.caption(f"Floor use {truck.utilization_display} · Interior height {truck.truck_height:g} in · Weight {truck.total_weight:,.0f} / {truck.truck_max_weight:,.0f} lb")
+    st.caption(f"Load capacity {truck.load_capacity_display} · Floor area {truck.utilization_display} · Interior height {truck.truck_height:g} in · Weight {truck.total_weight:,.0f} / {truck.truck_max_weight:,.0f} lb")
+    if truck.pallet_positions_capacity:
+        full = (truck.pallet_positions_used or 0) >= truck.pallet_positions_capacity
+        st.caption(f"{'FULL · ' if full else ''}{truck.pallet_positions_used:g} / {truck.pallet_positions_capacity:g} pallet positions. One full pallet or two half pallets uses one position.")
 
     if truck.validation_notes:
         with st.expander("Fit issues", expanded=True):

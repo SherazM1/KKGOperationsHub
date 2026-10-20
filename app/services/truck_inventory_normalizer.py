@@ -1,6 +1,7 @@
 """Normalize parsed inventory data to standard schema."""
 
 from __future__ import annotations
+from math import isfinite
 
 from app.models.truck_inventory_record import TruckInventoryRecord
 
@@ -257,8 +258,10 @@ def _parse_int(row: dict, possible_names: list[str]) -> int | None:
         normalized_name = _normalize_key(name)
         if normalized_name in normalized_row:
             try:
-                return int(float(normalized_row[normalized_name]))
-            except (ValueError, TypeError):
+                value = float(normalized_row[normalized_name])
+                if isfinite(value) and value.is_integer():
+                    return int(value)
+            except (ValueError, TypeError, OverflowError):
                 continue
     return None
 

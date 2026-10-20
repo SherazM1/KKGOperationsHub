@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
+from app.services.truck_inventory_manual import assignment_rows, apply_manual_assignments
 
 from app.services.truck_inventory_export import (
     export_required_columns_excel,
@@ -104,6 +105,8 @@ def render_inputs_tab() -> None:
     ):
         with st.spinner("Parsing input..."):
             _process_truck_files()
+        if st.session_state.truck_normalized_records:
+            st.rerun()
 
     if st.session_state.truck_last_validation_summary:
         st.info(st.session_state.truck_last_validation_summary)
@@ -143,6 +146,8 @@ def _process_truck_files() -> None:
     st.session_state.truck_raw_records = records
     st.session_state.truck_validated_records = validated
     st.session_state.truck_normalized_records = validated
+    st.session_state.pop("truck_item_selector", None)
+    st.session_state.pop("truck_item_selection_context", None)
     # A newly parsed file may change dimensions for an existing item or DC.
     # Discard setup derived from the previous parse so imported values refresh.
     for key in ("truck_item_setup_by_load", "truck_item_setup_draft_by_load", "truck_item_setup_confirmed_by_load"):
@@ -301,7 +306,7 @@ def _render_item_setup_section() -> None:
                 "Width": st.column_config.NumberColumn("Width", min_value=0.0, step=0.1),
                 "Height": st.column_config.NumberColumn("Height", min_value=0.0, step=0.1),
                 "Weight": st.column_config.NumberColumn("Weight", min_value=0.0, step=0.1),
-                "Double Stack": st.column_config.CheckboxColumn("Double Stack", help="Allow two units of this item per stack. Combined height must fit the truck."),
+                "Double Stack": st.column_config.CheckboxColumn("Double Stack", help="Stack two units. Half pallets cannot be stacked. Total stack height plus 6 inches must fit below the roof."),
                 "Color": st.column_config.SelectboxColumn("Color", options=color_names),
             },
             key=editor_key,
@@ -347,7 +352,7 @@ def _render_item_setup_section() -> None:
         st.markdown("\n".join(f"- {issue}" for issue in saved_issues))
     else:
         st.success(f"Item Setup saved for KKG loads: {_selection_label()}.")
-    st.caption("Check Double Stack for items that can be stacked two high. Stacks stay within each load/PO row. Height and total weight are checked when building. Colors are assigned automatically by item number. Save Item Setup to apply edits.")
+    st.caption("Double Stack places two units on top of each other within a load/PO row. Half pallets cannot be stacked. The top of a double stack must be at least 6 inches below the truck roof. Colors are assigned by item number. Save Item Setup to apply edits.")
 
 
 def _apply_selected_item_presets(setup_rows: list[dict]) -> list[dict]:
@@ -404,6 +409,23 @@ def _render_load_selection() -> None:
         _ensure_item_setup_for_selected_load()
         st.session_state.truck_trucks = []
         st.session_state.truck_build_message = "Load selection changed. Save Item Setup and build the combined truck plan."
+
+    available_items = sorted({r.item_number for r in st.session_state.truck_normalized_records
+                              if r.kkg_load_number in selected and r.item_number})
+    item_key = "truck_item_selector"
+    context = tuple(selected)
+    if st.session_state.get("truck_item_selection_context") != context or item_key not in st.session_state:
+        st.session_state[item_key] = available_items
+        st.session_state.truck_item_selection_context = context
+    previous_items = st.session_state.get("truck_active_items")
+    items = st.multiselect("Items to include in this load", options=available_items, key=item_key)
+    st.caption("All items are selected initially. Remove items to plan only the products you need; the uploaded file stays parsed.")
+    active_items = tuple(items)
+    if previous_items != active_items:
+        st.session_state.truck_active_items = active_items
+        _ensure_item_setup_for_selected_load()
+        st.session_state.truck_trucks = []
+        st.session_state.truck_build_message = "Item selection changed. Save Item Setup and rebuild the plan."
 
     selected_records = _get_selected_records()
     unique_items = len({record.item_number for record in selected_records if record.item_number})
@@ -464,22 +486,20 @@ def _selection_label() -> str:
 
 def _get_selected_records():
     selected_loads = _selected_load_numbers()
+    items = st.session_state.get("truck_item_selector")
     return [
         record for record in st.session_state.truck_normalized_records
         if record.kkg_load_number in selected_loads
+        and (items is None or record.item_number in items)
     ]
 
 
 def _replace_selected_records(updated_records) -> None:
-    selected_load = st.session_state.truck_selected_load_number
-    updated_by_key = {
-        (record.kkg_load_number, record.retailer_po_number, record.item_number, index): record
-        for index, record in enumerate(updated_records)
-    }
-    updated_iter = iter(updated_by_key.values())
+    selected_ids = {id(record) for record in _get_selected_records()}
+    updated_iter = iter(updated_records)
     merged = []
     for record in st.session_state.truck_normalized_records:
-        if record.kkg_load_number in _selected_load_numbers():
+        if id(record) in selected_ids:
             merged.append(next(updated_iter))
         else:
             merged.append(record)
@@ -507,6 +527,7 @@ def _render_truck_selection_and_evaluate() -> None:
         f"{preset.length_in:g} x {preset.width_in:g} x {preset.height_in:g} inches; "
         f"legal max {preset.max_weight_lbs:,.0f} lbs"
     )
+    st.caption("Additional trucks of this type are added automatically when space or weight capacity is reached. Row quantities may be split; store, DC, and PO details stay attached to each pallet.")
 
     selected_load = st.session_state.truck_selected_load_number
     setup_confirmed = st.session_state.truck_item_setup_confirmed_by_load.get(selected_load, False)
@@ -553,13 +574,14 @@ def _evaluate_truck_plan(truck_preset: str, threshold: float) -> None:
     _replace_selected_records(records)
     st.session_state.truck_validated_records = st.session_state.truck_normalized_records
     st.session_state.truck_trucks = trucks
+    st.session_state.truck_manual_revision = st.session_state.get("truck_manual_revision", 0) + 1
     st.session_state.truck_load_summary = get_load_summary(st.session_state.truck_normalized_records)
     failed_count = sum(1 for truck in trucks if truck.validation_status == "error")
     if failed_count:
-        st.session_state.truck_build_message = f"Build complete: {failed_count} load(s) need attention."
+        st.session_state.truck_build_message = f"Build complete: {len(trucks) - failed_count} truck(s) planned; {failed_count} group(s) cannot fit and need review."
     else:
-        st.session_state.truck_build_message = "Build complete: all evaluated loads fit."
-    st.success("Truck plan evaluated.")
+        st.session_state.truck_build_message = f"Build complete: all items assigned across {len(trucks)} truck(s)."
+    st.success("Truck plan evaluated. Loads are split across additional trucks when needed.")
 
 
 def _render_truck_results() -> None:
@@ -591,7 +613,7 @@ def _render_truck_results() -> None:
             with col2:
                 st.metric("Weight", f"{truck.total_weight:.0f} lb")
             with col3:
-                st.metric("Floor Use", truck.utilization_display)
+                st.metric("Load Capacity", truck.load_capacity_display)
 
             st.caption(
                 f"Truck dimensions: {truck.truck_length:.0f} x {truck.truck_width:.0f} x "
@@ -610,7 +632,39 @@ def render_visualization_tab() -> None:
         st.info("Visualization appears after the truck plan is built.")
         return
 
+    _render_manual_editor()
     render_truck_visualization(st.session_state.truck_trucks)
+
+
+def _render_manual_editor() -> None:
+    trucks = st.session_state.truck_trucks
+    with st.expander("Edit truck assignments and pallet order"):
+        if any(truck.validation_status != "valid" for truck in trucks):
+            st.info("Resolve unassigned pallets before editing the plan.")
+            return
+        st.caption("Change Truck # to move a pallet or double stack. Enter a new truck number to add a truck. Change Order to adjust placement order within each truck. Double stacks move together. Save validates space, weight, and stacking; rebuilding replaces manual edits.")
+        revision = st.session_state.get("truck_manual_revision", 0)
+        with st.form(f"truck_manual_form_{revision}"):
+            edited = st.data_editor(
+                pd.DataFrame(assignment_rows(trucks)), hide_index=True,
+                use_container_width=True, num_rows="fixed",
+                disabled=["Pallet ID", "Item #", "Qty", "Store #", "DC #", "Load", "PO"],
+                column_config={
+                    "Truck #": st.column_config.NumberColumn("Truck #", min_value=1, step=1, required=True),
+                    "Order": st.column_config.NumberColumn("Order", min_value=1, step=1, required=True),
+                }, key=f"truck_manual_editor_{revision}")
+            save = st.form_submit_button("Save Manual Truck Plan")
+        if save:
+            try:
+                updated = apply_manual_assignments(trucks, edited.to_dict(orient="records"))
+            except ValueError as exc:
+                st.error(str(exc))
+                st.caption("The previous plan remains active. Correct the assignments and save again.")
+            else:
+                st.session_state.truck_trucks = updated
+                st.session_state.truck_manual_revision = revision + 1
+                st.session_state.truck_build_message = "Manual truck plan saved. Visualization and export use your assignments."
+                st.rerun()
 
 
 def render_export_tab() -> None:
@@ -636,7 +690,7 @@ def render_export_tab() -> None:
     )
     st.download_button(
         label="Download Required Excel",
-        data=export_required_columns_excel(_get_selected_records()),
+        data=export_required_columns_excel(_get_selected_records(), st.session_state.truck_trucks),
         file_name="truck_inventory_required_export.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,

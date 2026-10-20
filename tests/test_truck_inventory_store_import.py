@@ -55,6 +55,11 @@ class StoreImportTests(unittest.TestCase):
         self.assertEqual(validate_records(records)[1].errors, 1)
         self.assertIn('Missing Store #', records[0].validation_notes)
 
+    def test_fractional_quantity_is_not_silently_rounded_down(self):
+        records = self.parse([self.row(**{'QUANTITY': 1.5})])
+        self.assertIsNone(records[0].qty)
+        self.assertEqual(validate_records(records)[1].errors, 1)
+
     def test_original_load_sheet_format_still_imports(self):
         records = self.parse([{'KKG Load #': 'LOAD-1', 'Retailer PO #': 'PO-1', 'Item #': 'ITEM-1', 'Qty': 2}])
         self.assertEqual(records[0].kkg_load_number, 'LOAD-1')
