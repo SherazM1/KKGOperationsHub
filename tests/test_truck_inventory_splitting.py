@@ -40,6 +40,34 @@ class SplitTruckTests(unittest.TestCase):
         self.assertEqual([t.items_count for t in trucks], [2, 2, 1])
         self.assertTrue(all(t.total_weight <= 250 for t in trucks))
 
+    def test_export_load_suffix_matches_item_truck_and_quantity(self):
+        rows = [self.row(qty=5, kkg_load_number='DC 6006'),
+                self.row(qty=1, kkg_load_number='DC 6006', store_number='STORE-2')]
+        trucks = self.plan(rows)
+        data = pd.read_excel(BytesIO(export_required_columns_excel(rows, trucks)))
+        actual = data.groupby(['KKG Load #', 'Store #'])['Qty'].sum().to_dict()
+        expected = Counter()
+        for truck in trucks:
+            for box in truck.boxes:
+                expected[(f'DC 6006-{truck.truck_id}', box.store_number)] += box.represented_qty
+        self.assertEqual(actual, dict(expected))
+        self.assertEqual(data['Qty'].sum(), 6)
+        self.assertEqual(rows[0].kkg_load_number, 'DC 6006')
+
+    def test_export_duplicate_rows_preserves_assigned_quantities(self):
+        rows = [self.row(qty=3), self.row(qty=3)]
+        trucks = self.plan(rows)
+        data = pd.read_excel(BytesIO(export_required_columns_excel(rows, trucks)))
+        self.assertEqual(data.groupby('KKG Load #')['Qty'].sum().to_dict(),
+                         {f'LOAD-1-{t.truck_id}': t.items_count for t in trucks})
+
+    def test_export_failed_item_retains_unsuffixed_load(self):
+        rows = [self.row(qty=2, item_length=500), self.row(qty=1, item_number='GOOD')]
+        trucks = self.plan(rows)
+        data = pd.read_excel(BytesIO(export_required_columns_excel(rows, trucks)))
+        self.assertEqual(data.loc[data['Item #'] == 'ITEM-1', 'KKG Load #'].tolist(), ['LOAD-1'])
+        self.assertEqual(data['Qty'].sum(), 3)
+
     def test_backfills_earlier_trucks_to_reduce_truck_count(self):
         rows = [self.row(qty=2, item_number='HEAVY', item_weight=600, truck_max_weight=1000),
                 self.row(qty=2, item_number='LIGHT', item_weight=400, truck_max_weight=1000)]

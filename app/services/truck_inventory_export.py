@@ -181,6 +181,18 @@ def export_required_columns_csv(records: list[TruckInventoryRecord]) -> bytes:
 
 def export_required_columns_excel(records: list[TruckInventoryRecord], trucks: list[TruckSummary] | None = None) -> bytes:
     """Export planning identifiers, retaining store inventory details when present."""
+    def assignment_key(item, po):
+        return (item.kkg_load_number or "", po or "", item.item_number or "",
+                item.store_number or "", item.dc_number or "",
+                item.item_length or 0, item.item_width or 0,
+                item.item_height or 0, item.item_weight or 0)
+
+    allocations = {}
+    for truck in trucks or []:
+        for box in truck.boxes:
+            quantities = allocations.setdefault(assignment_key(box, box.retailer_po_number), {})
+            quantities[truck.truck_id] = quantities.get(truck.truck_id, 0) + box.represented_qty
+    
     rows = [
         {
             "KKG Load #": record.kkg_load_number,
@@ -201,7 +213,23 @@ def export_required_columns_excel(records: list[TruckInventoryRecord], trucks: l
                 "Pallet Height": record.item_height,
                 "Weight": record.item_weight,
             })
-    df = pd.DataFrame(rows)
+    assigned_rows = []
+    for row, record in zip(rows, records):
+        remaining = record.qty or 0
+        quantities = allocations.get(
+            assignment_key(record, record.retailer_po_number or record.po_number), {}
+        )
+        for truck_id, available in quantities.items():
+            qty = min(remaining, available)
+            if qty <= 0:
+                continue
+            assigned_rows.append({**row, "KKG Load #": f"{record.kkg_load_number or ''}-{truck_id}", "Qty": qty})
+            quantities[truck_id] -= qty
+            remaining -= qty
+        # Preserve unassigned quantities without implying a truck assignment.
+        if remaining or not record.qty:
+            assigned_rows.append({**row, "Qty": remaining if record.qty else record.qty})
+    df = pd.DataFrame(assigned_rows)
 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
