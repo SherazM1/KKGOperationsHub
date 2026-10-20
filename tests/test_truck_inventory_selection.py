@@ -7,6 +7,34 @@ from streamlit.testing.v1 import AppTest
 
 
 class SelectionTests(unittest.TestCase):
+    def test_guided_plan_review_and_settings_invalidation(self):
+        workbook = io.BytesIO()
+        pd.DataFrame([{'STORE #': '1', 'DC #': '6006', 'ITEM #': 'ITEM-A',
+                       'QUANTITY': 2, 'PALLET LENGTH': 48, 'PALLET WIDTH': 48,
+                       'PALLET HEIGHT': 30, 'WEIGHT': 100}]).to_excel(workbook, index=False)
+        workbook.name = 'store.xlsx'
+        workbook.seek(0)
+        app = AppTest.from_string('from app.ui.truck_inventory import render_truck_inventory_view\nrender_truck_inventory_view()')
+        app.session_state['truck_combined_file'] = workbook
+        app.run()
+        app.button(key='truck_process_btn').click().run()
+        self.assertFalse(app.exception)
+        next(button for button in app.button if button.label == 'Save Item Setup').click().run()
+        next(button for button in app.button if button.label == 'Build / Evaluate Truck Plan').click().run()
+        self.assertFalse(app.exception)
+        self.assertTrue(app.session_state['truck_trucks'])
+        next(button for button in app.button if button.label == 'Review truck plan').click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.radio(key='truck_workspace').value, 'Review & export')
+        app.radio(key='truck_workspace').set_value('Source data').run()
+        self.assertFalse(app.exception)
+        app.radio(key='truck_workspace').set_value('Plan').run()
+        self.assertEqual(app.multiselect(key='truck_item_selector').value, ['ITEM-A'])
+        app.selectbox(key='truck_preset').select('straight_box_truck_26_foot').run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.session_state['truck_trucks'])
+        self.assertEqual(app.number_input(key='truck_operational_weight_threshold').value, 8700)
+
     def test_parse_once_then_select_dc_and_items(self):
         workbook = io.BytesIO()
         pd.DataFrame([

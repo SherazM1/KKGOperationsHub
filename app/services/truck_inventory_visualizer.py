@@ -181,7 +181,14 @@ def render_truck_visualization(trucks: list[TruckSummary]) -> None:
     _render_selected_load_summary(trucks)
     st.caption("3D shows pallet heights and the truck frame. The 2D overhead view shows pallet positions and item key numbers. Both share item colors; = marks a double stack. Dimensions are inches.")
 
-    for truck in trucks:
+    visible_trucks = trucks
+    if len(trucks) > 1:
+        show_all = st.checkbox("Show all trucks", value=False)
+        if not show_all:
+            selected_id = st.selectbox("Truck to review", options=[truck.truck_id for truck in trucks],
+                                       format_func=lambda value: f"Truck {value}")
+            visible_trucks = [truck for truck in trucks if truck.truck_id == selected_id]
+    for truck in visible_trucks:
         _render_truck_header(truck)
         view_3d, view_2d = st.columns(2)
         with view_3d:
