@@ -118,3 +118,35 @@ def test_standard_totals_do_not_hide_missing_line_values():
     record.item_lines[0].total_weight = ""
     assert record.total_pallet is None
     assert record.total_ship_weight is None
+
+
+@pytest.mark.parametrize("csv", [False, True])
+@pytest.mark.parametrize("explicit_skids", [None, 5])
+def test_total_plt_qty_split_header(csv, explicit_skids):
+    """GC W1 adds QTY below Total PLT alongside the address headers."""
+    from openpyxl import load_workbook
+    from io import StringIO
+    import csv as csv_module
+
+    book = load_workbook(_split_workbook(explicit_skids=explicit_skids))
+    sheet = book.active
+    sheet.title = "Load Sheet"
+    sheet.cell(1, 18, "Total PLT")
+    sheet.cell(2, 18, "QTY")
+    sheet.cell(3, 18, 26)
+    source = BytesIO()
+    if csv:
+        text = StringIO()
+        csv_module.writer(text).writerows(sheet.values)
+        source.write(text.getvalue().encode())
+        source.name = "loads.csv"
+    else:
+        book.save(source)
+    source.seek(0)
+    rows = parse_standard_bol_excel(source)
+    assert len(rows) == 1
+    assert rows[0].source_row_number == 3
+    assert rows[0].dc_city_state_zip == "City, TX 012345678"
+    assert rows[0].item_description == "Test kit"
+    assert rows[0].plt_qty == ("5" if explicit_skids is not None else "26")
+    assert rows[0].source_values["Total PLT QTY"] == "26"
