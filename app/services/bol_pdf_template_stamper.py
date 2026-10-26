@@ -14,6 +14,7 @@ from pypdf.generic import ArrayObject, ContentStream, NameObject, TextStringObje
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
+from reportlab.pdfbase.pdfmetrics import stringWidth
 
 from app.models.bol_multistop_record import BolMultistopRecord
 from app.models.bol_standard_record import BolStandardItemLine, BolStandardRecord
@@ -178,6 +179,24 @@ class PdfTemplateConfig:
     max_item_rows: int
     totals: dict[str, TextBox]
     item_row_baselines: tuple[float, ...] = ()
+
+
+def _draw_bol_item_description(
+    canv: canvas.Canvas,
+    box: TextBox,
+    line: BolStandardItemLine,
+) -> None:
+    _draw_two_line_item_description(
+        canv,
+        box,
+        line,
+        description_size=9.0,
+        detail_size=8.0,
+        min_description_size=7.0,
+        min_detail_size=6.6,
+        leading=10.8,
+        second_line_y_offset=0.0,
+    )
 
 
 def _col_x(col_index: int) -> float:
@@ -977,6 +996,147 @@ def _draw_aligned_standard_header(canv: canvas.Canvas, values: dict[str, str]) -
         _draw_box_value(canv, replace(value_box, whiteout=False), values.get(field, ""))
 
 
+@dataclass(frozen=True)
+class PdfItemRow:
+    line: BolStandardItemLine
+    text_lines: tuple[str, ...]
+    height: float
+    font_size: float = 8.5
+    leading: float = 10.8
+    padding: float = 4.0
+
+
+ITEM_FONT_SIZE = 8.5
+ITEM_LEADING = 10.8
+ITEM_PADDING = 4.0
+ITEM_TABLE_COLUMNS = (21.6, 107.1, 147.6, 232.6, 480.7, 549.9, 602.6)
+
+
+def _item_table_bounds(config: PdfTemplateConfig) -> tuple[float, float]:
+    # Interior of the template's item body, above its totals/signature area.
+    return (394.7, 227.0) if config.mode == "No Recourse" else (272.5, 89.6)
+
+
+def _wrapped_item_text(text: str, width: float, font_size: float = ITEM_FONT_SIZE) -> list[str]:
+    """Wrap full descriptions, including explicit newlines and long item codes."""
+    lines = []
+    for paragraph in text.splitlines():
+        current = ""
+        for word in paragraph.split():
+            candidate = current + word
+            if current and stringWidth(candidate, FONT_NAME, font_size) > width:
+                lines.append(current.rstrip())
+                current = ""
+            for char in word:
+                if stringWidth(current + char, FONT_NAME, font_size) > width:
+                    lines.append(current.rstrip())
+                    current = ""
+                current += char
+            # Keep the separating space only when another word follows.
+            current += " "
+        lines.append(current.rstrip())
+    return lines
+
+
+def _paginate_standard_items(config: PdfTemplateConfig, record: BolStandardRecord) -> list[list[PdfItemRow]]:
+    """Fit every item on exactly one page, without a minimum font cutoff."""
+    top, bottom = _item_table_bounds(config)
+    capacity = top - bottom
+    lines = [line for line in _standard_item_lines(record, mode=config.mode) if _line_has_data(line)]
+
+    def layout(size: float, *, compact: bool) -> list[PdfItemRow]:
+        leading = size * 1.08 if compact else ITEM_LEADING
+        padding = size * 0.12 if compact else ITEM_PADDING
+        width = ITEM_TABLE_COLUMNS[4] - ITEM_TABLE_COLUMNS[3] - 2 * padding
+        rows = []
+        for line in lines:
+            text = _description_value(line)
+            if compact:
+                text = " ".join(text.split())
+            text_lines = tuple(_wrapped_item_text(text, width, size) or [""])
+            height = len(text_lines) * leading + 2 * padding
+            if not compact:
+                height = max(26.0, height)
+            rows.append(PdfItemRow(line, text_lines, height, size, leading, padding))
+        return rows
+
+    rows = layout(ITEM_FONT_SIZE, compact=False)
+    if sum(row.height for row in rows) <= capacity:
+        return [rows]
+    rows = layout(ITEM_FONT_SIZE, compact=True)
+    # Halving always finds a fit: both line height and padding shrink with
+    # the font. Never discard items or create a second page for a BOL.
+    upper = lower = ITEM_FONT_SIZE
+    while sum(row.height for row in rows) > capacity:
+        upper = lower
+        lower /= 2
+        rows = layout(lower, compact=True)
+    best = rows
+    for _ in range(20):
+        midpoint = (lower + upper) / 2
+        rows = layout(midpoint, compact=True)
+        if sum(row.height for row in rows) <= capacity:
+            lower, best = midpoint, rows
+        else:
+            upper = midpoint
+    return [best]
+
+
+def _draw_standard_item_table(
+    canv: canvas.Canvas, config: PdfTemplateConfig, rows: list[PdfItemRow], rendered_type: str,
+) -> None:
+    top, bottom = _item_table_bounds(config)
+    left, *_, right = ITEM_TABLE_COLUMNS
+    canv.saveState()
+    # Replace the uneven fixed rows, preserving the header and totals outside
+    # this rectangle. Redraw borders at the actual wrapped row boundaries.
+    canv.setFillColor(colors.white)
+    canv.rect(left, bottom, right - left, top - bottom, stroke=0, fill=1)
+    canv.setFillColor(colors.black)
+    canv.setStrokeColor(colors.black)
+    canv.setLineWidth(0.6)
+    for x in ITEM_TABLE_COLUMNS:
+        canv.line(x, bottom, x, top)
+    canv.line(left, top, right, top)
+    y = top
+    for row in rows:
+        line = row.line
+        values = (line.pallet_qty, rendered_type, line.po_number,
+                  "", line.skids, _display_weight(line))
+        for index, value in enumerate(values):
+            x0, x1 = ITEM_TABLE_COLUMNS[index:index + 2]
+            if index == 3:
+                canv.setFont(FONT_NAME, row.font_size)
+                baseline = y - row.padding - row.font_size
+                for text in row.text_lines:
+                    canv.drawString(x0 + row.padding, baseline, text)
+                    baseline -= row.leading
+            else:
+                text = _safe_text(value)
+                text_width = stringWidth(text, FONT_NAME, row.font_size)
+                available_width = x1 - x0 - 2 * row.padding
+                size = row.font_size * min(1.0, available_width / text_width) if text_width else row.font_size
+                canv.setFont(FONT_NAME, size)
+                canv.drawCentredString((x0 + x1) / 2, y - row.height / 2 - size * 0.35, text)
+        y -= row.height
+        canv.line(left, y, right, y)
+    canv.line(left, bottom, right, bottom)
+    canv.restoreState()
+
+
+def _standard_overlay_callbacks(
+    config: PdfTemplateConfig, record: BolStandardRecord, selected_facility: BolFacilityRecord,
+    **options: Any,
+) -> list[Callable[[canvas.Canvas], None]]:
+    rows = _paginate_standard_items(config, record)[0]
+    return [
+        lambda canv: _draw_standard_overlay(
+            canv, config, record, selected_facility, item_rows=rows,
+            **options,
+        )
+    ]
+
+
 def _draw_standard_overlay(
     canv: canvas.Canvas,
     config: PdfTemplateConfig,
@@ -988,6 +1148,7 @@ def _draw_standard_overlay(
     batch_comment: str | None,
     render_pickup_number: bool = True,
     multistop: bool = False,
+    item_rows: list[PdfItemRow] | None = None,
 ) -> None:
     # Individual stop PDFs use the standard templates but receive Multistop-only line removal.
     if config.mode == "No Recourse":
@@ -1038,56 +1199,9 @@ def _draw_standard_overlay(
 
     rendered_type = _normalize_bol_type(bol_type)
     item_lines = _standard_item_lines(record, mode=config.mode)
-    row_count = config.max_item_rows if config.mode == "No Recourse" else len(item_lines[: config.max_item_rows])
-    for row_offset in range(row_count):
-        row_baseline = (
-            config.item_row_baselines[row_offset]
-            if row_offset < len(config.item_row_baselines)
-            else config.item_start_y - row_offset * config.item_row_height
-        )
-        row_height = config.item_row_height - 2
-        line = item_lines[row_offset] if row_offset < len(item_lines) else None
-        values = (
-            {
-                "qty": line.pallet_qty,
-                "type": rendered_type,
-                "po": line.po_number,
-                "description": _description_value(line),
-                "skids": line.skids,
-                "weight": _display_weight(line),
-            }
-            if line is not None
-            else {
-                "qty": "",
-                "type": "",
-                "po": "",
-                "description": "",
-                "skids": "",
-                "weight": "",
-            }
-        )
-        for column_name, value in values.items():
-            base_box = config.item_columns[column_name]
-            if config.mode == "No Recourse" and row_offset == 0:
-                base_box = _no_recourse_first_row_box(column_name, base_box)
-            box = _box_at_row_baseline(base_box, row_baseline, row_height)
-            if config.mode == "No Recourse" and row_offset == 0 and column_name == "description" and line is not None:
-                _draw_no_recourse_first_row_description(canv, box, line)
-                continue
-            if config.mode == "Standard" and column_name == "description" and line is not None:
-                _draw_two_line_item_description(
-                    canv,
-                    box,
-                    line,
-                    description_size=9.0,
-                    detail_size=8.0,
-                    min_description_size=7.0,
-                    min_detail_size=6.6,
-                    leading=20,
-                    second_line_y_offset=10.0 if row_offset == 0 else 0.0,
-                )
-                continue
-            _draw_box_value(canv, box, value)
+    if item_rows is None:
+        item_rows = _paginate_standard_items(config, record)[0]
+    _draw_standard_item_table(canv, config, item_rows, rendered_type)
 
     total_qty, total_skids, total_weight = _standard_totals(record, item_lines, mode=config.mode)
     for total_name, value in {
@@ -1604,7 +1718,8 @@ def _stamp_template_pdf(
     *,
     template_path: Path,
     destination_pdf: Path,
-    draw_callback: Callable[[canvas.Canvas], None],
+    draw_callback: Callable[[canvas.Canvas], None] | None = None,
+    draw_callbacks: list[Callable[[canvas.Canvas], None]] | None = None,
     strip_known_tokens: bool = False,
     template_text_replacements: dict[str, str] | None = None,
 ) -> None:
@@ -1613,21 +1728,22 @@ def _stamp_template_pdf(
     if not template_reader.pages:
         raise RuntimeError(f"PDF template has no pages: {template_path}")
 
+    callbacks = draw_callbacks if draw_callbacks is not None else [draw_callback]
+    if not callbacks or any(callback is None for callback in callbacks):
+        raise ValueError("At least one PDF drawing callback is required.")
     writer = PdfWriter()
-    writer.add_page(template_reader.pages[0])
-
-    template_page = writer.pages[0]
-    _strip_template_placeholder_text(template_page, strip_known_tokens=strip_known_tokens)
-
-    if template_text_replacements:
-        _replace_template_text(
-            template_page,
-            template_text_replacements,
-        )
-
-    overlay_buffer = _create_overlay_pdf(template_page, draw_callback)
-    overlay_reader = PdfReader(overlay_buffer)
-    template_page.merge_page(overlay_reader.pages[0])
+    for callback in callbacks:
+        # Use an independent template page for each continuation. Reusing a
+        # writer clone would also copy the previous page's merged item text.
+        page_reader = PdfReader(str(template_path))
+        writer.add_page(page_reader.pages[0])
+        template_page = writer.pages[-1]
+        _strip_template_placeholder_text(template_page, strip_known_tokens=strip_known_tokens)
+        if template_text_replacements:
+            _replace_template_text(template_page, template_text_replacements)
+        overlay_buffer = _create_overlay_pdf(template_page, callback)
+        overlay_reader = PdfReader(overlay_buffer)
+        template_page.merge_page(overlay_reader.pages[0])
 
     with destination_pdf.open("wb") as output_file:
         writer.write(output_file)
@@ -1894,8 +2010,7 @@ def stamp_bol_pdf_set(
                     template_text_replacements={
                         "Broker of Record: ": "", "TRIDENT TRANSPORT,  LLC": "",
                     } if no_recourse else None,
-                    draw_callback=lambda canv: _draw_standard_overlay(
-                        canv,
+                    draw_callbacks=_standard_overlay_callbacks(
                         stop_config,
                         stop_record,
                         selected_facility,
@@ -1958,8 +2073,7 @@ def stamp_bol_pdf_set(
                     template_text_replacements={
                         "Broker of Record: ": "", "TRIDENT TRANSPORT,  LLC": "",
                     } if mode == "No Recourse" else None,
-                    draw_callback=lambda canv, record=record: _draw_standard_overlay(
-                        canv,
+                    draw_callbacks=_standard_overlay_callbacks(
                         config,
                         record,
                         selected_facility,

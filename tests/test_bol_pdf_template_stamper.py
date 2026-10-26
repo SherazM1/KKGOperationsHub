@@ -207,6 +207,104 @@ def _pdf_text(path: str) -> str:
 
 
 @pytest.mark.parametrize("mode", ["Standard", "No Recourse"])
+def test_excel_items_all_print_once_on_single_pdf_page(tmp_path: Path, mode: str) -> None:
+    from io import BytesIO
+    from openpyxl import Workbook
+    from app.services.bol_standard_parser import parse_standard_bol_excel
+    from app.services.bol_standard_mapper import map_standard_rows_to_records
+
+    book = Workbook()
+    sheet = book.active
+    sheet.append(["KK Load", "Carrier", "load#", "KK PO#", "BOL #", "ship date",
+                  "DC #", "DC NAME", "DC STREET", "DC CITY", "DC ST", "DC ZIP",
+                  "TGT PO #", "ITEM #", "UPC", "Pallet Description", "QTY",
+                  "TOTAL PALLETS", "weight each", "Total Weight"])
+    for index in range(14):
+        sheet.append(["KL-1", "Test Carrier", "PRO-1", "KKPO-1", "BOL-1", "2026-05-13",
+                      "1234", "Test DC", "123 Test St", "Dallas", "TX", "75001",
+                      "PO-1", f"ITEM{index:03d}", f"{index:012d}",
+                      f"Description{index:03d} with a long product name and packaging instructions "
+                      "that must wrap inside the item description column",
+                      2, 1, 100, 100])
+    upload = BytesIO()
+    book.save(upload)
+    upload.seek(0)
+    facility = BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]]
+    records = map_standard_rows_to_records(parse_standard_bol_excel(upload), facility)
+    assert len(records) == 1
+    assert len(records[0].item_lines) == 14
+    assert records[0].is_ready
+    result = stamp_bol_pdf_set(
+        records, facility, [_docx_file(tmp_path, 'items.docx', 'BOL-1')],
+        mode=mode, output_dir=tmp_path / 'pdf',
+    )
+    assert result.failed_count == 0, result.failed_conversions
+    reader = PdfReader(result.converted_files[0].file_path)
+    assert len(reader.pages) == 1
+    text = ' '.join(_pdf_text(result.converted_files[0].file_path).split())
+    for index in range(14):
+        assert text.count(f"Description{index:03d}") == 1
+        assert text.count(f"Item #: ITEM{index:03d}") == 1
+    assert "TOTALS" in reader.pages[-1].extract_text()
+    assert "CONTINUED" not in text
+
+
+@pytest.mark.parametrize("config", [STANDARD_CONFIG, NO_RECOURSE_CONFIG])
+def test_wrapped_descriptions_stay_inside_rows_and_preserve_long_text(config) -> None:
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    from app.services.bol_pdf_template_stamper import (
+        _paginate_standard_items, _item_table_bounds, ITEM_TABLE_COLUMNS, FONT_NAME,
+    )
+    record = _standard_record()
+    description = " ".join(f"Word{index:03d}" for index in range(500)) + "\n" + "X" * 150
+    record.item_lines[0].item_description = description
+    pages = _paginate_standard_items(config, record)
+    assert len(pages) == 1
+    expected = "".join((description + 'Item #: ITEM1 UPC #: 000111222333').split())
+    printed = "".join(''.join(row.text_lines).replace(' ', '') for page in pages for row in page)
+    assert printed == expected
+    top, bottom = _item_table_bounds(config)
+    for page in pages:
+        assert sum(row.height for row in page) <= top - bottom
+        for row in page:
+            assert len(row.text_lines) * row.leading + 2 * row.padding <= row.height
+            row_width = ITEM_TABLE_COLUMNS[4] - ITEM_TABLE_COLUMNS[3] - 2 * row.padding
+            assert all(stringWidth(text, FONT_NAME, row.font_size) <= row_width for text in row.text_lines)
+    assert len(pages[0]) == 1
+
+
+@pytest.mark.parametrize("mode", ["Standard", "No Recourse"])
+@pytest.mark.parametrize("count", [6, 10, 40])
+def test_pdf_always_shrinks_to_one_page(tmp_path: Path, mode: str, count: int) -> None:
+    from app.services.bol_pdf_template_stamper import _paginate_standard_items
+    record = _standard_record()
+    record.item_lines = [replace(
+        record.item_lines[0], item_number=f'ITEM{index:03d}', upc=f'{index:012d}',
+        item_description=f'Product{index:03d} retail display assortment with printed panels, '
+                         'shelf dividers, hardware and packaging for store delivery',
+    ) for index in range(count)]
+    config = STANDARD_CONFIG if mode == 'Standard' else NO_RECOURSE_CONFIG
+    pages = _paginate_standard_items(config, record)
+    assert len(pages) == 1
+    assert len(pages[0]) == count
+    assert 0 < pages[0][0].font_size <= 8.5
+    if count == 40:
+        assert pages[0][0].font_size < 6.0
+    assert len({row.font_size for row in pages[0]}) == 1
+    result = stamp_bol_pdf_set(
+        [record], BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]],
+        [_docx_file(tmp_path, 'ten-items.docx', record.bol_number)],
+        mode=mode, output_dir=tmp_path / 'pdf',
+    )
+    assert result.failed_count == 0, result.failed_conversions
+    assert len(PdfReader(result.converted_files[0].file_path).pages) == 1
+    text = ' '.join(_pdf_text(result.converted_files[0].file_path).split())
+    for index in range(count):
+        assert text.count(f'Product{index:03d}') == 1
+        assert text.count(f'Item #: ITEM{index:03d}') == 1
+
+
+@pytest.mark.parametrize("mode", ["Standard", "No Recourse"])
 @pytest.mark.parametrize("shipwell", ["SW-001234", ""])
 def test_downloaded_pdf_has_shipwell_header(tmp_path: Path, mode: str, shipwell: str) -> None:
     record = _standard_record()
