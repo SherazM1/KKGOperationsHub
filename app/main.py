@@ -25,13 +25,12 @@ from app.services.excel_reader_andersons import (
 from app.services.excel_reader_sams import read_excel_sams
 from app.services.excel_reader_sams_gci import read_excel_sams_gci
 from app.services.excel_reader_skid_tags import read_excel_skid_tags
-from app.services.docx_generator_skid_tags import generate_skid_tags_docx
+from app.services.skid_tag_batches import generate_skid_tag_batches, zip_skid_tag_batches
 from app.services.pdf_generator_albertsons import generate_albertsons_pdf
 from app.services.pdf_generator_andersons import generate_andersons_pdf
 from app.services.pdf_generator import generate_label_pdf
 from app.services.pdf_generator_sams import generate_sams_pdf
 from app.services.pdf_generator_sams_gci import generate_sams_gci_pdf
-from app.services.pdf_generator_skid_tags import generate_skid_tags_pdf
 from app.spec_sheet_extractor.page import render_spec_sheet_extractor_view
 from app.ui.bol_generator import render_bol_generator_view
 from app.ui.truck_inventory import render_truck_inventory_view
@@ -652,11 +651,14 @@ def render_skid_tags() -> None:
         st.info("Upload an Excel file to begin.")
         return
 
-    file_signature = (uploaded_file.name, uploaded_file.size)
+    file_signature = (uploaded_file.name, uploaded_file.size, uploaded_file.getvalue())
     if st.session_state.get("skid_tags_file_signature") != file_signature:
         st.session_state["skid_tags_file_signature"] = file_signature
         st.session_state.pop("skid_tags_docx_bytes", None)
         st.session_state.pop("skid_tags_pdf_bytes", None)
+        st.session_state.pop("skid_tags_batches", None)
+        st.session_state.pop("skid_tags_zip", None)
+        st.session_state.pop("skid_tags_pdf_zip", None)
 
     try:
         tags = read_excel_skid_tags(uploaded_file)
@@ -675,10 +677,25 @@ def render_skid_tags() -> None:
         f"across {dc_count} DCs and {po_count} POs."
     )
 
+    group_by_dc = st.radio(
+        "Group by DC", ["No", "Yes"], horizontal=True, key="skid_tags_group_by_dc",
+        help="Yes creates a separate DOCX and PDF batch for each DC number.",
+    ) == "Yes"
+    if st.session_state.get("skid_tags_output_grouped") != group_by_dc:
+        st.session_state.pop("skid_tags_batches", None)
+        st.session_state.pop("skid_tags_zip", None)
+        st.session_state.pop("skid_tags_pdf_zip", None)
+
     if st.button("Generate SKID Tags", type="primary", key="generate_skid_tags"):
+        st.session_state.pop("skid_tags_batches", None)
+        st.session_state.pop("skid_tags_zip", None)
+        st.session_state.pop("skid_tags_pdf_zip", None)
         try:
-            st.session_state["skid_tags_docx_bytes"] = generate_skid_tags_docx(tags)
-            st.session_state["skid_tags_pdf_bytes"] = generate_skid_tags_pdf(tags)
+            batches = generate_skid_tag_batches(tags, group_by_dc=group_by_dc)
+            archive = zip_skid_tag_batches(batches) if group_by_dc else None
+            st.session_state["skid_tags_batches"] = batches
+            st.session_state["skid_tags_zip"] = archive
+            st.session_state["skid_tags_output_grouped"] = group_by_dc
         except ValueError as exc:
             st.error(f"Generation error: {exc}")
             return
@@ -686,29 +703,47 @@ def render_skid_tags() -> None:
             st.error(f"Unexpected generation error: {exc}")
             return
 
-    docx_bytes = st.session_state.get("skid_tags_docx_bytes")
-    pdf_bytes = st.session_state.get("skid_tags_pdf_bytes")
-    if docx_bytes and pdf_bytes:
+    batches = st.session_state.get("skid_tags_batches", [])
+    archive = st.session_state.get("skid_tags_zip")
+    if batches and archive:
+        st.download_button(
+            "Download all DC batches — DOCX + PDF (ZIP)", data=archive,
+            file_name="skid_tags_by_dc.zip", mime="application/zip",
+            key="download_skid_tags_zip", use_container_width=True,
+        )
+        if "skid_tags_pdf_zip" not in st.session_state:
+            st.session_state["skid_tags_pdf_zip"] = zip_skid_tag_batches(
+                batches, include_docx=False,
+            )
+        st.download_button(
+            "Download all DC PDFs (ZIP)", data=st.session_state["skid_tags_pdf_zip"],
+            file_name="skid_tags_by_dc_pdfs_only.zip", mime="application/zip",
+            key="download_skid_tags_pdf_zip", use_container_width=True,
+        )
+    for index, batch in enumerate(batches):
+        if group_by_dc:
+            st.subheader(f"DC {batch.dc or 'Unknown'}")
+            st.caption(f"{batch.tag_count} SKID tag pages")
         docx_col, pdf_col = st.columns(2)
         with docx_col:
             st.download_button(
                 label="Download SKID Tags DOCX",
-                data=docx_bytes,
-                file_name="skid_tags.docx",
+                data=batch.docx,
+                file_name=f"{batch.file_stem}.docx",
                 mime=(
                     "application/vnd.openxmlformats-officedocument."
                     "wordprocessingml.document"
                 ),
-                key="download_skid_tags_docx",
+                key=f"download_skid_tags_docx_{index}",
                 use_container_width=True,
             )
         with pdf_col:
             st.download_button(
                 label="Download SKID Tags PDF",
-                data=pdf_bytes,
-                file_name="skid_tags.pdf",
+                data=batch.pdf,
+                file_name=f"{batch.file_stem}.pdf",
                 mime="application/pdf",
-                key="download_skid_tags_pdf",
+                key=f"download_skid_tags_pdf_{index}",
                 use_container_width=True,
             )
 

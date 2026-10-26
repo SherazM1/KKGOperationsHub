@@ -964,7 +964,7 @@ def _build_individual_stop_standard_record(
         bill_to=record.bill_to,
         seal_number_blank="",
         comments=record.comments,
-        item_lines=[
+        item_lines=stop.item_lines or [
             BolStandardItemLine(
                 source_row_number=stop.source_row_number,
                 pallet_qty=stop.cases,

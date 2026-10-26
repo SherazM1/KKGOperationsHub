@@ -776,6 +776,57 @@ def test_standard_template_stamper_does_not_configure_whiteout_boxes() -> None:
     assert all(not box.whiteout for box in boxes)
 
 
+@pytest.mark.parametrize("no_recourse", [False, True])
+def test_multistop_pdf_renders_each_source_item_and_filters_individual_stops(tmp_path: Path, no_recourse: bool) -> None:
+    record = _multistop_record()
+    for stop_index, stop in enumerate(record.stops):
+        stop.item_lines = [BolStandardItemLine(
+            source_row_number=10 * stop_index + index,
+            pallet_qty=str(index + 1), type="CASE",
+            po_number=f"PO-{stop_index}-{index}",
+            item_description=f"Product {stop_index}-{index}",
+            item_number=f"ITEM-{stop_index}-{index}", upc=f"1234567890{stop_index}{index}",
+            skids="1", weight_each=str(100 + 10 * stop_index + index),
+        ) for index in range(3)]
+    record.item_lines = [line for stop in record.stops for line in stop.item_lines]
+    source = tmp_path / "placeholder.docx"
+    source.write_bytes(b"placeholder")
+    generated = [MultistopGeneratedDocxFile(
+        bol_number=record.bol_number, file_name=source.name, file_path=str(source),
+        document_type="combined", load_number=record.load_number, stop_number=None,
+    )]
+    for index, stop in enumerate(record.stops):
+        stop_source = tmp_path / f"stop_{index}.docx"
+        stop_source.write_bytes(b"placeholder")
+        generated.append(MultistopGeneratedDocxFile(
+            bol_number=stop.bol_number or record.bol_number,
+            file_name=stop_source.name, file_path=str(stop_source),
+            document_type="stop", load_number=record.load_number, stop_number=stop.stop_number,
+        ))
+    result = stamp_bol_pdf_set(
+        [record], BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]], generated,
+        mode="Multistop", multistop_no_recourse=no_recourse, output_dir=tmp_path,
+    )
+    assert not result.failed_conversions
+    assert len(result.converted_files) == 3
+    for pdf in result.converted_files:
+        page = PdfReader(pdf.file_path).pages[0]
+        text = page.extract_text()
+        rows = []
+        page.extract_text(visitor_text=lambda text, cm, tm, font, size: rows.append((text.strip(), tm[5], size)) if text.strip().startswith(("PO-0-", "PO-1-")) else None)
+        indices = range(2) if pdf.document_type == "combined" else [pdf.stop_number - 1]
+        for stop_index in indices:
+            for index in range(3):
+                assert f"PO-{stop_index}-{index}" in text
+                assert f"Product {stop_index}-{index}" in text
+                assert f"ITEM-{stop_index}-{index}" in text
+        assert len(rows) == (6 if pdf.document_type == "combined" else 3)
+        assert len({round(row[1], 1) for row in rows}) == len(rows)
+        assert min(row[2] for row in rows) >= 7
+        if pdf.document_type == "stop":
+            assert f"PO-{2 - pdf.stop_number}-0" not in text
+
+
 def test_multistop_template_stamper_creates_pdf(tmp_path: Path) -> None:
     source = tmp_path / "combined_multistop_bol_MBOL-001_LOAD-001.docx"
     source.write_bytes(b"placeholder")

@@ -9,6 +9,43 @@ from app.services.bol_multistop_parser import (
     _resolve_columns,
     parse_multistop_bol_excel,
 )
+from app.services.bol_multistop_mapper import map_multistop_rows_to_records
+
+
+def test_split_header_load_sheet_infers_stops_and_totals_all_item_rows():
+    from openpyxl import Workbook
+
+    original = _multistop_load_row()
+    for key in ("Stop", "COUNTRY", "DC City, State, Zip"):
+        original.pop(key)
+    renames = {"DCST": "DC", "DCZIP": "DC", "TGT PO #": "RETAILER PO #",
+               "PalletDescription": "Pallet", "Cases": "Units", "Total PLT": "PLT QTY"}
+    keys = list(original)
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Load Sheet"
+    sheet.append([renames.get(key, key) for key in keys])
+    sheet.append([{"DCST": "ST", "DCZIP": "ZIP", "PalletDescription": "Description"}.get(key) for key in keys])
+    for dc, cases, pallets, weight in [("1234", 10, 2, 100), ("5678", 5, 1, 50), ("1234", 20, 3, 150)]:
+        row = dict(original, **{"DC #": dc, "Cases": cases, "Total PLT": pallets, "Weight": weight})
+        sheet.append([row[key] for key in keys])
+    file = BytesIO()
+    book.save(file)
+    rows = parse_multistop_bol_excel(file)
+    assert [row.source_row_number for row in rows] == [3, 4, 5]
+    assert [row.stop_number for row in rows] == [1, 2, 1]
+    assert rows[0].dc_state == "TX"
+    assert rows[0].dc_zip == "75001"
+    record, = map_multistop_rows_to_records(rows)
+    assert record.is_ready
+    assert record.stop_count == 2
+    assert record.total_case == 35
+    assert record.total_pallet == 6
+    assert record.total_ship_weight == 300
+    assert record.stops[0].cases == "30"
+    assert record.stops[0].total_pallets == "5"
+    assert record.stops[0].weight == "250"
+    assert len(record.item_lines) == 3
 
 
 def _multistop_load_row() -> dict[str, object]:

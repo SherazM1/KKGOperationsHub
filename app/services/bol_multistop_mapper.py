@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import replace
 
 from app.models.bol_multistop_record import BolMultistopRecord, BolMultistopStop
 from app.models.bol_multistop_row import BolMultistopRow
@@ -253,6 +254,19 @@ def map_multistop_rows_to_records(rows: list[BolMultistopRow]) -> list[BolMultis
 
             distinct_stops.add(row.stop_number)
             if row.stop_number in rows_by_stop:
+                if row.stop_inferred and rows_by_stop[row.stop_number].stop_inferred:
+                    previous = rows_by_stop[row.stop_number]
+                    updates = {}
+                    for attr in ("cases", "total_pallets", "weight"):
+                        total, _ = _sum_numeric([previous, row], attr, attr, issues)
+                        updates[attr] = f"{total:g}"
+                    for attr in ("target_po_number", "pallet_description", "item_number", "upc"):
+                        updates[attr] = "; ".join(dict.fromkeys(
+                            part for value in (getattr(previous, attr), getattr(row, attr))
+                            for part in value.split("; ") if part
+                        ))
+                    rows_by_stop[row.stop_number] = replace(previous, **updates)
+                    continue
                 validation_warnings.append(
                     f"Duplicate Stop {row.stop_number} rows found; using first row in mapping."
                 )
@@ -279,7 +293,14 @@ def map_multistop_rows_to_records(rows: list[BolMultistopRow]) -> list[BolMultis
             ):
                 continue
             used_stop_numbers.add(stop_number)
-            stop = _build_stop(row, stop_number)
+            stop = _build_stop(rows_by_stop[stop_number], stop_number)
+            if row.stop_inferred:
+                stop.item_lines = [
+                    line for source in group_rows if source.stop_number == stop_number
+                    for line in _build_item_lines(
+                        [_build_stop(source, stop_number)], {stop_number: source}
+                    )
+                ]
             ordered_stops.append(stop)
             issues.extend(_validate_stop_fields(stop))
 
@@ -397,7 +418,14 @@ def map_multistop_rows_to_records(rows: list[BolMultistopRow]) -> list[BolMultis
             bill_to=bill_to,
             seal_number_blank="",
             comments="",
-            item_lines=_build_item_lines(ordered_stops, rows_by_stop),
+            item_lines=(
+                [line for row in group_rows
+                 for line in _build_item_lines(
+                     [_build_stop(row, row.stop_number)], {row.stop_number: row}
+                 )]
+                if all(row.stop_inferred for row in group_rows)
+                else _build_item_lines(ordered_stops, rows_by_stop)
+            ),
             total_skids=total_case,
             is_ready=False,
             status="Missing Required Data",
@@ -409,6 +437,12 @@ def map_multistop_rows_to_records(rows: list[BolMultistopRow]) -> list[BolMultis
             issues=list(dict.fromkeys(issues + consistency_warnings + validation_warnings)),
             is_supported=not (stop_count > MAX_SUPPORTED_STOPS or has_unsupported_stops),
         )
+
+        if any(row.stop_inferred for row in group_rows):
+            record.warnings.append(
+                "Stop numbers inferred from destination order within the load; "
+                "item rows at each destination are combined into stop totals."
+            )
 
         if stop_count > MAX_SUPPORTED_STOPS or has_unsupported_stops:
             record.is_ready = False

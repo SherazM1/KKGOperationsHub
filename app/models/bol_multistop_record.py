@@ -27,6 +27,8 @@ class BolMultistopStop:
     total_pallets: str
     weight: str
 
+    item_lines: list[BolStandardItemLine] = field(default_factory=list)
+
     def __post_init__(self) -> None:
         self.delivery_address, self.delivery_city_state_zip = normalize_bol_address(
             self.delivery_dc, self.delivery_address, self.delivery_city_state_zip

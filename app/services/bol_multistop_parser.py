@@ -65,8 +65,9 @@ REQUIRED_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "dc_state": ("DC ST", "DC State", "DC STATE", "State", "STATE", "ST"),
     "dc_zip": ("DC ZIP", "DC Zip", "Zip", "ZIP", "Zip Code", "ZIP Code", "Postal Code"),
     "dept": ("DEP.", "DEP", "Dept", "Department"),
+    "target_po_number": ("RETAILER PO #", "Retailer PO", "PO #", "Customer PO #"),
     "pallet_description": ("Pallet Description", "PALLETDESCRIPTION"),
-    "cases": ("CASES", "Case Qty", "Case QTY", "Case Quantity", "CASE QTY"),
+    "cases": ("CASES", "Case Qty", "Case QTY", "Case Quantity", "CASE QTY", "Units"),
     "total_pallets": (
         "Total PLT",
         "TOTAL PLT",
@@ -75,6 +76,8 @@ REQUIRED_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "Total Pallet",
         "Total Plts",
         "Total PLTS",
+        "PLT QTY",
+        "Pallet Qty",
     ),
     "weight_each": ("Weight Each", "WEIGHT EACH", "Weight", "WEIGHT"),
 }
@@ -196,7 +199,7 @@ def _resolve_columns_with_missing(columns: list[str]) -> tuple[dict[str, str], l
         resolved_name = _resolve_column_name(lookups, source_name, aliases)
 
         if resolved_name is None:
-            if logical_name == "dc_city_state_zip":
+            if logical_name in {"dc_city_state_zip", "stop", "country"}:
                 continue
             missing.append(f"{logical_name} (expected '{source_name}')")
         else:
@@ -293,12 +296,33 @@ def _combine_city_state_zip_from_values(row_values: dict[str, str]) -> str:
     return " ".join(part for part in (city_state, zip_code) if part)
 
 
+def _normalize_multistop_headers(df: pd.DataFrame) -> pd.DataFrame:
+    """Join recognized split header cells without consuming a shipment row."""
+    if df.empty:
+        return df
+    split_headers = {("DC", "ST"): "DCST", ("DC", "ZIP"): "DCZIP",
+                     ("PALLET", "DESCRIPTION"): "PalletDescription"}
+    renames = {}
+    for column in df.columns:
+        # pandas appends .1 to duplicate first-row headers.
+        top = re.sub(r"\.\d+$", "", str(column)).strip().upper()
+        bottom = _coerce_to_string(df.iloc[0][column]).upper()
+        combined = split_headers.get((top, bottom))
+        if combined:
+            renames[column] = combined
+    if renames:
+        return df.rename(columns=renames).iloc[1:]
+    return df
+
+
 def _parse_multistop_dataframe_rows(
     df: pd.DataFrame,
     column_map: dict[str, str],
     optional_column_map: dict[str, str],
 ) -> list[BolMultistopRow]:
     parsed_rows: list[BolMultistopRow] = []
+    inferred_stops: dict[tuple[str, str, str, str], int] = {}
+    stops_per_load: dict[str, int] = {}
     for index, row in df.iterrows():
         row_number = int(index) + 2
         row_values = {
@@ -313,9 +337,20 @@ def _parse_multistop_dataframe_rows(
         if not any(row_values.values()):
             continue
 
+        inferred = "stop" not in column_map
+        if inferred:
+            load = row_values["kk_load"]
+            destination = (load, row_values["dc_number"], row_values["dc_address"],
+                           _combine_city_state_zip_from_values(row_values))
+            if destination not in inferred_stops:
+                stops_per_load[load] = stops_per_load.get(load, 0) + 1
+                inferred_stops[destination] = stops_per_load[load]
+            row_values["stop"] = str(inferred_stops[destination])
+
         parsed_rows.append(
             BolMultistopRow(
                 source_row_number=row_number,
+                stop_inferred=inferred,
                 kk_load=row_values["kk_load"],
                 stop=row_values["stop"],
                 stop_number=_parse_stop_number(row_values["stop"]),
@@ -360,6 +395,7 @@ def _parse_multistop_bol_csv(file: Any) -> list[BolMultistopRow]:
     if df.empty:
         raise ValueError("CSV file contains no rows.")
 
+    df = _normalize_multistop_headers(df)
     columns = df.columns.tolist()
     column_map = _resolve_columns(columns, worksheet_name=CSV_WORKSHEET_NAME)
     optional_column_map = _resolve_optional_columns(columns)
@@ -390,6 +426,7 @@ def parse_multistop_bol_excel(file: Any) -> list[BolMultistopRow]:
     if df.empty:
         raise ValueError(f"Worksheet '{resolved_sheet_name}' contains no rows.")
 
+    df = _normalize_multistop_headers(df)
     columns = df.columns.tolist()
     column_map = _resolve_columns(columns, worksheet_name=resolved_sheet_name)
     optional_column_map = _resolve_optional_columns(columns)

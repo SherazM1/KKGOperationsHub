@@ -1014,6 +1014,8 @@ ITEM_TABLE_COLUMNS = (21.6, 107.1, 147.6, 232.6, 480.7, 549.9, 602.6)
 
 def _item_table_bounds(config: PdfTemplateConfig) -> tuple[float, float]:
     # Interior of the template's item body, above its totals/signature area.
+    if config.mode == "Multistop":
+        return (293.7, 95.5)
     return (394.7, 227.0) if config.mode == "No Recourse" else (272.5, 89.6)
 
 
@@ -1038,7 +1040,9 @@ def _wrapped_item_text(text: str, width: float, font_size: float = ITEM_FONT_SIZ
     return lines
 
 
-def _paginate_standard_items(config: PdfTemplateConfig, record: BolStandardRecord) -> list[list[PdfItemRow]]:
+def _paginate_standard_items(
+    config: PdfTemplateConfig, record: BolStandardRecord, *, preserve_detail_lines: bool = False,
+) -> list[list[PdfItemRow]]:
     """Fit every item on exactly one page, without a minimum font cutoff."""
     top, bottom = _item_table_bounds(config)
     capacity = top - bottom
@@ -1051,7 +1055,7 @@ def _paginate_standard_items(config: PdfTemplateConfig, record: BolStandardRecor
         rows = []
         for line in lines:
             text = _description_value(line)
-            if compact:
+            if compact and not preserve_detail_lines:
                 text = " ".join(text.split())
             text_lines = tuple(_wrapped_item_text(text, width, size) or [""])
             height = len(text_lines) * leading + 2 * padding
@@ -1084,6 +1088,7 @@ def _paginate_standard_items(config: PdfTemplateConfig, record: BolStandardRecor
 
 def _draw_standard_item_table(
     canv: canvas.Canvas, config: PdfTemplateConfig, rows: list[PdfItemRow], rendered_type: str,
+    *, multistop_columns: bool = False,
 ) -> None:
     top, bottom = _item_table_bounds(config)
     left, *_, right = ITEM_TABLE_COLUMNS
@@ -1101,8 +1106,7 @@ def _draw_standard_item_table(
     y = top
     for row in rows:
         line = row.line
-        values = (line.pallet_qty, rendered_type, line.po_number,
-                  "", line.skids, _display_weight(line))
+        values = ((line.type, line.pallet_qty) if multistop_columns else (line.pallet_qty, rendered_type)) + (line.po_number, "", line.skids, _display_weight(line))
         for index, value in enumerate(values):
             x0, x1 = ITEM_TABLE_COLUMNS[index:index + 2]
             if index == 3:
@@ -1527,6 +1531,50 @@ def _draw_multistop_terms(
     )
 
 
+def _draw_multistop_item_table(canv, config, record):
+    """Render source items, with their own DC/PO/quantity, below delivery blocks."""
+    lines = []
+    for stop in record.stops:
+        source_lines = stop.item_lines or [BolStandardItemLine(
+            source_row_number=stop.source_row_number, pallet_qty=stop.cases,
+            type="", po_number=stop.target_po_number,
+            item_description=stop.pallet_description, item_number=stop.item_number,
+            upc=stop.upc, skids=stop.total_pallets, weight_each=stop.weight,
+        )]
+        lines.extend(replace(line, type=stop.dc_number) for line in source_lines)
+    rows = _paginate_standard_items(config, replace(record, item_lines=lines), preserve_detail_lines=True)[0]
+    _draw_standard_item_table(canv, config, rows, "", multistop_columns=True)
+    top, bottom = _item_table_bounds(config)
+    columns = ITEM_TABLE_COLUMNS
+    canv.saveState()
+    canv.setFillColor(colors.white)
+    canv.rect(columns[0], top, columns[-1] - columns[0], 15, stroke=0, fill=1)
+    canv.setFillColor(colors.black)
+    canv.setStrokeColor(colors.black)
+    canv.setLineWidth(0.6)
+    canv.setFont(FONT_NAME, 8.5)
+    for index, text in enumerate(("DC", "CASE", "PO #", "ITEM DESCRIPTION", "PALLET", "WEIGHT")):
+        x0, x1 = columns[index:index + 2]
+        canv.drawCentredString((x0 + x1) / 2, top + 4, text)
+    for x in columns:
+        canv.line(x, top, x, top + 15)
+    canv.line(columns[0], top + 15, columns[-1], top + 15)
+    canv.line(columns[0], top, columns[-1], top)
+    # Replace the old totals cells too, so their borders match the new columns.
+    canv.setFillColor(colors.white)
+    canv.rect(columns[0], bottom - 19, columns[-1] - columns[0], 19, stroke=0, fill=1)
+    canv.setFillColor(colors.black)
+    canv.setFont(FONT_BOLD, 8.5)
+    totals = ("", _format_number(record.total_case), "", "TOTALS",
+              _format_number(record.total_pallet), _format_number(record.total_ship_weight))
+    for index, text in enumerate(totals):
+        canv.drawCentredString((columns[index] + columns[index + 1]) / 2, bottom - 13, text)
+    for x in columns:
+        canv.line(x, bottom - 19, x, bottom)
+    canv.line(columns[0], bottom - 19, columns[-1], bottom - 19)
+    canv.restoreState()
+
+
 def _draw_multistop_overlay(
     canv: canvas.Canvas,
     config: PdfTemplateConfig,
@@ -1557,59 +1605,7 @@ def _draw_multistop_overlay(
     # Draw Standard or No Recourse paragraph
     _draw_multistop_terms(canv, no_recourse)
 
-    # Draw each delivery/item row
-    for row_offset, stop in enumerate(
-        record.stops[: config.max_item_rows]
-    ):
-        row_baseline = (
-            config.item_row_baselines[row_offset]
-            if row_offset < len(config.item_row_baselines)
-            else config.item_start_y - row_offset * config.item_row_height
-        )
-
-        row_values = {
-            "dc": stop.dc_number,
-            "case": stop.cases,
-            "po": stop.target_po_number,
-            "description": _multistop_pdf_description(stop),
-            "pallet": stop.total_pallets,
-            "weight": stop.weight,
-        }
-
-        for column_name, value in row_values.items():
-            base_box = config.item_columns[column_name]
-            box = _box_at_row_baseline(
-                base_box,
-                row_baseline,
-                config.item_row_height - 3,
-            )
-
-            if column_name == "description":
-                _draw_multistop_description(
-                    canv,
-                    box,
-                    stop,
-                )
-                continue
-
-            _draw_box_value(
-                canv,
-                box,
-                value,
-            )
-
-    # Draw totals at the bottom
-    for total_name, value in {
-        "case": _format_number(record.total_case),
-        "label": "TOTALS",
-        "pallet": _format_number(record.total_pallet),
-        "weight": _format_number(record.total_ship_weight),
-    }.items():
-        _draw_box_value(
-            canv,
-            config.totals[total_name],
-            value,
-        )
+    _draw_multistop_item_table(canv, config, record)
 
     # Draw the No Recourse footer only for No Recourse Multistop.
     if no_recourse:
@@ -1670,31 +1666,7 @@ def _draw_no_recourse_multistop_overlay(
             multiline=True, leading=10, whiteout=False,
         ), values[f"delivery_{index}_address"])
 
-    _draw_box_value(canv, config.item_columns["qty_header"], "DC")
-    for index, stop in enumerate(record.stops[:3]):
-        baseline = config.item_row_baselines[index]
-        for column, value in {
-            "qty": stop.dc_number, "type": stop.cases, "po": stop.target_po_number,
-            "skids": stop.total_pallets, "weight": stop.weight,
-        }.items():
-            _draw_box_value(canv, _box_at_row_baseline(config.item_columns[column], baseline, 20), value)
-        _draw_two_line_item_description(
-            canv, _box_at_row_baseline(config.item_columns["description"], baseline, 20),
-            BolStandardItemLine(source_row_number=0, pallet_qty=stop.cases, type="",
-                                po_number=stop.target_po_number, skids=stop.total_pallets,
-                                weight_each=stop.weight, item_description=stop.pallet_description,
-                                item_number=stop.item_number, upc=stop.upc),
-            description_size=9.0, detail_size=8.0, min_description_size=7.2,
-            min_detail_size=6.8, leading=10.8,
-            second_line_y_offset=3.5 if index == 0 else 0,
-        )
-    for name, value in {
-        "qty": "", "label": "TOTALS", "skids": _format_number(record.total_pallet),
-        "weight": _format_number(record.total_ship_weight),
-    }.items():
-        _draw_box_value(canv, config.totals[name], value)
-    _draw_box_value(canv, replace(config.totals["qty"], x=108, width=36),
-                    _format_number(record.total_case))
+    _draw_multistop_item_table(canv, config, record)
     _draw_box_value(canv, _box_for_baseline(
         x=34, baseline=78, width=550, font_size=9, align="center",
     ), f"Broker of Record: {_safe_text(record.bill_to.company).upper()}")
@@ -1941,7 +1913,8 @@ def _individual_stop_pdf_record(
     )
     # The standard PDF renderer draws item/UPC details separately; the DOCX
     # mapping embeds those details in the description for its table layout.
-    stop_record.item_lines[0].item_description = record.stops[stop_index].pallet_description
+    if not record.stops[stop_index].item_lines:
+        stop_record.item_lines[0].item_description = record.stops[stop_index].pallet_description
     return stop_record
 
 

@@ -37,3 +37,5 @@ class BolMultistopRow:
     chargeback_3_percent: str
     weight_each: str
     weight: str
+
+    stop_inferred: bool = False
