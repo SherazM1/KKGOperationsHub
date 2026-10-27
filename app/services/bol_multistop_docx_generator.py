@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from app.services.bol_comment_scope import include_bol_comment
 from datetime import datetime
 from pathlib import Path
 from tempfile import mkdtemp
@@ -14,6 +15,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt, Twips
 from docx.table import Table
+from reportlab.pdfbase.pdfmetrics import stringWidth
 
 from app.models.bol_multistop_record import BolMultistopRecord
 from app.models.bol_standard_record import BolStandardItemLine, BolStandardRecord
@@ -1014,6 +1016,166 @@ def _build_combined_standard_record(record: BolMultistopRecord) -> BolStandardRe
     )
 
 
+def _add_master_comment_box(doc: Document, text: str, template_mode: str = "Standard") -> None:
+    """Anchor the editable comment at the same page rectangle as the PDF."""
+    from lxml import etree
+    from app.services.bol_pdf_template_stamper import MASTER_COMMENT_BOX, NO_RECOURSE_MASTER_COMMENT_BOX
+    box = NO_RECOURSE_MASTER_COMMENT_BOX if template_mode == "No Recourse" else MASTER_COMMENT_BOX
+    line = " ".join((text or '').split())
+    size = 8.0
+    while size > 6 and stringWidth(line, 'Helvetica-Bold', size) > box.width - 8:
+        size -= 0.5
+    if stringWidth(line, 'Helvetica-Bold', size) > box.width - 8:
+        while line and stringWidth(line + '...', 'Helvetica-Bold', size) > box.width - 8:
+            line = line[:-1]
+        line = line.rstrip() + '...'
+    # Word offsets even page-positioned shapes when they are anchored inside a
+    # table cell. Anchor in the document body to keep coordinates truly absolute.
+    anchor = doc.paragraphs[-1] if doc.paragraphs else doc.add_paragraph()
+    anchor.paragraph_format.space_before = Pt(0)
+    anchor.paragraph_format.space_after = Pt(0)
+    anchor.paragraph_format.line_spacing = Pt(1)
+    snap = OxmlElement('w:snapToGrid')
+    snap.set(qn('w:val'), '0')
+    anchor._p.get_or_add_pPr().append(snap)
+    wp = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
+    drawing_ns = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+    wps = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape'
+    pict = OxmlElement('w:drawing')
+    shape = etree.SubElement(pict, '{' + wp + '}anchor', distT='0', distB='0', distL='0', distR='0', simplePos='0', relativeHeight='4294967294', behindDoc='0', locked='0', layoutInCell='0', allowOverlap='1')
+    etree.SubElement(shape, '{' + wp + '}simplePos', x='0', y='0')
+    for axis, offset in [('H', box.x), ('V', doc.sections[0].page_height.pt - box.y - box.height)]:
+        position = etree.SubElement(shape, '{' + wp + '}position' + axis, relativeFrom='page')
+        etree.SubElement(position, '{' + wp + '}posOffset').text = str(round(offset * 12700))
+    etree.SubElement(shape, '{' + wp + '}extent', cx=str(round(box.width * 12700)), cy=str(round(box.height * 12700)))
+    etree.SubElement(shape, '{' + wp + '}wrapNone')
+    etree.SubElement(shape, '{' + wp + '}docPr', id='98765', name='MasterBOLCommentBox')
+    etree.SubElement(shape, '{' + wp + '}cNvGraphicFramePr')
+    graphic = etree.SubElement(shape, '{' + drawing_ns + '}graphic')
+    data = etree.SubElement(graphic, '{' + drawing_ns + '}graphicData', uri=wps)
+    wsp = etree.SubElement(data, '{' + wps + '}wsp')
+    etree.SubElement(wsp, '{' + wps + '}cNvSpPr', txBox='1')
+    sppr = etree.SubElement(wsp, '{' + wps + '}spPr')
+    transform = etree.SubElement(sppr, '{' + drawing_ns + '}xfrm')
+    etree.SubElement(transform, '{' + drawing_ns + '}off', x='0', y='0')
+    etree.SubElement(transform, '{' + drawing_ns + '}ext', cx=str(round(box.width * 12700)), cy=str(round(box.height * 12700)))
+    geom = etree.SubElement(sppr, '{' + drawing_ns + '}prstGeom', prst='rect')
+    etree.SubElement(geom, '{' + drawing_ns + '}avLst')
+    fill = etree.SubElement(sppr, '{' + drawing_ns + '}solidFill')
+    etree.SubElement(fill, '{' + drawing_ns + '}srgbClr', val='FFFF00')
+    border = etree.SubElement(sppr, '{' + drawing_ns + '}ln', w='6350')
+    ink = etree.SubElement(border, '{' + drawing_ns + '}solidFill')
+    etree.SubElement(ink, '{' + drawing_ns + '}srgbClr', val='000000')
+    textbox = etree.SubElement(wsp, '{' + wps + '}txbx')
+    body = etree.SubElement(wsp, '{' + wps + '}bodyPr', lIns='50800', rIns='50800', tIns='0', bIns='0', anchor='ctr', wrap='none')
+    etree.SubElement(body, '{' + drawing_ns + '}noAutofit')
+    content = OxmlElement('w:txbxContent')
+    textbox.append(content)
+    paragraph = OxmlElement('w:p')
+    ppr = OxmlElement('w:pPr')
+    spacing = OxmlElement('w:spacing')
+    for attr, value in [('before', '0'), ('after', '0'), ('line', str(int(box.height * 20))), ('lineRule', 'exact')]:
+        spacing.set(qn('w:' + attr), value)
+    ppr.append(spacing)
+    paragraph.append(ppr)
+    r = OxmlElement('w:r')
+    rpr = OxmlElement('w:rPr')
+    rpr.append(OxmlElement('w:b'))
+    font = OxmlElement('w:rFonts')
+    font.set(qn('w:ascii'), 'Arial')
+    font.set(qn('w:hAnsi'), 'Arial')
+    rpr.append(font)
+    sz = OxmlElement('w:sz')
+    sz.set(qn('w:val'), str(int(size * 2)))
+    rpr.append(sz)
+    highlight = OxmlElement('w:highlight')
+    highlight.set(qn('w:val'), 'yellow')
+    rpr.append(highlight)
+    r.append(rpr)
+    node = OxmlElement('w:t')
+    _set_text_node_value(node, line)
+    r.append(node)
+    paragraph.append(r)
+    content.append(paragraph)
+    run = anchor.add_run()
+    run.font.size = Pt(1)
+    run._r.append(pict)
+
+
+def _align_word_comment_header(doc: Document, comment: str, template_mode: str = "Standard") -> None:
+    """Replace the template's drifting floating label with aligned table cells."""
+    from lxml import etree
+    for node in list(doc.element.body.iter()):
+        if etree.QName(node).localname != 'AlternateContent':
+            continue
+        texts = [n.text or '' for n in node.iter(qn('w:t'))]
+        if any(value.strip().lower().startswith('comments:') for value in texts):
+            node.getparent().remove(node)
+    if not doc.tables or len(doc.tables[0].rows) <= 11:
+        return
+    table = doc.tables[0]
+    from docx.text.paragraph import Paragraph
+    for element in doc.element.body:
+        if element.tag == qn('w:tbl'):
+            break
+        if element.tag == qn('w:p'):
+            paragraph = Paragraph(element, doc)
+            if not paragraph.text.strip():
+                paragraph.paragraph_format.space_before = Pt(0)
+                paragraph.paragraph_format.space_after = Pt(0)
+                paragraph.paragraph_format.line_spacing = Pt(1)
+                for run in paragraph.runs:
+                    run.font.size = Pt(1)
+    if template_mode == 'Standard':
+        # Shipwell shared the appointment cell and made two labels collide.
+        appointment = table.rows[9].cells[8]
+        appointment_value = table.rows[9].cells[9]
+        shipwell_value = appointment_value.paragraphs[1].text if len(appointment_value.paragraphs) > 1 else ''
+        for cell in (appointment, appointment_value):
+            for paragraph in list(cell.paragraphs)[1:]:
+                cell._tc.remove(paragraph._p)
+        _set_cell_text(table.rows[6].cells[8], 'Shipwell #', font_points=8, align_center=False)
+        table.rows[6].cells[8].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        _set_cell_text(table.rows[6].cells[9], shipwell_value, font_points=8, align_center=False)
+    # Remove blank leading lines from broker fields before fixing row heights.
+    if template_mode == 'No Recourse':
+        broker_lines = []
+        for index in (18, 19, 20):
+            for line in table.rows[index].cells[9].text.splitlines():
+                line = line.strip()
+                if line and line not in broker_lines:
+                    broker_lines.append(line)
+        for index, line in zip((18, 19, 20), (broker_lines + ['', '', ''])[:3]):
+            _set_cell_text(table.rows[index].cells[9], line, font_points=8, align_center=False)
+    for index in (18, 19, 20, 21):
+        cell = table.rows[index].cells[9]
+        if cell.text.strip() and not cell._tc.xpath('.//w:drawing | .//w:pict'):
+            _set_cell_text(cell, cell.text.strip(), font_points=8, align_center=False)
+    # Match the PDF header depth, leaving the comment's exact page rectangle free.
+    reference = Document(str(STANDARD_TEMPLATE_PATH)).tables[0]
+    heights = [row.height.pt for row in reference.rows[:22]]
+    # The template's vertically merged logo/header contributes an additional
+    # 23 pt in Word beyond the sum of its row heights.
+    target_bottom = (334.0 if template_mode == 'No Recourse' else 382.0) - 23.0
+    scale = (target_bottom - doc.sections[0].top_margin.pt) / sum(heights)
+    for row, height in zip(table.rows[:22], heights):
+        _set_row_height(row, round(height * scale * 20), exact=True)
+        for _, cell in _row_unique_cells(row):
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.space_before = Pt(0)
+                paragraph.paragraph_format.space_after = Pt(0)
+    label, value = table.rows[11].cells[8], table.rows[11].cells[9]
+    _set_cell_text(label, 'Comments:', font_points=8, align_center=False)
+    label.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    label.paragraphs[0].runs[0].bold = True
+    _set_cell_text(value, comment, font_points=8, align_center=False)
+    for cell in (label, value):
+        for paragraph in cell.paragraphs:
+            paragraph.paragraph_format.space_before = Pt(0)
+            paragraph.paragraph_format.space_after = Pt(0)
+            paragraph.paragraph_format.line_spacing = 1
+
+
 def _save_multistop_docx(
     *,
     record: BolMultistopRecord,
@@ -1029,6 +1191,8 @@ def _save_multistop_docx(
     template_mode: str,
     bol_type: str | None,
     notices: list[DocxGenerationNotice],
+    master_comment_enabled: bool = False,
+    master_comment_text: str = "",
 ) -> MultistopGeneratedDocxFile:
     doc = Document(str(resolved_template))
     _remove_multistop_consignee_rules(doc)
@@ -1087,12 +1251,17 @@ def _save_multistop_docx(
 
     destination = _unique_destination_path(output_root, base_name, ".docx")
     filename = destination.name
+    if master_comment_enabled:
+        _add_master_comment_box(doc, master_comment_text, template_mode)
     doc.save(str(destination))
 
     comment_label_populated = _postprocess_standard_comments_in_saved_docx(
         destination,
         resolved_comment,
     )
+    cleaned_doc = Document(str(destination))
+    _align_word_comment_header(cleaned_doc, resolved_comment, template_mode)
+    cleaned_doc.save(str(destination))
     if resolved_comment and not comment_label_populated:
         notices.append(
             DocxGenerationNotice(
@@ -1129,6 +1298,8 @@ def _save_individual_stop_docx(
     template_mode: str,
     bol_type: str | None,
     notices: list[DocxGenerationNotice],
+    extra_comment_enabled: bool = False,
+    extra_comment_text: str = "",
 ) -> MultistopGeneratedDocxFile:
     stop = record.stops[stop_index]
     display_bol_number = (stop.bol_number or "").strip() or record.bol_number
@@ -1164,6 +1335,8 @@ def _save_individual_stop_docx(
     elif is_no_recourse_template:
         _clean_no_recourse_individual_stop_item_area(doc, stop, bol_type)
     _normalize_standard_document_font(doc)
+    if extra_comment_enabled:
+        _add_master_comment_box(doc, extra_comment_text, template_mode)
     for message in record_notice_messages:
         notices.append(DocxGenerationNotice(bol_number=bol_label, message=message))
 
@@ -1175,6 +1348,9 @@ def _save_individual_stop_docx(
         destination,
         resolved_comment,
     )
+    cleaned_doc = Document(str(destination))
+    _align_word_comment_header(cleaned_doc, resolved_comment, template_mode)
+    cleaned_doc.save(str(destination))
     if resolved_comment and not comment_label_populated:
         notices.append(
             DocxGenerationNotice(
@@ -1209,6 +1385,9 @@ def generate_multistop_docx_set(
     output_dir: Path | None = None,
     file_name_prefix: str = "multistop_bol",
     allow_incomplete_records: bool = False,
+    master_comment_enabled: bool = False,
+    master_comment_text: str = "",
+    comment_scope: str = "Master only",
 ) -> StandardDocxGenerationResult:
     if selected_facility is None:
         raise ValueError(
@@ -1291,6 +1470,8 @@ def generate_multistop_docx_set(
                     template_mode=resolved_master_template_mode,
                     bol_type=bol_type,
                     notices=notices,
+                    master_comment_enabled=include_bol_comment(master_comment_enabled, comment_scope, is_master=True),
+                    master_comment_text=master_comment_text,
                 )
             )
 
@@ -1307,6 +1488,8 @@ def generate_multistop_docx_set(
                         output_root=output_root,
                         base_name=stop_base_name,
                         stop_index=stop_index,
+                        extra_comment_enabled=include_bol_comment(master_comment_enabled, comment_scope, is_master=False),
+                        extra_comment_text=master_comment_text,
                         template_mode=resolved_stop_template_mode,
                         bol_type=bol_type,
                         notices=notices,

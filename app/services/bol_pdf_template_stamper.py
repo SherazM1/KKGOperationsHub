@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from app.services.bol_comment_scope import include_bol_comment
 from io import BytesIO
 from pathlib import Path
 import re
@@ -152,6 +153,7 @@ ROW_HEIGHTS = [
 ROW_HEIGHTS_PT = [value / 20 for value in ROW_HEIGHTS]
 
 
+
 @dataclass(frozen=True, slots=True)
 class TextBox:
     x: float
@@ -167,6 +169,18 @@ class TextBox:
     whiteout: bool = True
     vertical_align: str = "top"
 
+# The master template's appointment notice ends at y=392. Keep a 2 pt
+# gap and align the unique comment directly under the notice's text.
+MASTER_COMMENT_BOX = TextBox(
+    x=364,
+    y=392 - 2 - 12,
+    width=224,
+    height=12,
+)
+# Individual Standard stop BOLs use a different template: its notice ends
+# at y=371, about 21 pt lower than the master's notice.
+CHILD_COMMENT_BOX = TextBox(x=364, y=371 - 2 - 12, width=224, height=12)
+NO_RECOURSE_MASTER_COMMENT_BOX = TextBox(x=348, y=445, width=240, height=12)
 
 @dataclass(frozen=True, slots=True)
 class PdfTemplateConfig:
@@ -364,7 +378,6 @@ def _standard_fields() -> dict[str, TextBox]:
             leading=11.3,
             vertical_align="middle",
         ),
-        "tracker_number": _top_value_box(681.0),
         "kk_po_number": _top_value_box(666.1),
         "kk_load_number": _top_value_box(653.2, width=150.0),
         "delivery_appt": _top_value_box(629.7, width=150.0),
@@ -696,7 +709,6 @@ def _standard_record_values(
         "delivery_appt": pickup_number,
         "appt_number": pickup_number,
         "appointment_number": pickup_number,
-        "tracker_number": "",
         "comments": comment,
         "ship_from_company": record.ship_from.company,
         "ship_from_street": record.ship_from.street,
@@ -738,7 +750,6 @@ def _no_recourse_record_values(
             "delivery_appt": "",
             "appt_number": "",
             "appointment_number": "",
-            "tracker_number": "",
             "bill_to": no_recourse_bill_to,
         }
     )
@@ -958,7 +969,6 @@ STANDARD_HEADER_FIELDS = (
     ("carrier", "Carrier"),
     ("carrier_pro_number", "Carrier Pro #"),
     ("po_number", "PO #"),
-    ("tracker_number", "Tracker #"),
     ("kk_po_number", "KK PO #"),
     ("kk_load_number", "KKG Load #"),
     ("delivery_appt", "Delivery Appt."),
@@ -1153,6 +1163,8 @@ def _draw_standard_overlay(
     render_pickup_number: bool = True,
     multistop: bool = False,
     item_rows: list[PdfItemRow] | None = None,
+    extra_comment_enabled: bool = False,
+    extra_comment_text: str = "",
 ) -> None:
     # Individual stop PDFs use the standard templates but receive Multistop-only line removal.
     if config.mode == "No Recourse":
@@ -1215,6 +1227,9 @@ def _draw_standard_overlay(
         "weight": total_weight,
     }.items():
         _draw_box_value(canv, config.totals[total_name], value)
+    if extra_comment_enabled:
+        _draw_master_comment_box(canv, extra_comment_text,
+            NO_RECOURSE_MASTER_COMMENT_BOX if config.mode == "No Recourse" else CHILD_COMMENT_BOX)
 
 
 def _multistop_record_values(
@@ -1574,7 +1589,38 @@ def _draw_multistop_item_table(canv, config, record):
     canv.line(columns[0], bottom - 19, columns[-1], bottom - 19)
     canv.restoreState()
 
-
+# Adds helper to draw the box
+def _draw_master_comment_box(
+    canv: canvas.Canvas,
+    text: str,
+    box: TextBox,
+)-> None:
+    """Draw a single highlighted line without covering adjacent form content."""
+    line = " ".join((text or "").split())
+    size = _fit_font_size(canv, line, FONT_BOLD, 8, box.width - 8, 6)
+    if stringWidth(line, FONT_BOLD, size) > box.width - 8:
+        while line and stringWidth(line + "...", FONT_BOLD, size) > box.width - 8:
+            line = line[:-1]
+        line = line.rstrip() + "..."
+    canv.saveState()
+    canv.setStrokeColor(colors.black)
+    canv.setFillColor(colors.yellow)
+    canv.setLineWidth(0.5)
+    
+    canv.rect(
+        box.x, box.y, box.width, box.height,
+        stroke=1, fill=1,
+)
+    
+    canv.setFillColor(colors.black)
+    canv.setFont(FONT_BOLD, size)
+    canv.drawString(
+        box.x + 4,
+        box.y + (box.height - size) / 2 + 1.2,
+        line,
+    )
+    
+    canv.restoreState()
 def _draw_multistop_overlay(
     canv: canvas.Canvas,
     config: PdfTemplateConfig,
@@ -1583,9 +1629,20 @@ def _draw_multistop_overlay(
     *,
     no_recourse: bool,
     batch_comment: str | None,
+    master_comment_enabled: bool = False,
+    master_comment_text: str = "",
 ) -> None:
+    
+    
     if no_recourse:
         _draw_no_recourse_multistop_overlay(canv, record, selected_facility, batch_comment)
+        
+        if master_comment_enabled:
+            _draw_master_comment_box(
+                canv,
+                master_comment_text,
+                NO_RECOURSE_MASTER_COMMENT_BOX,
+                 )
         return
     _clear_multistop_consignee_rules(canv, "Multistop")
     # Draw the top Multistop fields
@@ -1606,6 +1663,12 @@ def _draw_multistop_overlay(
     _draw_multistop_terms(canv, no_recourse)
 
     _draw_multistop_item_table(canv, config, record)
+    if master_comment_enabled:
+            _draw_master_comment_box(
+                canv,
+                master_comment_text,
+                MASTER_COMMENT_BOX,
+                )
 
     # Draw the No Recourse footer only for No Recourse Multistop.
     if no_recourse:
@@ -1929,6 +1992,9 @@ def stamp_bol_pdf_set(
     qty_type: str = "PLT",
     batch_comment: str | None = None,
     render_pickup_number: bool = True,
+    master_comment_enabled: bool = False,
+    master_comment_text: str = "",
+    comment_scope: str = "Master only",
     output_dir: Path | None = None,
     progress_callback: Callable[[int, int, GeneratedDocxFile], None] | None = None,
 ) -> StandardPdfConversionResult:
@@ -1988,6 +2054,8 @@ def stamp_bol_pdf_set(
                         stop_record,
                         selected_facility,
                         multistop=True,
+                        extra_comment_enabled=include_bol_comment(master_comment_enabled, comment_scope, is_master=False),
+                        extra_comment_text=master_comment_text,
                         bol_type=bol_type,
                         qty_type=qty_type,
                         batch_comment=batch_comment,
@@ -2033,6 +2101,8 @@ def stamp_bol_pdf_set(
                         selected_facility,
                         no_recourse=no_recourse,
                         batch_comment=batch_comment,
+                        master_comment_enabled=include_bol_comment(master_comment_enabled, comment_scope, is_master=True),
+                        master_comment_text=master_comment_text,
                     ),
                 )
             else:

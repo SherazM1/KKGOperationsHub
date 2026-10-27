@@ -559,6 +559,9 @@ def _generate_pdf_result(
         qty_type=st.session_state.get("bol_qty_type_selector", "PLT"),
         batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
         render_pickup_number=st.session_state.get("bol_render_pickup_number", "Yes") == "Yes",
+        master_comment_enabled=st.session_state.get("bol_master_comment_enabled", False),
+        master_comment_text=st.session_state.get("bol_master_comment_text", ""),
+        comment_scope=st.session_state.get("bol_comment_scope", "Master only"),
         progress_callback=progress_callback,
     )
 
@@ -804,6 +807,27 @@ def render_bol_generator_view() -> None:
         index=["Yes", "No"].index(current_pickup_setting),
         on_change=_clear_generation_state,
     )
+    # adds the option to toggle the master comment box for multi
+    if st.session_state["bol_mode"] == "Multistop":
+        st.checkbox(
+            "Add BOL unique comment",
+            key="bol_master_comment_enabled",
+            on_change=_clear_generation_state,
+        )
+        st.selectbox(
+            "Apply comment to",
+            options=["Master only", "All BOLs", "Children only"],
+            key="bol_comment_scope",
+            disabled=not st.session_state.get("bol_master_comment_enabled", False),
+            on_change=_clear_generation_state,
+        )
+        st.text_area(
+            "BOL comment",
+            key="bol_master_comment_text",
+            disabled=not st.session_state.get("bol_master_comment_enabled", False),
+            on_change=_clear_generation_state,
+        )
+        
     st.text_input(
         "Batch name",
         key="bol_batch_name",
@@ -1354,6 +1378,9 @@ def render_bol_generator_view() -> None:
                         individual_template_mode
                     ),
                     master_template_mode=individual_template_mode,
+                    master_comment_enabled=st.session_state.get("bol_master_comment_enabled", False),
+                    master_comment_text=st.session_state.get("bol_master_comment_text", ""),
+                    comment_scope=st.session_state.get("bol_comment_scope", "Master only"),
                     file_name_prefix="multistop_bol",
                     allow_incomplete_records=True,
                 )
@@ -1514,6 +1541,9 @@ def render_bol_generator_view() -> None:
                         individual_template_mode
                     ),
                     master_template_mode=individual_template_mode,
+                    master_comment_enabled=st.session_state.get("bol_master_comment_enabled", False),
+                    master_comment_text=st.session_state.get("bol_master_comment_text", ""),
+                    comment_scope=st.session_state.get("bol_comment_scope", "Master only"),
                     file_name_prefix="multistop_bol",
                     allow_incomplete_records=True,
                 )

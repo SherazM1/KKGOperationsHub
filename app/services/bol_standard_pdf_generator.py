@@ -366,7 +366,6 @@ def _draw_header_and_fields(
         if resolved_comment:
             _draw_right_field(canv, 11, "Comments", resolved_comment, value_cols=(9, 18))
     else:
-        _draw_right_field(canv, 6, "Tracker #", "")
         _draw_right_field(canv, 7, "KK PO #", record.kk_po_number)
         _draw_right_field(canv, 8, "KKG Load #", record.kk_load_number, value_cols=(9, 15))
         _draw_right_field(canv, 9, "Delivery Appt.", getattr(record, "pickup_number", ""), value_cols=(9, 15))
