@@ -162,32 +162,55 @@ def parse_combined_load_sheet(uploaded_file) -> FileParseResult:
 
 def _select_combined_load_sheet(workbook: pd.ExcelFile) -> tuple[str, int, pd.DataFrame] | None:
     candidates = []
+    
     for sheet_name in workbook.sheet_names:
-        for header_row in range(0, 6):
-            try:
-                df = pd.read_excel(workbook, sheet_name=sheet_name, header=header_row, dtype=object)
-            except ValueError:
-                continue
-            if df.empty:
-                continue
-            matched = _matched_required_columns(df.columns)
-            priority = _sheet_priority(sheet_name)
-            columns = {_normalize_column(c) for c in df.columns}
+        # read only the possible header rows
+        preview = pd.read_excel(
+            workbook,
+            sheet_name=sheet_name,
+            header=None,
+            nrows=6,
+            dtype=object,
+        )
+        
+        for header_row in range(len(preview)):
+            headers = preview.iloc[header_row].fillna("").tolist()
+            columns = {_normalize_column(value) for value in headers}
+            
+            combined_format = (
+                len(_matched_required_columns(headers))
+                == len(COMBINED_REQUIRED_COLUMNS)
+            )
+            
             store_format = all(
-                any(_normalize_column(alias) in columns for alias in aliases)
+                any(
+                    _normalize_column(alias) in columns
+                    for alias in aliases
+                )
                 for aliases in STORE_REQUIRED_COLUMNS.values()
             )
-            score = len(COMBINED_REQUIRED_COLUMNS) if store_format else len(matched)
-            candidates.append((score, priority, sheet_name, header_row, df.dropna(how="all")))
-
-    usable = [candidate for candidate in candidates if candidate[0] == len(COMBINED_REQUIRED_COLUMNS)]
-    if not usable:
+            
+            if combined_format or store_format:
+                candidates.append(
+                    (_sheet_priority(sheet_name), header_row, sheet_name)
+                )
+                
+        # Preserve preferred-sheet and header-row selection
+        candidates.sort(key=lambda candidate: (candidate[0], candidate[1]))
+        
+        for _, header_row, sheet_name in candidates:
+            # read the complete sheet only after finding its header.
+            df = pd.read_excel(
+                workbook,
+                sheet_name=sheet_name,
+                header=header_row,
+                dtype=object,
+            ).dropna(how="all")
+            
+            if not df.empty:
+                return sheet_name, header_row, df
+            
         return None
-
-    usable.sort(key=lambda item: (-item[0], item[1], item[3]))
-    _, _, sheet_name, header_row, df = usable[0]
-    return sheet_name, header_row, df
-
 
 def _matched_required_columns(columns) -> set[str]:
     normalized_columns = {_normalize_column(column) for column in columns}
@@ -205,7 +228,7 @@ def _combined_sheet_error(workbook: pd.ExcelFile) -> str:
     for sheet_name in workbook.sheet_names:
         for header_row in range(0, 6):
             try:
-                df = pd.read_excel(workbook, sheet_name=sheet_name, header=header_row)
+                df = pd.read_excel(workbook, sheet_name=sheet_name, header=header_row, nrows=0,)
             except ValueError:
                 continue
             matches = _matched_required_columns(df.columns)

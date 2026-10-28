@@ -14,6 +14,7 @@ import zipfile
 from lxml import etree
 
 from docx import Document
+from docx.oxml import parse_xml
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
@@ -21,7 +22,7 @@ from docx.table import Table, _Cell
 
 from app.models.bol_standard_record import BolStandardItemLine, BolStandardRecord
 from app.utils.bol_facilities import BolFacilityRecord, facility_to_ship_from
-
+from docx.oxml import parse_xml
 
 STANDARD_TEMPLATE_PATH = Path("app/templates/standard_bol_template.docx")
 NO_RECOURSE_TEMPLATE_PATH = Path("app/templates/no_recourse_bol_template.docx")
@@ -1005,6 +1006,27 @@ def _postprocess_comments_in_document_xml(
     updated_xml = _make_comment_area_dynamic(updated_xml)
     return updated_xml, populated
 
+def _postprocess_comments_in_memory(
+    doc,
+    resolved_comment: str,
+) -> bool:
+    """Apply comment cleanup to the live document before its single save."""
+    updated_xml, populated = _postprocess_comments_in_document_xml(
+        doc.element.xml,
+        resolved_comment,
+    )
+
+    updated_document = parse_xml(updated_xml)
+    current_body = doc.element.body
+    updated_body = updated_document.body
+
+    # Preserve the existing body object used by python-docx
+    current_body.attrib.clear()
+    current_body.attrib.update(updated_body.attrib)
+    current_body[:] = list(updated_body)
+
+    return populated
+
 
 def _populate_broker_of_record(doc: Document, broker_name: str) -> None:
     """Fill the notice when present, including names split across Word runs."""
@@ -1239,10 +1261,12 @@ def generate_standard_docx_set(
                 output_root, f"{file_name_prefix}_{safe_bol}", ".docx"
             )
             filename = destination.name
-            doc.save(str(destination))
-            comment_label_populated = _postprocess_comments_in_saved_docx(
-                destination, resolved_comment
+            comment_label_populated = _postprocess_comments_in_memory(
+                doc,
+                resolved_comment,
             )
+            doc.save(str(destination))
+
             if resolved_comment and not comment_label_populated:
                 notices.append(
                     DocxGenerationNotice(

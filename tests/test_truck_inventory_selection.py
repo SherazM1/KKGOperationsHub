@@ -7,6 +7,37 @@ from streamlit.testing.v1 import AppTest
 
 
 class SelectionTests(unittest.TestCase):
+    def test_bulk_double_stack_dimension_group(self):
+        workbook = io.BytesIO()
+        pd.DataFrame([
+            {'STORE #': '1', 'DC #': '6006', 'ITEM #': item, 'QUANTITY': 1,
+             'PALLET LENGTH': 48, 'PALLET WIDTH': 48, 'PALLET HEIGHT': 40, 'WEIGHT': 100}
+            for item in ('A', 'B')
+        ]).to_excel(workbook, index=False)
+        workbook.name = 'group_stacking.xlsx'
+        workbook.seek(0)
+        app = AppTest.from_string('from app.ui.truck_inventory import render_truck_inventory_view\nrender_truck_inventory_view()')
+        app.session_state['truck_combined_file'] = workbook
+        app.run()
+        app.button(key='truck_process_btn').click().run()
+        group_selector = next(control for control in app.multiselect if control.label.startswith('Dimension groups'))
+        group_selector.set_value([(48.0, 48.0, 40.0)])
+        next(button for button in app.button if button.label == 'Apply to dimension groups').click().run()
+        self.assertFalse(app.exception)
+        draft = app.session_state['truck_item_setup_draft_by_load']['DC-6006']
+        self.assertTrue(all(row['Is Stackable?'] == 'Yes' and row['Stack Qty'] == 2 for row in draft))
+        self.assertFalse(app.session_state['truck_item_setup_confirmed_by_load']['DC-6006'])
+        next(button for button in app.button if button.label == 'Save Item Setup').click().run()
+        next(button for button in app.button if button.label == 'Build / Evaluate Truck Plan').click().run()
+        self.assertFalse(app.exception)
+        boxes = [box for truck in app.session_state['truck_trucks'] for box in truck.boxes]
+        self.assertEqual(len(boxes), 1)
+        self.assertEqual(sum(box.represented_qty for box in boxes), 2)
+        self.assertEqual({member.item_number for member in boxes[0].allocations}, {'A', 'B'})
+        app.radio(key='truck_workspace').set_value('Review & export').run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any('Double stacks: 1 positions' in message.value for message in app.info))
+
     def test_guided_plan_review_and_settings_invalidation(self):
         workbook = io.BytesIO()
         pd.DataFrame([{'STORE #': '1', 'DC #': '6006', 'ITEM #': 'ITEM-A',

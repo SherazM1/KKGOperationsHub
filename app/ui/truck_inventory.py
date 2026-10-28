@@ -11,6 +11,8 @@ from app.services.truck_inventory_export import (
 )
 from app.services.truck_inventory_item_setup import (
     apply_item_setup,
+    apply_dimension_group_stacking,
+    get_dimension_groups,
     build_default_item_setup,
     merge_item_setup,
     normalize_editor_rows as _normalize_editor_rows,
@@ -306,7 +308,8 @@ def _render_item_setup_section() -> None:
                 "Width": st.column_config.NumberColumn("Width (in)", min_value=0.0, step=0.1),
                 "Height": st.column_config.NumberColumn("Height (in)", min_value=0.0, step=0.1),
                 "Weight": st.column_config.NumberColumn("Weight (lb)", min_value=0.0, step=0.1),
-                "Double Stack": st.column_config.CheckboxColumn("Double Stack", help="Stack two units. Half pallets cannot be stacked. Total stack height plus 6 inches must fit below the roof."),
+                "Double Stack": st.column_config.CheckboxColumn("Double Stack", help="Stack two units, including half pallets. Leave 6 inches below the roof in reefers, 3 inches in other trucks."),
+                "Stack By Dimension": None,
             },
             key=editor_key,
         )
@@ -316,8 +319,34 @@ def _render_item_setup_section() -> None:
         with col2:
             apply_presets = st.form_submit_button("Apply Selected Presets", use_container_width=True)
 
-    edited_setup = _normalize_editor_rows(edited_df.to_dict(orient="records"))
-    edited_setup, _ = _apply_preset_changes(draft_setup, edited_setup)
+        st.markdown("**Double stack by dimension group**")
+        groups = get_dimension_groups(draft_setup)
+        selected_groups = st.multiselect(
+            "Dimension groups (L × W × H)", options=list(groups),
+            format_func=lambda size: f"{size[0]:g} × {size[1]:g} × {size[2]:g} in ({len(groups[size])} items)",
+            key=f"truck_stack_groups_{selected_load}_{editor_revision}",
+            help="Groups use the dimensions shown in Item Setup. Save changed dimensions first to refresh the list.",
+        )
+        stack_groups = st.checkbox("Double stack selected groups", value=True,
+                                   key=f"truck_stack_groups_enabled_{selected_load}_{editor_revision}")
+        apply_groups = st.form_submit_button("Apply to dimension groups", disabled=not groups)
+        st.caption("Matching items, including half pallets, can share a stack across source rows. Required roof clearance: 6 inches for reefers, 3 inches for other trucks. Save Item Setup, then build to check fit and weight.")
+
+    edited_setup, _ = _apply_preset_changes(draft_setup, edited_df.to_dict(orient="records"))
+    edited_setup = _normalize_editor_rows(edited_setup)
+    if apply_groups:
+        if not selected_groups:
+            st.warning("Select at least one dimension group first.")
+        else:
+            updated_setup, _ = apply_dimension_group_stacking(
+                edited_setup, selected_records, selected_groups, stack_groups)
+            st.session_state.truck_item_setup_draft_by_load[selected_load] = updated_setup
+            st.session_state.truck_item_setup_confirmed_by_load[selected_load] = False
+            st.session_state.truck_trucks = []
+            message = "Dimension group stacking updated. Save Item Setup before rebuilding."
+            st.session_state.truck_build_message = message
+            st.session_state.truck_item_setup_editor_revision[selected_load] = editor_revision + 1
+            st.rerun()
     if apply_presets:
         updated_setup = _apply_selected_item_presets(edited_setup)
         st.session_state.truck_item_setup_draft_by_load[selected_load] = updated_setup
@@ -351,7 +380,7 @@ def _render_item_setup_section() -> None:
         st.markdown("\n".join(f"- {issue}" for issue in saved_issues))
     else:
         st.success(f"Item Setup saved for KKG loads: {_selection_label()}.")
-    st.caption("Double Stack places two units on top of each other within a load/PO row. Half pallets cannot be stacked. The top of a double stack must be at least 6 inches below the truck roof. Colors are assigned by item number. Save Item Setup to apply edits.")
+    st.caption("Half pallets are automatically rotated 90° from the dimensions shown here. Full and half pallets can double stack when selected. Loads need 6 inches of roof clearance in reefers and 3 inches in other trucks.")
 
 
 def _apply_selected_item_presets(setup_rows: list[dict]) -> list[dict]:
@@ -535,6 +564,7 @@ def _render_truck_selection_and_evaluate() -> None:
         f"{preset.length_in:g} x {preset.width_in:g} x {preset.height_in:g} inches; "
         f"legal max {preset.max_weight_lbs:,.0f} lbs"
     )
+    st.caption(f"Required roof clearance: {preset.roof_clearance_in:g} inches above the top pallet, single or stacked.")
     st.caption("Additional trucks of this type are added automatically when space or weight capacity is reached. Row quantities may be split; store, DC, and PO details stay attached to each pallet.")
 
     selected_load = st.session_state.truck_selected_load_number
@@ -543,6 +573,14 @@ def _render_truck_selection_and_evaluate() -> None:
         _get_selected_records(),
         st.session_state.truck_item_setup_by_load.get(selected_load, []),
     )
+    selected_stack_heights = {
+        float(setup.get("Height") or 0)
+        for setup in st.session_state.truck_item_setup_by_load.get(selected_load, [])
+        if setup.get("Stack By Dimension") and str(setup.get("Is Stackable?", "No")).lower() == "yes"
+    }
+    for height in sorted(selected_stack_heights):
+        if height * 2 + preset.roof_clearance_in > preset.height_in:
+            st.warning(f"The {height:g}-inch-high group needs {height * 2 + preset.roof_clearance_in:g} in to double stack, including {preset.roof_clearance_in:g} in roof clearance. This truck is {preset.height_in:g} in high, so that group cannot form double stacks on it.")
     if st.session_state.truck_build_message:
         st.info(st.session_state.truck_build_message)
     if not setup_confirmed:

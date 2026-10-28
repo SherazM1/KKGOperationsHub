@@ -76,26 +76,26 @@ class SplitTruckTests(unittest.TestCase):
         self.assertEqual([truck.total_weight for truck in trucks], [1000, 1000])
         self.assertTrue(all(truck.validation_status == 'valid' for truck in trucks))
 
-    def test_double_stack_requires_six_inches_roof_clearance(self):
-        exact = self.plan([self.row(qty=2, item_height=47, is_stackable=True, stack_qty=2)])
+    def test_double_stack_requires_three_inches_roof_clearance(self):
+        exact = self.plan([self.row(qty=2, item_height=48.5, is_stackable=True, stack_qty=2)])
         self.assertEqual(exact[0].validation_status, 'valid')
         self.assertEqual(len(exact[0].boxes), 1)
         self.assertEqual(exact[0].boxes[0].represented_qty, 2)
-        too_tall = self.plan([self.row(qty=2, item_height=47.1, is_stackable=True, stack_qty=2)])
+        too_tall = self.plan([self.row(qty=2, item_height=48.6, is_stackable=True, stack_qty=2)])
         self.assertEqual(too_tall[0].validation_status, 'error')
         self.assertFalse(too_tall[0].boxes)
-        self.assertTrue(any('6 in roof clearance' in note for note in too_tall[0].validation_notes))
-        single = self.plan([self.row(qty=1, item_height=100)])
+        self.assertTrue(any('3 in roof clearance' in note for note in too_tall[0].validation_notes))
+        single = self.plan([self.row(qty=1, item_height=97)])
         self.assertEqual(single[0].validation_status, 'valid')
 
-    def test_half_pallets_cannot_be_stacked(self):
+    def test_half_pallets_can_be_stacked(self):
         for changes in ({'pallet_type': 'Half'}, {'pallet_type': 'Half Pallet'},
                         {'item_number': '683054545'}):
             with self.subTest(changes=changes):
                 trucks = self.plan([self.row(qty=2, is_stackable=True, stack_qty=2, **changes)])
-                self.assertEqual(trucks[0].validation_status, 'error')
-                self.assertFalse(trucks[0].boxes)
-                self.assertTrue(any('half pallet' in note for note in trucks[0].validation_notes))
+                self.assertEqual(trucks[0].validation_status, 'valid')
+                self.assertEqual(len(trucks[0].boxes), 1)
+                self.assertEqual(trucks[0].boxes[0].represented_qty, 2)
 
     def test_double_stacks_and_mixed_loads(self):
         rows = [self.row(qty=7, is_stackable=True, stack_qty=2),

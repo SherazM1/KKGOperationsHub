@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import replace
 from math import fsum, isfinite
-from app.services.truck_inventory_stacking import STACK_ROOF_CLEARANCE_IN, is_half_pallet
+from app.services.truck_inventory_stacking import get_roof_clearance, is_half_pallet
 
 from app.models.truck_inventory_record import TruckInventoryRecord
 from app.models.truck_summary import BoxLayout, TruckSummary
@@ -50,6 +50,8 @@ def assign_to_trucks(
             truck.notes = "; ".join(truck.validation_notes)
         for box in truck.boxes:
             box.color = get_color_for_item(box.item_number or "UNKNOWN", color_map)
+            for member in box.stack_members:
+                member.color = get_color_for_item(member.item_number or "UNKNOWN", color_map)
         trucks.append(truck)
 
     for group_records in _group_records(records, grouping_rule).values():
@@ -130,6 +132,8 @@ def _evaluate_truck_groups(
         truck_length = _first_positive(group_records, "truck_length") or preset.length_in
         truck_width = _first_positive(group_records, "truck_width") or preset.width_in
         truck_height = _first_positive(group_records, "truck_height") or preset.height_in
+        roof_clearance = _first_positive(group_records, "truck_roof_clearance") or get_roof_clearance(
+            preset_key, _first_text(group_records, "truck_type"))
         truck_max_weight = (
             operational_weight_threshold_lbs
             or _first_positive(group_records, "truck_max_weight")
@@ -141,6 +145,7 @@ def _evaluate_truck_groups(
             truck_height=truck_height,
             truck_max_weight=truck_max_weight,
             total_weight=total_weight,
+            roof_clearance=roof_clearance,
         )
         truck_name = _first_text(group_records, "truck_type") or preset.name
         straight = TRUCK_PRESETS.get("straight_box_truck_26_foot")
@@ -148,7 +153,7 @@ def _evaluate_truck_groups(
         if straight and (preset_key == "straight_box_truck_26_foot" or truck_name == straight.name):
             truck_name = straight.name
             positions = 0.0
-            for record in group_records:
+            for record, _ in _placement_groups(group_records, truck_height, roof_clearance):
                 footprint = sorted([record.item_length or 0, record.item_width or 0])
                 # Capacity is based on pallet type, not just an exact footprint.
                 # The Full Pallet preset is 40 x 48 and must count too.
@@ -168,6 +173,7 @@ def _evaluate_truck_groups(
             truck_width,
             truck_height,
             item_color_map,
+            roof_clearance,
         )
 
         weight_fit = isfinite(total_weight) and total_weight <= truck_max_weight + FIT_TOLERANCE
@@ -209,6 +215,7 @@ def _evaluate_truck_groups(
             validation_notes=notes,
             pallet_positions_used=positions,
             pallet_positions_capacity=10.0 if positions is not None else None,
+            roof_clearance_in=roof_clearance,
         )
         trucks.append(truck)
 
@@ -220,12 +227,27 @@ def _evaluate_truck_groups(
     return trucks
 
 
+def _placement_groups(records, truck_height, roof_clearance=3.0):
+    """Combine dimension-enabled rows for placement, retaining source records."""
+    groups = OrderedDict()
+    for index, record in enumerate(records):
+        eligible = (record.stack_by_dimension and record.is_stackable and _positive(record.stack_qty)
+                    and (record.item_height or 0) * record.stack_qty + roof_clearance
+                    <= truck_height + FIT_TOLERANCE)
+        key = ('dimension', record.item_length, record.item_width, record.item_height,
+               record.stack_qty, record.manual_stack_id) if eligible else ('row', index)
+        groups.setdefault(key, []).append(record)
+    for sources in groups.values():
+        yield replace(sources[0], qty=sum(r.qty or 0 for r in sources)), sources
+
+
 def _place_load_items(
     records: list[TruckInventoryRecord],
     truck_length: float,
     truck_width: float,
     truck_height: float,
     item_color_map: dict[str, int],
+    roof_clearance: float = 3.0,
 ) -> tuple[list[BoxLayout], bool, list[str]]:
     boxes: list[BoxLayout] = []
     notes: list[str] = []
@@ -234,7 +256,9 @@ def _place_load_items(
     row_depth = 0.0
     box_id = 1
 
-    for record in records:
+    for record, sources in _placement_groups(records, truck_height, roof_clearance):
+        source_index = 0
+        source_remaining = sources[0].qty or 0
         qty = record.qty or 0
         length = record.item_length or 0.0
         width = record.item_width or 0.0
@@ -246,9 +270,9 @@ def _place_load_items(
         row_fits = True
         if length <= 0 or width <= 0 or height <= 0:
             row_fits = False
-        if height > truck_height + FIT_TOLERANCE:
+        if height + roof_clearance > truck_height + FIT_TOLERANCE:
             row_fits = False
-        if record.is_stackable and (is_half_pallet(record) or (qty > 1 and stack_height + STACK_ROOF_CLEARANCE_IN > truck_height + FIT_TOLERANCE)):
+        if record.is_stackable and qty > 1 and stack_height + roof_clearance > truck_height + FIT_TOLERANCE:
             row_fits = False
         if length > truck_length + FIT_TOLERANCE or width > truck_width + FIT_TOLERANCE:
             _add_note(notes, f"Spatial: Item # {item_number} footprint {length:g} x {width:g} exceeds truck floor")
@@ -304,6 +328,32 @@ def _place_load_items(
                     item_type=item_type,
                 )
             )
+            if record.stack_by_dimension:
+                # Allocate every represented unit back to its original row.
+                members = []
+                remaining_units = represented_qty
+                level = 1
+                while remaining_units:
+                    source = sources[source_index]
+                    take = min(remaining_units, source_remaining)
+                    members.append(replace(
+                        boxes[-1], stack_members=[], item_number=source.item_number or "",
+                        kkg_load_number=source.kkg_load_number or "", load_group=source.kkg_load_number or source.load_group or "UNASSIGNED",
+                        retailer_po_number=source.retailer_po_number or source.po_number,
+                        store_number=source.store_number or "", dc_number=source.dc_number or "",
+                        item_type=source.pallet_type or _item_type(source.item_number or ""),
+                        item_weight=source.item_weight or 0.0, row_qty=source.qty or 0,
+                        represented_qty=take, pallet_count=float(take), stack_level=level,
+                        grouped_height=(source.item_height or 0) * take,
+                        color=_item_color(source, item_color_map)))
+                    remaining_units -= take
+                    source_remaining -= take
+                    level += take
+                    if source_remaining == 0 and source_index + 1 < len(sources):
+                        source_index += 1
+                        source_remaining = sources[source_index].qty or 0
+                boxes[-1].stack_members = members
+                boxes[-1].item_weight = fsum(m.item_weight * m.represented_qty for m in members) / represented_qty
             box_id += 1
             unit_index += represented_qty
             x += length
@@ -321,6 +371,7 @@ def _validate_load_records(
     truck_height: float,
     truck_max_weight: float,
     total_weight: float,
+    roof_clearance: float = 3.0,
 ) -> list[str]:
     notes: list[str] = []
     item_issues: OrderedDict[str, set[str]] = OrderedDict()
@@ -340,22 +391,20 @@ def _validate_load_records(
             issues.add("weight")
 
         stack_qty = record.stack_qty if record.is_stackable else 1
-        if record.is_stackable and is_half_pallet(record):
-            _add_note(notes, f"Stacking: Item # {item_number} is a half pallet and cannot be double stacked")
         if record.is_stackable and (not _positive(stack_qty) or not float(stack_qty).is_integer()):
             _add_note(notes, f"Stacking: Item # {item_number} stack qty must be greater than 0")
-        if _positive(record.item_height) and (record.item_height or 0.0) > truck_height + FIT_TOLERANCE:
+        if _positive(record.item_height) and (record.item_height or 0.0) + roof_clearance > truck_height + FIT_TOLERANCE:
             _add_note(
                 notes,
-                f"Dimensions: Item # {item_number} height {record.item_height:g} exceeds truck height {truck_height:g}",
+                f"Dimensions: Item # {item_number} height {record.item_height:g} in requires {roof_clearance:g} in roof clearance; truck height is {truck_height:g} in",
             )
         if record.is_stackable and _positive(record.item_height) and _positive(stack_qty) and (record.qty or 0) > 1:
             stack_height = (record.item_height or 0.0) * min(record.qty, stack_qty)
-            if stack_height + STACK_ROOF_CLEARANCE_IN > truck_height + FIT_TOLERANCE:
+            if stack_height + roof_clearance > truck_height + FIT_TOLERANCE:
                 _add_note(
                     notes,
                     f"Stacking: Item # {item_number} stack height {stack_height:g} in requires "
-                    f"{STACK_ROOF_CLEARANCE_IN:g} in roof clearance; truck height is {truck_height:g} in",
+                    f"{roof_clearance:g} in roof clearance; truck height is {truck_height:g} in",
                 )
 
     for item_number, missing_fields in item_issues.items():

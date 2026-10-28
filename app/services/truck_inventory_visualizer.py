@@ -39,11 +39,16 @@ def visualize_truck(truck: TruckSummary, fig_width: float = 12) -> plt.Figure:
     ax.add_patch(Rectangle((0, 0), length, width, facecolor='#F1F5F9', edgecolor='#94A3B8', linewidth=1.5))
     # A faint centerline makes the two trailer lanes easy to follow.
     ax.plot([0, length], [width / 2, width / 2], color='#CBD5E1', linewidth=0.8, linestyle='--', zorder=1)
-    references = {item: index + 1 for index, item in enumerate(sorted({b.item_number or 'UNKNOWN' for b in truck.boxes}))}
+    references = {item: index + 1 for index, item in enumerate(sorted({m.item_number or 'UNKNOWN' for b in truck.boxes for m in b.allocations}))}
     for box in truck.boxes:
         x, y = box.x * length, box.y * width
         w, h = box.width * length, box.height * width
         ax.add_patch(Rectangle((x, y), w, h, facecolor=box.color, edgecolor='#FFFFFF', linewidth=1.6, zorder=2))
+        members = box.allocations
+        if len({member.item_number for member in members}) > 1:
+            for index, member in enumerate(members):
+                ax.add_patch(Rectangle((x, y + h * index / len(members)), w, h / len(members),
+                    facecolor=member.color, edgecolor='#FFFFFF', linewidth=1.2, zorder=2))
         red, green, blue = to_rgb(box.color)
         ink = '#FFFFFF' if 0.2126 * red + 0.7152 * green + 0.0722 * blue < 0.48 else '#172B4D'
         if box.represented_qty > 1:
@@ -54,8 +59,10 @@ def visualize_truck(truck: TruckSummary, fig_width: float = 12) -> plt.Figure:
                         color=ink, linewidth=1.6, solid_capstyle='round', zorder=4)
         # Only show labels that fit comfortably at the rendered figure size.
         if w / length * fig_width >= 0.30 and h / width >= 0.14:
-            label = f"{references[box.item_number or 'UNKNOWN']:02d}"
-            ax.text(x + w / 2, y + h / 2, label, ha='center', va='center', fontsize=8, color=ink, fontweight='bold', zorder=3)
+            label = ' / '.join(f"{references[item or 'UNKNOWN']:02d}" for item in dict.fromkeys(m.item_number for m in members))
+            ax.text(x + w / 2, y + h / 2, label, ha='center', va='center', fontsize=8,
+                    color='#172B4D' if len(members) > 1 else ink, fontweight='bold', zorder=3,
+                    bbox=dict(facecolor='white', alpha=0.85, edgecolor='none', pad=1.5) if len(members) > 1 else None)
     ax.text(0, -width * 0.14, 'REAR / DOORS', fontsize=8, color='#64748B', ha='left')
     ax.text(length, -width * 0.14, 'FRONT / CAB', fontsize=8, color='#64748B', ha='right')
     ax.text(length / 2, width * 1.12, f'{length:g} in long × {width:g} in wide', ha='center', color='#64748B', fontsize=9)
@@ -65,6 +72,10 @@ def visualize_truck(truck: TruckSummary, fig_width: float = 12) -> plt.Figure:
     ax.set_ylim(-width * 0.25, width * 1.25)
     ax.set_aspect('equal')
     ax.axis('off')
+    stacked = [box for box in truck.boxes if box.represented_qty > 1]
+    if stacked:
+        fig.text(0.5, 0.02, f'Double stacks: {len(stacked)} positions / {sum(box.represented_qty for box in stacked)} pallets. Split labels: bottom item / top item.',
+                 ha='center', fontsize=9, color='#475467')
     fig.tight_layout(pad=0.6)
     return fig
 
@@ -79,9 +90,12 @@ def visualize_truck_3d(truck: TruckSummary, fig_width: float = 9) -> plt.Figure:
         x, y = box.x * length, box.y * width
         dx, dy = box.width * length, box.height * width
         # Separate blocks show the seam between the lower and upper pallets.
-        for level in range(max(1, box.represented_qty)):
-            ax.bar3d(x, y, level * box.item_height, dx, dy, box.item_height,
-                     color=box.color, edgecolor='#FFFFFF', linewidth=0.35, shade=True)
+        z = 0.0
+        for member in box.allocations:
+            for _ in range(max(1, member.represented_qty)):
+                ax.bar3d(x, y, z, dx, dy, member.item_height,
+                         color=member.color, edgecolor='#FFFFFF', linewidth=0.35, shade=True)
+                z += member.item_height
         if box.represented_qty > 1:
             ax.text(x + dx / 2, y + dy / 2, box.grouped_height + 1,
                     '=', ha='center', va='bottom', fontsize=8, color='#172B4D')
@@ -106,6 +120,10 @@ def visualize_truck_3d(truck: TruckSummary, fig_width: float = 9) -> plt.Figure:
         fig.text(x, 0.145, label, ha='center', va='center', fontsize=9, color='#64748B')
         fig.text(x, 0.09, f'{value:g} in', ha='center', va='center',
                  fontsize=14, fontweight='bold', color='#172B4D')
+    stacked = [box for box in truck.boxes if box.represented_qty > 1]
+    if stacked:
+        fig.text(0.5, 0.025, f'Double stacks: {len(stacked)} positions / {sum(box.represented_qty for box in stacked)} pallets',
+                 ha='center', fontsize=9, color='#475467')
     ax.set_xlim(0, length)
     ax.set_ylim(-width * 0.12, width)
     ax.set_zlim(0, height * 1.08)
@@ -201,16 +219,21 @@ def render_truck_visualization(trucks: list[TruckSummary]) -> None:
             fig = visualize_truck(truck, fig_width=9)
             st.pyplot(fig, use_container_width=True)
             plt.close(fig)
-        with st.expander("Item key", expanded=len({box.item_number for box in truck.boxes}) <= 8):
+        with st.expander("Item key", expanded=len({m.item_number for box in truck.boxes for m in box.allocations}) <= 8):
             _render_item_legend([truck])
         with st.expander("Pallet dimensions and quantities"):
             _render_item_counts(truck)
         with st.expander("Store / DC / PO details"):
             st.dataframe(pd.DataFrame([{
-                "Position": index, "Store #": box.store_number, "DC #": box.dc_number,
+                "Position": position.box_id, "Stack Level": box.stack_level,
+                "Double Stacked": position.represented_qty > 1,
+                "Stack Height (in)": position.grouped_height,
+                "Roof Clearance (in)": truck.truck_height - position.grouped_height,
+                "Required Clearance (in)": truck.roof_clearance_in,
+                "Store #": box.store_number, "DC #": box.dc_number,
                 "Load": box.kkg_load_number, "PO": box.retailer_po_number,
                 "Item #": box.item_number, "Qty": box.represented_qty,
-            } for index, box in enumerate(truck.boxes, start=1)]), hide_index=True, use_container_width=True)
+            } for position in truck.boxes for box in position.allocations]), hide_index=True, use_container_width=True)
         st.divider()
 
 
@@ -320,10 +343,11 @@ def _render_selected_load_summary(trucks: list[TruckSummary]) -> None:
     load_numbers = sorted({truck.kkg_load_number for truck in trucks if truck.kkg_load_number})
     truck_types = sorted({truck.truck_preset for truck in trucks if truck.truck_preset})
     unique_items = {
-        box.item_number
+        member.item_number
         for truck in trucks
         for box in truck.boxes
-        if box.item_number
+        for member in box.allocations
+        if member.item_number
     }
     total_qty = sum(truck.items_count for truck in trucks)
     total_render_units = sum(len(truck.boxes) for truck in trucks)
@@ -350,7 +374,9 @@ def _render_selected_load_summary(trucks: list[TruckSummary]) -> None:
 def _render_truck_header(truck: TruckSummary) -> None:
     status_label = "Fits" if truck.validation_status == "valid" else "Does Not Fit"
     st.markdown(f"**Truck {truck.truck_id} · {escape(truck.truck_preset)} · {status_label}**")
-    st.caption(f"Load capacity {truck.load_capacity_display} · Floor area {truck.utilization_display} · Interior height {truck.truck_height:g} in · Weight {truck.total_weight:,.0f} / {truck.truck_max_weight:,.0f} lb")
+    st.caption(f"Load capacity {truck.load_capacity_display} · Floor area {truck.utilization_display} · Interior height {truck.truck_height:g} in · Required roof clearance {truck.roof_clearance_in:g} in · Weight {truck.total_weight:,.0f} / {truck.truck_max_weight:,.0f} lb")
+    stacked = [box for box in truck.boxes if box.represented_qty > 1]
+    st.info(f"Double stacks: {len(stacked)} positions · {sum(box.represented_qty for box in stacked)} pallets stacked · {len(truck.boxes) - len(stacked)} single positions. The = symbol marks stacks; split colors show different items in the same stack.")
     if truck.pallet_positions_capacity:
         full = (truck.pallet_positions_used or 0) >= truck.pallet_positions_capacity
         st.caption(f"{'FULL · ' if full else ''}{truck.pallet_positions_used:g} / {truck.pallet_positions_capacity:g} pallet positions. One full pallet or two half pallets uses one position.")
@@ -367,7 +393,7 @@ def _render_item_counts(truck: TruckSummary) -> None:
 
     rows = []
     item_counts: dict[str, dict] = {}
-    for box in truck.boxes:
+    for box in [member for position in truck.boxes for member in position.allocations]:
         if box.item_number not in item_counts:
             item_counts[box.item_number] = {
                 "Item #": box.item_number,
@@ -418,7 +444,7 @@ def _render_item_legend(trucks: list[TruckSummary]) -> None:
 def _item_legend_rows(trucks: list[TruckSummary]) -> list[dict]:
     items: dict[str, dict] = {}
     for truck in trucks:
-        for box in truck.boxes:
+        for box in [member for position in truck.boxes for member in position.allocations]:
             item_number = box.item_number or "UNKNOWN"
             if item_number not in items:
                 items[item_number] = {

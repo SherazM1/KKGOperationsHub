@@ -189,9 +189,10 @@ def export_required_columns_excel(records: list[TruckInventoryRecord], trucks: l
 
     allocations = {}
     for truck in trucks or []:
-        for box in truck.boxes:
-            quantities = allocations.setdefault(assignment_key(box, box.retailer_po_number), {})
-            quantities[truck.truck_id] = quantities.get(truck.truck_id, 0) + box.represented_qty
+        for position in truck.boxes:
+            for box in position.allocations:
+                quantities = allocations.setdefault(assignment_key(box, box.retailer_po_number), {})
+                quantities[truck.truck_id] = quantities.get(truck.truck_id, 0) + box.represented_qty
     
     rows = [
         {
@@ -242,7 +243,10 @@ def export_required_columns_excel(records: list[TruckInventoryRecord], trucks: l
                 "Item #": box.item_number, "Qty": box.represented_qty,
                 "Pallet Length": box.item_length, "Pallet Width": box.item_width,
                 "Pallet Height": box.item_height,
-            } for truck in trucks for box in truck.boxes]
+                "Position #": position.box_id,
+                "Stack Level": box.stack_level,
+                "Double Stacked": position.represented_qty > 1,
+            } for truck in trucks for position in truck.boxes for box in position.allocations]
             pd.DataFrame(assignments).to_excel(writer, index=False, sheet_name="Truck Assignments")
             issues = [{"Truck #": truck.truck_id, "Loads": truck.kkg_load_number,
                        "Qty Requiring Review": truck.items_count,

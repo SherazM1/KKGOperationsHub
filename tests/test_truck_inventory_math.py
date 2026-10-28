@@ -34,7 +34,7 @@ class TruckMathTests(unittest.TestCase):
                 self.assertEqual(truck.boxes, [])
 
     def test_single_pallet_leftover_does_not_require_double_height(self):
-        truck = self.plan([self.row(qty=1, item_height=98, is_stackable=True, stack_qty=2)])[0]
+        truck = self.plan([self.row(qty=1, item_height=97, is_stackable=True, stack_qty=2)])[0]
         self.assertEqual(truck.validation_status, 'valid')
         self.assertEqual(truck.boxes[0].represented_qty, 1)
 
@@ -62,7 +62,7 @@ class TruckMathTests(unittest.TestCase):
                     self.assertGreaterEqual(box.y, 0)
                     self.assertLessEqual(box.x + box.width, 1 + 1e-7)
                     self.assertLessEqual(box.y + box.height, 1 + 1e-7)
-                    self.assertLessEqual(box.grouped_height + (6 if box.represented_qty > 1 else 0), truck.truck_height)
+                    self.assertLessEqual(box.grouped_height + truck.roof_clearance_in, truck.truck_height)
                     for other in truck.boxes[i + 1:]:
                         overlap_x = min(box.x + box.width, other.x + other.width) - max(box.x, other.x)
                         overlap_y = min(box.y + box.height, other.y + other.height) - max(box.y, other.y)

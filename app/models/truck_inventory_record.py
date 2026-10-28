@@ -38,15 +38,20 @@ class TruckInventoryRecord:
     total_weight: float | None = None
     item_length: float | None = None
     item_width: float | None = None
+    unrotated_item_length: float | None = None
+    unrotated_item_width: float | None = None
     item_height: float | None = None
     item_weight: float | None = None
     is_stackable: bool = False
+    stack_by_dimension: bool = False
+    manual_stack_id: str | None = None
     stack_qty: int = 1
     truck_type: str | None = None
     truck_length: float | None = None
     truck_width: float | None = None
     truck_height: float | None = None
     truck_max_weight: float | None = None
+    truck_roof_clearance: float | None = None
     color_group: str | None = None
     
     pallet_description: str | None = None

@@ -27,10 +27,13 @@ def normalize_editor_rows(rows: list[dict]) -> list[dict]:
     normalized_rows = []
     for row in rows:
         normalized = dict(row)
+
         if "Double Stack" in normalized:
             double_stack = bool(normalized.pop("Double Stack"))
             normalized["Is Stackable?"] = "Yes" if double_stack else "No"
             normalized["Stack Qty"] = 2 if double_stack else 1
+            if not double_stack:
+                normalized["Stack By Dimension"] = False
         if str(normalized.get("Color", "")) not in ITEM_SETUP_COLOR_OPTIONS:
             normalized["Color"] = "Orange"
         normalized_rows.append(normalized)
@@ -42,6 +45,33 @@ def get_distinct_item_numbers(records: list[TruckInventoryRecord]) -> list[str]:
     return sorted({record.item_number for record in records if record.item_number})
 
 
+def get_dimension_groups(setup_rows: list[dict]) -> dict[tuple[float, float, float], list[str]]:
+    """Group items by their exact Item Setup length, width and height in inches."""
+    groups = {}
+    for row in setup_rows:
+        dimensions = tuple(_to_float(row.get(field)) for field in ("Length", "Width", "Height"))
+        if row.get("Item #") and all(_positive(value) and isfinite(value) for value in dimensions):
+            groups.setdefault(dimensions, []).append(str(row["Item #"]))
+    return dict(sorted(groups.items()))
+
+
+def apply_dimension_group_stacking(
+    setup_rows: list[dict], records: list[TruckInventoryRecord],
+    dimensions: list[tuple[float, float, float]], enabled: bool,
+) -> tuple[list[dict], list[str]]:
+    """Update stacking for selected groups without changing physical dimensions."""
+    selected = set(dimensions)
+    updated = deepcopy(setup_rows)
+    for row in updated:
+        size = tuple(_to_float(row.get(field)) for field in ("Length", "Width", "Height"))
+        if size not in selected:
+            continue
+        row["Is Stackable?"] = "Yes" if enabled else "No"
+        row["Stack Qty"] = 2 if enabled else 1
+        row["Stack By Dimension"] = bool(enabled)
+    return updated, []
+
+
 def build_default_item_setup(records: list[TruckInventoryRecord]) -> list[dict]:
     """Create editable item setup rows keyed by Item #."""
     setup_rows = []
@@ -51,7 +81,10 @@ def build_default_item_setup(records: list[TruckInventoryRecord]) -> list[dict]:
         item_records = [record for record in records if record.item_number == item_number]
         imported = {}
         for label, attr in [("Length", "item_length"), ("Width", "item_width"), ("Height", "item_height"), ("Weight", "item_weight")]:
-            values = {getattr(record, attr) for record in item_records if getattr(record, attr) is not None}
+            def input_value(record):
+                original = getattr(record, 'unrotated_' + attr, None)
+                return original if original is not None else getattr(record, attr)
+            values = {input_value(record) for record in item_records if input_value(record) is not None}
             if values:
                 imported[label] = next(iter(values)) if len(values) == 1 else 0.0
         setup_rows.append({
@@ -105,12 +138,22 @@ def apply_item_setup(
 
         record.item_length = _to_float(setup.get("Length"))
         record.item_width = _to_float(setup.get("Width"))
+        record.unrotated_item_length = record.item_length
+        record.unrotated_item_width = record.item_width
         record.item_height = _to_float(setup.get("Height"))
         record.item_weight = _to_float(setup.get("Weight"))
         record.is_stackable = str(setup.get("Is Stackable?", "No")).lower() == "yes"
+        record.stack_by_dimension = bool(setup.get("Stack By Dimension", False)) and record.is_stackable
         record.stack_qty = _effective_stack_qty(setup.get("Stack Qty"), record.is_stackable)
         if is_half_pallet(record, str(setup.get("Preset", ""))):
             record.pallet_type = "Half Pallet"
+
+            # Rotate once from the saved input footprint, not from a previously
+            # rotated plan. This also rotates imported 48 x 24 half pallets.
+            record.item_length, record.item_width = (
+                record.item_width,
+                record.item_length,
+            )
         record.color_group = setup_color_to_hex(setup.get("Color"))
         record.total_weight = (record.item_weight or 0.0) * (record.qty or 0)
 
@@ -141,9 +184,6 @@ def validate_item_setup(records: list[TruckInventoryRecord], setup_rows: list[di
             issues.add(f"Item # {item_number}: missing or invalid {', '.join(missing_fields)}")
 
         is_stackable = str(setup.get("Is Stackable?", "No")).lower() == "yes"
-        if is_stackable and any(is_half_pallet(record, str(setup.get("Preset", "")))
-                                for record in records if record.item_number == item_number):
-            issues.add(f"Item # {item_number}: half pallets cannot be double stacked; uncheck Double Stack")
         if is_stackable and _parse_stack_qty(setup.get("Stack Qty")) is None:
             issues.add(f"Item # {item_number}: stack qty must be a whole number greater than 0")
 

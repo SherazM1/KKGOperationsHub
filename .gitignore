@@ -25,3 +25,15 @@ Thumbs.db
 
 # User uploads
 data/uploads/*
+
+# Generated review artifacts and local validation scratch work
+/outputs/
+/analysis_rendered/
+/tmp/
+/tmp_check*/
+/tmp_multistop_shipper_validation/
+/tmp_skid_tags_check/
+
+# Build/authoring dependencies and generated package metadata
+node_modules/
+*.egg-info/

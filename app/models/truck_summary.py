@@ -34,6 +34,12 @@ class BoxLayout:
     item_type: str = ""
     store_number: str = ""
     dc_number: str = ""
+    stack_members: list["BoxLayout"] = field(default_factory=list)
+
+    @property
+    def allocations(self) -> list["BoxLayout"]:
+        """Source quantities represented by this floor position."""
+        return self.stack_members or [self]
 
 
 @dataclass
@@ -63,6 +69,7 @@ class TruckSummary:
     validation_notes: list[str] = field(default_factory=list)
     pallet_positions_used: float | None = None
     pallet_positions_capacity: float | None = None
+    roof_clearance_in: float = 3.0
 
     @property
     def utilization_display(self) -> str:

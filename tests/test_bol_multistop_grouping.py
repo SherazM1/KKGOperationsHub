@@ -153,7 +153,7 @@ def _capture_multistop_shippers(monkeypatch: pytest.MonkeyPatch) -> dict[str, li
         )
         return []
 
-    def fake_postprocess(path, resolved_comment):
+    def fake_postprocess(doc, resolved_comment):
         return True
 
     monkeypatch.setattr(
@@ -173,7 +173,7 @@ def _capture_multistop_shippers(monkeypatch: pytest.MonkeyPatch) -> dict[str, li
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
-        "app.services.bol_multistop_docx_generator._postprocess_standard_comments_in_saved_docx",
+        "app.services.bol_multistop_docx_generator._postprocess_comments_in_memory",
         fake_postprocess,
     )
     return captured

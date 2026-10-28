@@ -7,6 +7,7 @@ from app.services.bol_comment_scope import include_bol_comment
 from datetime import datetime
 from pathlib import Path
 from tempfile import mkdtemp
+from functools import lru_cache
 
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE
@@ -30,7 +31,7 @@ from app.services.bol_standard_docx_generator import (
     _apply_template_record_values as _apply_standard_template_record_values,
     _normalize_document_font as _normalize_standard_document_font,
     _normalize_bol_type,
-    _postprocess_comments_in_saved_docx as _postprocess_standard_comments_in_saved_docx,
+    _postprocess_comments_in_memory,
 )
 from app.utils.bol_facilities import BolFacilityRecord, facility_to_ship_from
 
@@ -1101,6 +1102,13 @@ def _add_master_comment_box(doc: Document, text: str, template_mode: str = "Stan
     run.font.size = Pt(1)
     run._r.append(pict)
 
+@lru_cache(maxsize=8)
+def _reference_header_heights(
+    template_path: str,
+    modified_ns: int,
+) -> tuple[float, ...]:
+    reference = Document(template_path).tables[0]
+    return tuple(row.height.pt for row in reference.rows[:22])
 
 def _align_word_comment_header(doc: Document, comment: str, template_mode: str = "Standard") -> None:
     """Replace the template's drifting floating label with aligned table cells."""
@@ -1151,9 +1159,12 @@ def _align_word_comment_header(doc: Document, comment: str, template_mode: str =
         cell = table.rows[index].cells[9]
         if cell.text.strip() and not cell._tc.xpath('.//w:drawing | .//w:pict'):
             _set_cell_text(cell, cell.text.strip(), font_points=8, align_center=False)
-    # Match the PDF header depth, leaving the comment's exact page rectangle free.
-    reference = Document(str(STANDARD_TEMPLATE_PATH)).tables[0]
-    heights = [row.height.pt for row in reference.rows[:22]]
+    reference_path = STANDARD_TEMPLATE_PATH.resolve()
+
+    heights = _reference_header_heights(
+        str(reference_path),
+        reference_path.stat().st_mtime_ns,
+    )
     # The template's vertically merged logo/header contributes an additional
     # 23 pt in Word beyond the sum of its row heights.
     target_bottom = (334.0 if template_mode == 'No Recourse' else 382.0) - 23.0
@@ -1253,15 +1264,21 @@ def _save_multistop_docx(
     filename = destination.name
     if master_comment_enabled:
         _add_master_comment_box(doc, master_comment_text, template_mode)
-    doc.save(str(destination))
 
-    comment_label_populated = _postprocess_standard_comments_in_saved_docx(
-        destination,
+    comment_label_populated = _postprocess_comments_in_memory(
+        doc,
         resolved_comment,
     )
-    cleaned_doc = Document(str(destination))
-    _align_word_comment_header(cleaned_doc, resolved_comment, template_mode)
-    cleaned_doc.save(str(destination))
+
+    _align_word_comment_header(
+        doc,
+        resolved_comment,
+        template_mode,
+    )
+
+    doc.save(str(destination))
+
+
     if resolved_comment and not comment_label_populated:
         notices.append(
             DocxGenerationNotice(
@@ -1342,15 +1359,19 @@ def _save_individual_stop_docx(
 
     destination = _unique_destination_path(output_root, base_name, ".docx")
     filename = destination.name
-    doc.save(str(destination))
-
-    comment_label_populated = _postprocess_standard_comments_in_saved_docx(
-        destination,
+    comment_label_populated = _postprocess_comments_in_memory(
+        doc,
         resolved_comment,
     )
-    cleaned_doc = Document(str(destination))
-    _align_word_comment_header(cleaned_doc, resolved_comment, template_mode)
-    cleaned_doc.save(str(destination))
+
+    _align_word_comment_header(
+        doc,
+        resolved_comment,
+        template_mode,
+    )
+
+    doc.save(str(destination))
+
     if resolved_comment and not comment_label_populated:
         notices.append(
             DocxGenerationNotice(

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from io import BytesIO
 
 from docx import Document
+from docx.oxml import parse_xml
+from lxml import etree
 import pytest
 
 from app.models.bol_standard_record import (
@@ -11,12 +14,55 @@ from app.models.bol_standard_record import (
     BolStandardRecord,
 )
 from app.services.bol_standard_docx_generator import (
+    _postprocess_comments_in_memory,
+    _postprocess_comments_in_document_xml,
     generate_standard_docx_set,
     resolve_output_filename_prefix_for_mode,
     resolve_template_path_for_mode,
 )
 from app.utils.bol_facilities import BOL_FACILITY_LOOKUP, BOL_FACILITY_OPTIONS
 from app.utils.bol_facilities import facility_to_ship_from
+
+
+def test_in_memory_comment_processing_preserves_body_and_header_relationships() -> None:
+    doc = Document()
+    doc.add_paragraph("BOL content must remain intact")
+    doc.add_paragraph("Comments:")
+    doc.sections[0].header.paragraphs[0].text = "Existing header"
+    body = doc.element.body
+    relationship_ids = set(doc.part.rels)
+
+    populated = _postprocess_comments_in_memory(doc, "Use dock 4 & call dispatch")
+
+    assert populated
+    assert doc.element.body is body
+    assert set(doc.part.rels) == relationship_ids
+    assert doc.paragraphs[0].text == "BOL content must remain intact"
+    assert doc.paragraphs[1].text == "Comments: Use dock 4 & call dispatch"
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    reopened = Document(buffer)
+    assert reopened.paragraphs[1].text == "Comments: Use dock 4 & call dispatch"
+    assert reopened.sections[0].header.paragraphs[0].text == "Existing header"
+
+
+@pytest.mark.parametrize('template', ['standard_bol_template.docx', 'no_recourse_bol_template.docx'])
+def test_in_memory_comments_match_existing_xml_processing(template: str) -> None:
+    doc = Document(Path('app/templates') / template)
+    expected_xml, expected_populated = _postprocess_comments_in_document_xml(
+        doc.element.xml, 'Use dock 4 & call dispatch')
+
+    populated = _postprocess_comments_in_memory(doc, 'Use dock 4 & call dispatch')
+
+    def canonical_body(body):
+        # Formatting indentation is irrelevant to Word; all real text,
+        # positioning, tables, and shape properties must remain identical.
+        parsed = etree.fromstring(etree.tostring(body), etree.XMLParser(remove_blank_text=True))
+        return etree.tostring(parsed, method='c14n', exclusive=True)
+
+    assert populated == expected_populated
+    assert canonical_body(doc.element.body) == canonical_body(parse_xml(expected_xml).body)
 
 
 def _ready_record() -> BolStandardRecord:

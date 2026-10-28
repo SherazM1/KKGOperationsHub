@@ -18,6 +18,7 @@ class TruckPreset:
     max_weight_lbs: float
     operational_weight_threshold_lbs: float
     description: str
+    roof_clearance_in: float = 3.0
 
     @property
     def length_ft(self) -> float:
@@ -53,6 +54,7 @@ TRUCK_PRESETS = {
         max_weight_lbs=43000.0,
         operational_weight_threshold_lbs=43000.0,
         description="Refrigerated trailer",
+        roof_clearance_in=6.0,
     ),
     "straight_box_truck_26_foot": TruckPreset(
         name="Straight Box Truck (26 Foot)",
@@ -92,11 +94,11 @@ ITEM_PRESETS = {
     ),
     "half_pallet": ItemPreset(
         name="Half Pallet",
-        length=20.0,
-        width=48.0,
+        length=48.0,
+        width=20.0,
         height=52.7,
         weight=350.0,
-        is_stackable=False,
+        is_stackable=True,
         stack_qty=1,
     ),
     "quarter_pallet_20x20": ItemPreset(
