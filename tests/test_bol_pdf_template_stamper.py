@@ -207,7 +207,7 @@ def _pdf_text(path: str) -> str:
 
 
 @pytest.mark.parametrize("mode", ["Standard", "No Recourse"])
-def test_excel_items_all_print_once_on_single_pdf_page(tmp_path: Path, mode: str) -> None:
+def test_excel_items_all_print_once_on_continuation_pages(tmp_path: Path, mode: str) -> None:
     from io import BytesIO
     from openpyxl import Workbook
     from app.services.bol_standard_parser import parse_standard_bol_excel
@@ -219,7 +219,7 @@ def test_excel_items_all_print_once_on_single_pdf_page(tmp_path: Path, mode: str
                   "DC #", "DC NAME", "DC STREET", "DC CITY", "DC ST", "DC ZIP",
                   "TGT PO #", "ITEM #", "UPC", "Pallet Description", "QTY",
                   "TOTAL PALLETS", "weight each", "Total Weight"])
-    for index in range(14):
+    for index in range(17):
         sheet.append(["KL-1", "Test Carrier", "PRO-1", "KKPO-1", "BOL-1", "2026-05-13",
                       "1234", "Test DC", "123 Test St", "Dallas", "TX", "75001",
                       "PO-1", f"ITEM{index:03d}", f"{index:012d}",
@@ -232,7 +232,7 @@ def test_excel_items_all_print_once_on_single_pdf_page(tmp_path: Path, mode: str
     facility = BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]]
     records = map_standard_rows_to_records(parse_standard_bol_excel(upload), facility)
     assert len(records) == 1
-    assert len(records[0].item_lines) == 14
+    assert len(records[0].item_lines) == 17
     assert records[0].is_ready
     result = stamp_bol_pdf_set(
         records, facility, [_docx_file(tmp_path, 'items.docx', 'BOL-1')],
@@ -240,9 +240,9 @@ def test_excel_items_all_print_once_on_single_pdf_page(tmp_path: Path, mode: str
     )
     assert result.failed_count == 0, result.failed_conversions
     reader = PdfReader(result.converted_files[0].file_path)
-    assert len(reader.pages) == 1
+    assert len(reader.pages) == 2
     text = ' '.join(_pdf_text(result.converted_files[0].file_path).split())
-    for index in range(14):
+    for index in range(17):
         assert text.count(f"Description{index:03d}") == 1
         assert text.count(f"Item #: ITEM{index:03d}") == 1
     assert "TOTALS" in reader.pages[-1].extract_text()
@@ -270,12 +270,12 @@ def test_wrapped_descriptions_stay_inside_rows_and_preserve_long_text(config) ->
             assert len(row.text_lines) * row.leading + 2 * row.padding <= row.height
             row_width = ITEM_TABLE_COLUMNS[4] - ITEM_TABLE_COLUMNS[3] - 2 * row.padding
             assert all(stringWidth(text, FONT_NAME, row.font_size) <= row_width for text in row.text_lines)
-    assert len(pages[0]) == 1
+    assert len(pages[0]) == 15
 
 
 @pytest.mark.parametrize("mode", ["Standard", "No Recourse"])
-@pytest.mark.parametrize("count", [6, 10, 40])
-def test_pdf_always_shrinks_to_one_page(tmp_path: Path, mode: str, count: int) -> None:
+@pytest.mark.parametrize("count", [6, 15, 16, 40])
+def test_pdf_continues_after_fifteen_items(tmp_path: Path, mode: str, count: int) -> None:
     from app.services.bol_pdf_template_stamper import _paginate_standard_items
     record = _standard_record()
     record.item_lines = [replace(
@@ -285,11 +285,9 @@ def test_pdf_always_shrinks_to_one_page(tmp_path: Path, mode: str, count: int) -
     ) for index in range(count)]
     config = STANDARD_CONFIG if mode == 'Standard' else NO_RECOURSE_CONFIG
     pages = _paginate_standard_items(config, record)
-    assert len(pages) == 1
-    assert len(pages[0]) == count
+    assert len(pages) == (count + 14) // 15
+    assert all(len(page) == 15 for page in pages)
     assert 0 < pages[0][0].font_size <= 8.5
-    if count == 40:
-        assert pages[0][0].font_size < 6.0
     assert len({row.font_size for row in pages[0]}) == 1
     result = stamp_bol_pdf_set(
         [record], BOL_FACILITY_LOOKUP[BOL_FACILITY_OPTIONS[0]],
@@ -297,7 +295,7 @@ def test_pdf_always_shrinks_to_one_page(tmp_path: Path, mode: str, count: int) -
         mode=mode, output_dir=tmp_path / 'pdf',
     )
     assert result.failed_count == 0, result.failed_conversions
-    assert len(PdfReader(result.converted_files[0].file_path).pages) == 1
+    assert len(PdfReader(result.converted_files[0].file_path).pages) == (count + 14) // 15
     text = ' '.join(_pdf_text(result.converted_files[0].file_path).split())
     for index in range(count):
         assert text.count(f'Product{index:03d}') == 1

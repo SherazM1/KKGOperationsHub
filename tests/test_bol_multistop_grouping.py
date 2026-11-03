@@ -449,10 +449,12 @@ def test_multistop_combined_rows_use_compact_table_styling(tmp_path: Path) -> No
 
     table, header_idx = _item_table_rows(combined_file.file_path)
     product_rows = table.rows[header_idx + 1 : header_idx + 4]
-    totals_row = table.rows[header_idx + 4]
+    totals_row = table.rows[header_idx + 16]
 
-    assert [row.height.twips for row in product_rows] == [520, 520, 520]
-    assert totals_row.height.twips == 430
+    assert all(0 < row.height.twips <= 520 for row in product_rows)
+    assert all(not any(cell.text.strip() for cell in row.cells)
+               for row in table.rows[header_idx + 4:header_idx + 16])
+    assert totals_row.height.twips == 400
     assert "TOTALS" in " ".join(cell.text for cell in totals_row.cells)
     for row in product_rows:
         for cell in row.cells:

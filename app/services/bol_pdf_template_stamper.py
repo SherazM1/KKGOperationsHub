@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.services.bol_item_layout import MAX_ITEM_ROWS, validate_item_row_count
+
 from dataclasses import dataclass, replace
 from app.services.bol_comment_scope import include_bol_comment
 from io import BytesIO
@@ -1052,11 +1054,32 @@ def _wrapped_item_text(text: str, width: float, font_size: float = ITEM_FONT_SIZ
 
 def _paginate_standard_items(
     config: PdfTemplateConfig, record: BolStandardRecord, *, preserve_detail_lines: bool = False,
+    item_row_count: int = MAX_ITEM_ROWS,
 ) -> list[list[PdfItemRow]]:
-    """Fit every item on exactly one page, without a minimum font cutoff."""
+    """Print up to the fixed item limit per page, preserving source order."""
+    validate_item_row_count(item_row_count)
+    lines = [line for line in _standard_item_lines(record, mode=config.mode) if _line_has_data(line)]
+    pages = []
+    for start in range(0, max(1, len(lines)), item_row_count):
+        page_lines = lines[start:start + item_row_count]
+        page_lines += [BolStandardItemLine(
+            source_row_number=0, pallet_qty="", type="", po_number="", item_description="",
+            item_number="", upc="", skids="", weight_each="",
+        ) for _ in range(item_row_count - len(page_lines))]
+        pages.append(_fit_item_page(config, page_lines, preserve_detail_lines=preserve_detail_lines))
+    return pages
+
+
+def _fit_item_page(config, lines, *, preserve_detail_lines):
+    """Fit wrapped descriptions inside one page's existing item-table bounds."""
     top, bottom = _item_table_bounds(config)
     capacity = top - bottom
-    lines = [line for line in _standard_item_lines(record, mode=config.mode) if _line_has_data(line)]
+
+    def fill_area(rows):
+        if rows:
+            spare = max(0, capacity - sum(row.height for row in rows)) / len(rows)
+            return [replace(row, height=row.height + spare) for row in rows]
+        return rows
 
     def layout(size: float, *, compact: bool) -> list[PdfItemRow]:
         leading = size * 1.08 if compact else ITEM_LEADING
@@ -1064,6 +1087,12 @@ def _paginate_standard_items(
         width = ITEM_TABLE_COLUMNS[4] - ITEM_TABLE_COLUMNS[3] - 2 * padding
         rows = []
         for line in lines:
+            if not _line_has_data(line):
+                # Empty ruled rows need no text baseline. Reserving a full line
+                # for each one would shrink the populated rows unnecessarily.
+                rows.append(PdfItemRow(line, (), 2 * padding + size * 0.35,
+                                       size, leading, padding))
+                continue
             text = _description_value(line)
             if compact and not preserve_detail_lines:
                 text = " ".join(text.split())
@@ -1076,10 +1105,10 @@ def _paginate_standard_items(
 
     rows = layout(ITEM_FONT_SIZE, compact=False)
     if sum(row.height for row in rows) <= capacity:
-        return [rows]
+        return fill_area(rows)
     rows = layout(ITEM_FONT_SIZE, compact=True)
     # Halving always finds a fit: both line height and padding shrink with
-    # the font. Never discard items or create a second page for a BOL.
+    # the font. Never discard or clip an item's description.
     upper = lower = ITEM_FONT_SIZE
     while sum(row.height for row in rows) > capacity:
         upper = lower
@@ -1093,7 +1122,7 @@ def _paginate_standard_items(
             lower, best = midpoint, rows
         else:
             upper = midpoint
-    return [best]
+    return fill_area(best)
 
 
 def _draw_standard_item_table(
@@ -1116,7 +1145,7 @@ def _draw_standard_item_table(
     y = top
     for row in rows:
         line = row.line
-        values = ((line.type, line.pallet_qty) if multistop_columns else (line.pallet_qty, rendered_type)) + (line.po_number, "", line.skids, _display_weight(line))
+        values = ((line.type, line.pallet_qty) if multistop_columns else (line.pallet_qty, rendered_type if _line_has_data(line) else "")) + (line.po_number, "", line.skids, _display_weight(line))
         for index, value in enumerate(values):
             x0, x1 = ITEM_TABLE_COLUMNS[index:index + 2]
             if index == 3:
@@ -1140,14 +1169,16 @@ def _draw_standard_item_table(
 
 def _standard_overlay_callbacks(
     config: PdfTemplateConfig, record: BolStandardRecord, selected_facility: BolFacilityRecord,
+    *, item_row_count: int = MAX_ITEM_ROWS,
     **options: Any,
 ) -> list[Callable[[canvas.Canvas], None]]:
-    rows = _paginate_standard_items(config, record)[0]
+    pages = _paginate_standard_items(config, record, item_row_count=item_row_count)
     return [
-        lambda canv: _draw_standard_overlay(
+        lambda canv, rows=rows: _draw_standard_overlay(
             canv, config, record, selected_facility, item_rows=rows,
             **options,
         )
+        for rows in pages
     ]
 
 
@@ -1546,8 +1577,8 @@ def _draw_multistop_terms(
     )
 
 
-def _draw_multistop_item_table(canv, config, record):
-    """Render source items, with their own DC/PO/quantity, below delivery blocks."""
+def _multistop_item_lines(record):
+    """Keep source items and their destination DC together across pages."""
     lines = []
     for stop in record.stops:
         source_lines = stop.item_lines or [BolStandardItemLine(
@@ -1557,7 +1588,14 @@ def _draw_multistop_item_table(canv, config, record):
             upc=stop.upc, skids=stop.total_pallets, weight_each=stop.weight,
         )]
         lines.extend(replace(line, type=stop.dc_number) for line in source_lines)
-    rows = _paginate_standard_items(config, replace(record, item_lines=lines), preserve_detail_lines=True)[0]
+    return lines
+
+
+def _draw_multistop_item_table(canv, config, record, item_rows=None):
+    """Render one master page below the delivery blocks."""
+    rows = item_rows if item_rows is not None else _paginate_standard_items(
+        config, replace(record, item_lines=_multistop_item_lines(record)), preserve_detail_lines=True,
+    )[0]
     _draw_standard_item_table(canv, config, rows, "", multistop_columns=True)
     top, bottom = _item_table_bounds(config)
     columns = ITEM_TABLE_COLUMNS
@@ -1631,11 +1669,14 @@ def _draw_multistop_overlay(
     batch_comment: str | None,
     master_comment_enabled: bool = False,
     master_comment_text: str = "",
+    item_rows: list[PdfItemRow] | None = None,
 ) -> None:
     
     
     if no_recourse:
-        _draw_no_recourse_multistop_overlay(canv, record, selected_facility, batch_comment)
+        _draw_no_recourse_multistop_overlay(
+            canv, record, selected_facility, batch_comment, item_rows=item_rows
+        )
         
         if master_comment_enabled:
             _draw_master_comment_box(
@@ -1662,7 +1703,7 @@ def _draw_multistop_overlay(
     # Draw Standard or No Recourse paragraph
     _draw_multistop_terms(canv, no_recourse)
 
-    _draw_multistop_item_table(canv, config, record)
+    _draw_multistop_item_table(canv, config, record, item_rows=item_rows)
     if master_comment_enabled:
             _draw_master_comment_box(
                 canv,
@@ -1694,6 +1735,7 @@ def _draw_no_recourse_multistop_overlay(
     record: BolMultistopRecord,
     selected_facility: BolFacilityRecord,
     batch_comment: str | None,
+    *, item_rows: list[PdfItemRow] | None = None,
 ) -> None:
     """Keep the reference form's typography, terms and footer for combined loads."""
     config = NO_RECOURSE_CONFIG
@@ -1729,7 +1771,7 @@ def _draw_no_recourse_multistop_overlay(
             multiline=True, leading=10, whiteout=False,
         ), values[f"delivery_{index}_address"])
 
-    _draw_multistop_item_table(canv, config, record)
+    _draw_multistop_item_table(canv, config, record, item_rows=item_rows)
     _draw_box_value(canv, _box_for_baseline(
         x=34, baseline=78, width=550, font_size=9, align="center",
     ), f"Broker of Record: {_safe_text(record.bill_to.company).upper()}")
@@ -1995,10 +2037,13 @@ def stamp_bol_pdf_set(
     master_comment_enabled: bool = False,
     master_comment_text: str = "",
     comment_scope: str = "Master only",
+    item_row_count: int = MAX_ITEM_ROWS,
     output_dir: Path | None = None,
     progress_callback: Callable[[int, int, GeneratedDocxFile], None] | None = None,
 ) -> StandardPdfConversionResult:
     """Stamp BOL PDFs by merging dynamic overlays onto static PDF templates."""
+
+    validate_item_row_count(item_row_count)
 
     if selected_facility is None:
         raise ValueError("No ship-from facility is selected. Select a facility before PDF generation.")
@@ -2053,6 +2098,7 @@ def stamp_bol_pdf_set(
                         stop_config,
                         stop_record,
                         selected_facility,
+                        item_row_count=item_row_count,
                         multistop=True,
                         extra_comment_enabled=include_bol_comment(master_comment_enabled, comment_scope, is_master=False),
                         extra_comment_text=master_comment_text,
@@ -2094,16 +2140,21 @@ def stamp_bol_pdf_set(
                             "Broker of Record: ": "", "TRIDENT TRANSPORT,  LLC": ""}
                            if resolved_multistop_no_recourse else {}),
                     },
-                    draw_callback=lambda canv, record=record, no_recourse=resolved_multistop_no_recourse: _draw_multistop_overlay(
+                    draw_callbacks=[lambda canv, record=record, rows=rows, no_recourse=resolved_multistop_no_recourse: _draw_multistop_overlay(
                         canv,
                         config,
                         record,
                         selected_facility,
                         no_recourse=no_recourse,
+                        item_rows=rows,
                         batch_comment=batch_comment,
                         master_comment_enabled=include_bol_comment(master_comment_enabled, comment_scope, is_master=True),
                         master_comment_text=master_comment_text,
-                    ),
+                    ) for rows in _paginate_standard_items(
+                        NO_RECOURSE_CONFIG if resolved_multistop_no_recourse else config,
+                        replace(record, item_lines=_multistop_item_lines(record)),
+                        preserve_detail_lines=True, item_row_count=item_row_count,
+                    )],
                 )
             else:
                 record = standard_lookup.get(_safe_text(generated_file.bol_number))
@@ -2120,6 +2171,7 @@ def stamp_bol_pdf_set(
                         config,
                         record,
                         selected_facility,
+                        item_row_count=item_row_count,
                         bol_type=bol_type,
                         qty_type=qty_type,
                         batch_comment=batch_comment,

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 from app.services.bol_comment_scope import include_bol_comment
+from app.services.bol_item_layout import MAX_ITEM_ROWS, apply_docx_item_row_layout, validate_item_row_count
 from datetime import datetime
 from pathlib import Path
 from tempfile import mkdtemp
@@ -732,23 +734,26 @@ def _clean_combined_multistop_item_area(
         if totals_idx is None:
             return
 
-        for stop_offset, stop in enumerate(record.stops):
-            row_idx = header_idx + 1 + stop_offset
-            if row_idx >= totals_idx:
-                break
-            _set_unique_cell_text(
-                table.rows[row_idx],
-                6,
-                _format_multistop_item_description(
-                    stop.pallet_description,
-                    stop.item_number,
-                    stop.upc,
-                ),
-                font_points=8.5,
-                align_center=False,
-            )
-
         totals_row = table.rows[totals_idx]
+        template_row = deepcopy(table.rows[header_idx + 1]._tr)
+        for row in list(table.rows)[header_idx + 1:totals_idx]:
+            table._tbl.remove(row._tr)
+        from docx.table import _Row
+        for stop_index, stop in enumerate(record.stops):
+            lines = _build_individual_stop_standard_record(record, stop_index).item_lines
+            for line in lines:
+                new_tr = deepcopy(template_row)
+                totals_row._tr.addprevious(new_tr)
+                row = _Row(new_tr, table)
+                _clear_row_text(row)
+                for column, text in ((0, stop.dc_number), (1, line.pallet_qty),
+                                     (3, line.po_number), (12, line.skids),
+                                     (15, line.weight_each)):
+                    _set_unique_cell_text(row, column, text)
+                _set_unique_cell_text(row, 6, _format_multistop_item_description(
+                    line.item_description, line.item_number, line.upc,
+                ), align_center=False)
+
         _set_row_height(totals_row, 430, exact=False)
         _compact_row_text(totals_row, 8.5)
         _set_unique_cell_text(totals_row, 1, _format_number(record.total_case), font_points=8.5)
@@ -1204,6 +1209,7 @@ def _save_multistop_docx(
     notices: list[DocxGenerationNotice],
     master_comment_enabled: bool = False,
     master_comment_text: str = "",
+    item_row_count: int = MAX_ITEM_ROWS,
 ) -> MultistopGeneratedDocxFile:
     doc = Document(str(resolved_template))
     _remove_multistop_consignee_rules(doc)
@@ -1276,6 +1282,9 @@ def _save_multistop_docx(
         template_mode,
     )
 
+    apply_docx_item_row_layout(
+        doc, item_row_count, template_mode if is_standard_family_template else "Multistop"
+    )
     doc.save(str(destination))
 
 
@@ -1317,6 +1326,7 @@ def _save_individual_stop_docx(
     notices: list[DocxGenerationNotice],
     extra_comment_enabled: bool = False,
     extra_comment_text: str = "",
+    item_row_count: int = MAX_ITEM_ROWS,
 ) -> MultistopGeneratedDocxFile:
     stop = record.stops[stop_index]
     display_bol_number = (stop.bol_number or "").strip() or record.bol_number
@@ -1337,7 +1347,8 @@ def _save_individual_stop_docx(
         selected_facility,
         batch_comment,
         bol_type=bol_type,
-        compact_standard_item_area=is_standard_template,
+        compact_standard_item_area=is_standard_template or is_no_recourse_template,
+        filter_blank_item_lines=is_no_recourse_template,
     )
     ship_from_populated = _populate_ship_from_block(doc, selected_facility)
     if not ship_from_populated:
@@ -1347,7 +1358,9 @@ def _save_individual_stop_docx(
                 message="Could not confirm ship-from block location in individual stop template.",
             )
         )
-    if is_standard_template:
+    if len(stop_record.item_lines) > 1:
+        _compact_standard_family_multistop_table(doc)
+    elif is_standard_template:
         _clean_standard_individual_stop_item_area(doc, stop, bol_type)
     elif is_no_recourse_template:
         _clean_no_recourse_individual_stop_item_area(doc, stop, bol_type)
@@ -1370,6 +1383,7 @@ def _save_individual_stop_docx(
         template_mode,
     )
 
+    apply_docx_item_row_layout(doc, item_row_count, template_mode)
     doc.save(str(destination))
 
     if resolved_comment and not comment_label_populated:
@@ -1409,7 +1423,9 @@ def generate_multistop_docx_set(
     master_comment_enabled: bool = False,
     master_comment_text: str = "",
     comment_scope: str = "Master only",
+    item_row_count: int = MAX_ITEM_ROWS,
 ) -> StandardDocxGenerationResult:
+    validate_item_row_count(item_row_count)
     if selected_facility is None:
         raise ValueError(
             "No ship-from facility is selected. Select a facility in BOL Generator before DOCX generation."
@@ -1493,6 +1509,7 @@ def generate_multistop_docx_set(
                     notices=notices,
                     master_comment_enabled=include_bol_comment(master_comment_enabled, comment_scope, is_master=True),
                     master_comment_text=master_comment_text,
+                    item_row_count=item_row_count,
                 )
             )
 
@@ -1511,6 +1528,7 @@ def generate_multistop_docx_set(
                         stop_index=stop_index,
                         extra_comment_enabled=include_bol_comment(master_comment_enabled, comment_scope, is_master=False),
                         extra_comment_text=master_comment_text,
+                        item_row_count=item_row_count,
                         template_mode=resolved_stop_template_mode,
                         bol_type=bol_type,
                         notices=notices,

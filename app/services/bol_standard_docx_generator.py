@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.services.bol_item_layout import MAX_ITEM_ROWS, apply_docx_item_row_layout, validate_item_row_count
+
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -1200,7 +1202,9 @@ def generate_standard_docx_set(
     output_dir: Path | None = None,
     file_name_prefix: str = "standard_bol",
     allow_incomplete_records: bool = False,
+    item_row_count: int = MAX_ITEM_ROWS,
 ) -> StandardDocxGenerationResult:
+    validate_item_row_count(item_row_count)
     if selected_facility is None:
         raise ValueError(
             "No ship-from facility is selected. Select a facility in BOL Generator before DOCX generation."
@@ -1264,6 +1268,9 @@ def generate_standard_docx_set(
             comment_label_populated = _postprocess_comments_in_memory(
                 doc,
                 resolved_comment,
+            )
+            apply_docx_item_row_layout(
+                doc, item_row_count, "No Recourse" if is_no_recourse_template else "Standard"
             )
             doc.save(str(destination))
 
