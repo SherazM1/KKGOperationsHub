@@ -68,6 +68,7 @@ class BolStandardRecord:
     carrier_pro_number: str = ""
     pickup_number: str = ""
     shipwell_number: str = ""
+    import_issues: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.consignee_street, self.consignee_city_state_zip = normalize_bol_address(

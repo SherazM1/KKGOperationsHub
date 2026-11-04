@@ -20,6 +20,7 @@ from app.services.bol_multistop_docx_generator import (
 )
 from app.services.bol_multistop_mapper import map_multistop_rows_to_records
 from app.services.bol_multistop_parser import parse_multistop_bol_excel
+from app.services.bol_excel_headers import ColumnMappingRequired
 from app.services.bol_file_bundle_service import (
     StandardBundleResult,
     create_multistop_bundles,
@@ -63,6 +64,9 @@ BOL_TEMP_OUTPUT_PREFIXES = (
 
 
 def _initialize_bol_state() -> None:
+    st.session_state.setdefault("bol_column_overrides", {})
+    st.session_state.setdefault("bol_mapping_requests", {})
+    st.session_state.setdefault("bol_mapping_samples", {})
     default_facility_label = BOL_FACILITY_OPTIONS[0] if BOL_FACILITY_OPTIONS else None
     default_facility = (
         BOL_FACILITY_LOOKUP.get(default_facility_label).copy()
@@ -210,6 +214,7 @@ def _clear_review_state(*, delete_files: bool = False) -> None:
 
 
 def _clear_input_state(*, delete_files: bool = False) -> None:
+    _clear_header_mapping()
     st.session_state["bol_uploaded_filename"] = None
     st.session_state["bol_uploaded_file_signature"] = None
     st.session_state["bol_selected_worksheet"] = None
@@ -226,12 +231,56 @@ def _clear_input_state(*, delete_files: bool = False) -> None:
 
 
 def _clear_worksheet_dependent_state() -> None:
+    _clear_header_mapping()
     st.session_state["bol_parse_requested"] = False
     st.session_state["bol_parse_error"] = None
     st.session_state["bol_parsed_rows"] = []
     st.session_state["bol_grouped_records"] = []
     st.session_state["bol_parsed_worksheet"] = None
     _clear_review_state(delete_files=False)
+
+
+def _clear_header_mapping() -> None:
+    st.session_state["bol_column_overrides"] = {}
+    st.session_state["bol_mapping_requests"] = {}
+    st.session_state["bol_mapping_samples"] = {}
+    for key in list(st.session_state):
+        if key.startswith("bol_column_choice_"):
+            st.session_state.pop(key, None)
+
+
+def _render_header_mapping_choices() -> bool:
+    requests = st.session_state.get("bol_mapping_requests", {})
+    if not requests:
+        return True
+    st.warning("Choose the source columns below, then parse again. No BOLs will be generated from an unresolved mapping.")
+    complete = True
+    samples = st.session_state.get("bol_mapping_samples", {})
+    labels = {
+        "unit_qty": "item quantity", "cases": "item quantity",
+        "plt_qty": "item pallet count", "total_pallets": "item pallet count",
+        "wm_po": "retailer PO number", "target_po_number": "retailer PO number",
+        "group_pallet_total": "group pallet total", "group_weight_total": "load weight total",
+    }
+    def choice_label(value):
+        if value is None:
+            return "Choose a column"
+        examples = ", ".join(text or "(blank)" for text in samples.get(value, []))
+        return f"{value} ({examples[:80]})" if examples else value
+    for field, columns in requests.items():
+        key = f"bol_column_choice_{field}"
+        choice = st.selectbox(
+            f"Source column for {labels.get(field, field.replace('_', ' '))}",
+            options=[None, *columns], key=key,
+            format_func=choice_label,
+        )
+        if choice is None:
+            complete = False
+            st.session_state["bol_column_overrides"].pop(field, None)
+        else:
+            st.session_state["bol_column_overrides"][field] = choice
+            st.caption("Sample values: " + ", ".join(value or "(blank)" for value in samples.get(choice, [])))
+    return complete
 
 
 def _uploaded_file_signature(uploaded_file: Any) -> tuple[Any, ...] | None:
@@ -765,6 +814,7 @@ def render_bol_generator_view() -> None:
         options=["Standard", "No Recourse", "Multistop"],
         horizontal=True,
         key="bol_mode_radio",
+        on_change=_clear_worksheet_dependent_state,
         index=["Standard", "No Recourse", "Multistop"].index(st.session_state["bol_mode"]),
     )
     if st.session_state["bol_mode"] == "Multistop":
@@ -930,6 +980,7 @@ def render_bol_generator_view() -> None:
         previous_filename = st.session_state["bol_uploaded_filename"]
         previous_file_signature = st.session_state["bol_uploaded_file_signature"]
         if uploaded_file is None:
+            _clear_header_mapping()
             st.info("No Excel or CSV file uploaded yet.")
             st.session_state["bol_uploaded_filename"] = None
             st.session_state["bol_uploaded_file_signature"] = None
@@ -952,6 +1003,7 @@ def render_bol_generator_view() -> None:
             st.success(f"Uploaded file: {uploaded_file.name}")
             uploaded_file_is_csv = is_csv_upload(uploaded_file)
             if previous_file_signature != current_file_signature:
+                _clear_header_mapping()
                 st.session_state["bol_parsed_rows"] = []
                 st.session_state["bol_grouped_records"] = []
                 st.session_state["bol_doc_upload_parse_result"] = None
@@ -969,7 +1021,7 @@ def render_bol_generator_view() -> None:
             if uploaded_file_is_csv:
                 st.session_state["bol_selected_worksheet"] = None
                 st.session_state.pop("bol_selected_worksheet_selectbox", None)
-            elif st.session_state["bol_mode"] in ("Standard", "No Recourse"):
+            elif st.session_state["bol_mode"] in ("Standard", "No Recourse", "Multistop"):
                 try:
                     sheet_names = get_excel_sheet_names(uploaded_file)
                 except ValueError as exc:
@@ -1094,12 +1146,14 @@ def render_bol_generator_view() -> None:
     st.markdown("---")
 
     st.subheader("Parse")
+    mapping_complete = _render_header_mapping_choices()
     parse_disabled = (
         st.session_state["bol_uploaded_doc_filename"] is None
         if input_source == "Doc upload"
         else st.session_state["bol_uploaded_filename"] is None
     )
     parse_button_label = "Parse Doc" if input_source == "Doc upload" else "Parse File"
+    parse_disabled = parse_disabled or not mapping_complete
     if st.button(parse_button_label, disabled=parse_disabled):
         parse_started_at = perf_counter()
         _prepare_parse_state()
@@ -1128,7 +1182,11 @@ def render_bol_generator_view() -> None:
                     }
                     st.session_state["bol_batch_comment"] = grouped_records[0].comments
             elif selected_mode == "Multistop":
-                parsed_rows = parse_multistop_bol_excel(uploaded_file)
+                parsed_rows = parse_multistop_bol_excel(
+                    uploaded_file,
+                    worksheet_name=st.session_state.get("bol_selected_worksheet"),
+                    column_overrides=st.session_state.get("bol_column_overrides"),
+                )
                 last_parse_step_at = _log_parse_timing("excel_parse", last_parse_step_at)
                 grouped_records = map_multistop_rows_to_records(parsed_rows)
                 last_parse_step_at = _log_parse_timing("mapping", last_parse_step_at)
@@ -1137,6 +1195,7 @@ def render_bol_generator_view() -> None:
                 parsed_rows = parse_standard_bol_excel(
                     uploaded_file,
                     worksheet_name=selected_worksheet,
+                    column_overrides=st.session_state.get("bol_column_overrides"),
                 )
                 last_parse_step_at = _log_parse_timing("excel_parse", last_parse_step_at)
                 grouped_records = map_standard_rows_to_records(
@@ -1149,9 +1208,10 @@ def render_bol_generator_view() -> None:
                 raise ValueError("No grouped BOL records were created from parsed rows.")
             st.session_state["bol_parsed_rows"] = parsed_rows
             st.session_state["bol_grouped_records"] = grouped_records
+            st.session_state["bol_mapping_requests"] = {}
             st.session_state["bol_parsed_worksheet"] = (
                 None
-                if input_source == "Doc upload" or selected_mode == "Multistop"
+                if input_source == "Doc upload"
                 else "CSV"
                 if uploaded_file is not None and is_csv_upload(uploaded_file)
                 else st.session_state.get("bol_selected_worksheet")
@@ -1159,6 +1219,14 @@ def render_bol_generator_view() -> None:
             _sync_review_state(st.session_state["bol_grouped_records"])
             last_parse_step_at = _log_parse_timing("review_sync", last_parse_step_at)
             _log_parse_timing("total", parse_started_at)
+        except ColumnMappingRequired as exc:
+            st.session_state["bol_parsed_rows"] = []
+            st.session_state["bol_grouped_records"] = []
+            st.session_state["bol_mapping_requests"].update(exc.requests)
+            st.session_state["bol_mapping_samples"].update(exc.samples)
+            st.session_state["bol_parse_error"] = str(exc)
+            _clear_review_state(delete_files=False)
+            st.rerun()
         except ValueError as exc:
             st.session_state["bol_parsed_rows"] = []
             st.session_state["bol_grouped_records"] = []
@@ -1271,6 +1339,8 @@ def render_bol_generator_view() -> None:
 
             if record.missing_required_fields:
                 st.caption("Missing required: " + ", ".join(record.missing_required_fields))
+            if getattr(record, "import_issues", []):
+                st.error("Generation blocked: " + "; ".join(record.import_issues))
             if record.status == "Unsupported Stop Count":
                 st.caption("Unsupported: stop count exceeds the current maximum of 3.")
             if record.warnings:

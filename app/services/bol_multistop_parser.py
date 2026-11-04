@@ -2,21 +2,24 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 import pandas as pd
 
 from app.models.bol_multistop_row import BolMultistopRow
-from app.services.bol_standard_parser import is_csv_upload
-
-
-MULTISTOP_SHEET_NAME_VARIANTS: tuple[str, ...] = (
-    "Load sheet",
-    "MAIN LOAD SHEET",
-    "LOAD SHEET",
-    "Main Load Sheet",
+from app.services.bol_standard_parser import (
+    is_csv_upload, _standard_dataframe, _resolve_load_sheet_name,
+    _resolve_plt_qty_column, _resolve_wm_po_column, REQUIRED_COLUMN_SPECS as STANDARD_FIELDS,
+    OPTIONAL_COLUMN_SPECS as STANDARD_OPTIONAL, _complete_derived_fields,
 )
+from app.services.bol_excel_headers import (
+    ColumnMappingRequired, apply_column_override, build_column_lookups,
+    normalize_header, compact_header, resolve_column_name, is_weight_summary,
+    attach_mapping_samples,
+    read_csv_source,
+)
+from app.services.bol_import_totals import reconcile_pallet_groups
+
 
 REQUIRED_COLUMN_SPECS: dict[str, str] = {
     "kk_load": "KK Load",
@@ -84,178 +87,86 @@ REQUIRED_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
 
 
 def _normalize_header(header: str) -> str:
-    cleaned = str(header).strip()
-    cleaned = re.sub(r"\s*#\s*", "#", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    return cleaned.upper()
+    return normalize_header(header)
 
 
-def _normalize_header_for_fallback(header: str) -> str:
-    cleaned = str(header).replace("\r", " ").replace("\n", " ")
-    cleaned = cleaned.strip().lower()
-    cleaned = re.sub(r"\s*#\s*", "#", cleaned)
-    cleaned = re.sub(r"\s*%\s*", " percent ", cleaned)
-    # Tolerate minor punctuation differences (e.g., DEPT. vs DEPT, CITY, STATE, ZIP variants).
-    cleaned = re.sub(r"[.,;:/\\()\-\_]+", " ", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
+def _build_header_lookups(columns):
+    return build_column_lookups(columns)
 
 
-def _normalize_header_compact(header: str) -> str:
-    cleaned = _normalize_header_for_fallback(header)
-    # Second-pass comparison form: remove whitespace for compacted header variants.
-    return cleaned.replace(" ", "")
+def _resolve_column_name(lookups, primary, aliases):
+    return resolve_column_name(lookups, primary, aliases)
 
 
-def _build_header_lookups(
-    columns: list[str],
-) -> tuple[list[str], dict[str, list[str]], dict[str, list[str]], dict[str, list[str]], dict[str, list[str]]]:
-    resolved_columns = [str(col) for col in columns]
-    exact_columns: dict[str, list[str]] = {}
-    lowered_exact_columns: dict[str, list[str]] = {}
-    normalized_columns: dict[str, list[str]] = {}
-    compact_columns: dict[str, list[str]] = {}
-
-    for column in resolved_columns:
-        exact_columns.setdefault(column, []).append(column)
-        lowered_exact_columns.setdefault(column.lower(), []).append(column)
-        normalized_columns.setdefault(_normalize_header_for_fallback(column), []).append(column)
-        compact_columns.setdefault(_normalize_header_compact(column), []).append(column)
-
-    return (
-        resolved_columns,
-        exact_columns,
-        lowered_exact_columns,
-        normalized_columns,
-        compact_columns,
-    )
+_SHARED_FIELDS = {
+    "kk_load": "kk_load", "carrier": "carrier", "load_number": "carrier_pro_number",
+    "kk_po_number": "kk_po", "bol_number": "bol_number", "ship_date": "ship_date",
+    "dc_name": "dc_name", "dc_address": "dc_street", "dc_number": "dc_number",
+    "target_po_number": "wm_po", "upc": "upc", "pallet_description": "item_description",
+    "cases": "unit_qty", "weight_each": "weight_each", "weight": "total_weight",
+}
 
 
-def _first_match(candidates: list[str] | None) -> str | None:
-    return candidates[0] if candidates else None
+def _field_aliases(field):
+    aliases = list(REQUIRED_COLUMN_ALIASES.get(field, ()))
+    shared = _SHARED_FIELDS.get(field)
+    if shared:
+        spec = STANDARD_FIELDS.get(shared, STANDARD_OPTIONAL.get(shared))
+        shared_aliases = [str(spec["primary"]), *spec["fallback_aliases"]]
+        aliases = shared_aliases + aliases if field == "weight_each" else aliases + shared_aliases
+    return tuple(dict.fromkeys(aliases))
 
 
-def _resolve_column_name(
-    lookups: tuple[
-        list[str],
-        dict[str, list[str]],
-        dict[str, list[str]],
-        dict[str, list[str]],
-        dict[str, list[str]],
-    ],
-    primary: str,
-    aliases: tuple[str, ...],
-) -> str | None:
-    _, exact_columns, lowered_exact_columns, normalized_columns, compact_columns = lookups
-
-    for candidate in (primary, *aliases):
-        resolved_name = _first_match(exact_columns.get(candidate))
-        if resolved_name is not None:
-            return resolved_name
-
-        resolved_name = _first_match(lowered_exact_columns.get(candidate.lower()))
-        if resolved_name is not None:
-            return resolved_name
-
-        resolved_name = _first_match(
-            normalized_columns.get(_normalize_header_for_fallback(candidate))
-        )
-        if resolved_name is not None:
-            return resolved_name
-
-        resolved_name = _first_match(compact_columns.get(_normalize_header_compact(candidate)))
-        if resolved_name is not None:
-            return resolved_name
-
-    return None
-
-
-def _candidate_multistop_sheet_names(available_sheet_names: list[str]) -> list[str]:
-    exact_lookup = {name: name for name in available_sheet_names}
-    normalized_lookup = {_normalize_header(name): name for name in available_sheet_names}
-    candidates: list[str] = []
-
-    for candidate in MULTISTOP_SHEET_NAME_VARIANTS:
-        resolved_name = exact_lookup.get(candidate)
-        if resolved_name and resolved_name not in candidates:
-            candidates.append(resolved_name)
-
-    for candidate in MULTISTOP_SHEET_NAME_VARIANTS:
-        resolved_name = normalized_lookup.get(_normalize_header(candidate))
-        if resolved_name and resolved_name not in candidates:
-            candidates.append(resolved_name)
-
-    return candidates
-
-
-def _resolve_columns_with_missing(columns: list[str]) -> tuple[dict[str, str], list[str]]:
+def _resolve_columns_with_missing(columns, column_overrides=None):
     lookups = _build_header_lookups(columns)
-
-    resolved: dict[str, str] = {}
-    missing: list[str] = []
-
-    for logical_name, source_name in REQUIRED_COLUMN_SPECS.items():
-        aliases = REQUIRED_COLUMN_ALIASES.get(logical_name, ())
-        resolved_name = _resolve_column_name(lookups, source_name, aliases)
-
-        if resolved_name is None:
-            if logical_name in {"dc_city_state_zip", "stop", "country"}:
+    resolved, missing = {}, []
+    for field, primary in REQUIRED_COLUMN_SPECS.items():
+        try:
+            selected = apply_column_override(field, column_overrides, columns)
+            if selected is None:
+                if field == "total_pallets":
+                    selected = _resolve_plt_qty_column(lookups)
+                elif field == "target_po_number":
+                    spec = STANDARD_FIELDS["wm_po"]
+                    selected = _resolve_wm_po_column(columns, lookups, spec["primary"], spec["fallback_aliases"])
+                else:
+                    selected = _resolve_column_name(lookups, primary, _field_aliases(field))
+        except ColumnMappingRequired as exc:
+            raise ColumnMappingRequired(str(exc), {field: next(iter(exc.requests.values()))}, columns) from exc
+        if selected is not None:
+            resolved[field] = selected
+        elif field not in {"dc_city_state_zip", "stop", "country", "dept", "mabd", "dc_number"}:
+            if field == "total_pallets" and _resolve_column_name(lookups, "Total PLT QTY", ("Total Load Pallets",)):
                 continue
-            missing.append(f"{logical_name} (expected '{source_name}')")
-        else:
-            resolved[logical_name] = resolved_name
-
+            if field == "total_pallets" and _resolve_column_name(lookups, "Units", ()) and _resolve_column_name(lookups, "PLT Weight", ("Pallet Weight",)):
+                continue
+            missing.append(f"{field} (expected '{primary}')")
     return resolved, missing
 
 
-def _resolve_multistop_sheet_name(file: Any) -> str:
-    file.seek(0)
-    workbook = pd.ExcelFile(file)
-    available_sheet_names = [str(name) for name in workbook.sheet_names]
-    candidate_sheet_names = _candidate_multistop_sheet_names(available_sheet_names)
-
-    if not candidate_sheet_names:
-        raise ValueError(
-            "Required worksheet was not found for Multistop parsing. "
-            f"Expected one of: {', '.join(MULTISTOP_SHEET_NAME_VARIANTS)}."
-        )
-
-    best_sheet_name = candidate_sheet_names[0]
-    best_missing_count: int | None = None
-
-    for candidate_sheet_name in candidate_sheet_names:
-        header_df = workbook.parse(sheet_name=candidate_sheet_name, dtype=object, nrows=0)
-        _, missing = _resolve_columns_with_missing(header_df.columns.tolist())
-
-        if not missing:
-            return candidate_sheet_name
-
-        if best_missing_count is None or len(missing) < best_missing_count:
-            best_missing_count = len(missing)
-            best_sheet_name = candidate_sheet_name
-
-    return best_sheet_name
-
-
-def _resolve_columns(columns: list[str], worksheet_name: str) -> dict[str, str]:
-    resolved, missing = _resolve_columns_with_missing(columns)
+def _resolve_columns(columns, worksheet_name, column_overrides=None):
+    resolved, missing = _resolve_columns_with_missing(columns, column_overrides)
     if missing:
-        detected_headers = ", ".join(str(col) for col in columns)
-        raise ValueError(
-            f"Missing required columns in '{worksheet_name}' for Multistop mode: "
-            + "; ".join(missing)
-            + f". [debug] selected worksheet='{worksheet_name}'; detected headers=[{detected_headers}]"
+        raise ColumnMappingRequired(
+            f"Missing required columns in '{worksheet_name}' for Multistop mode: " + "; ".join(missing),
+            {field.split(" (expected", 1)[0]: columns for field in missing}, columns,
         )
-
     return resolved
 
 
-def _resolve_optional_columns(columns: list[str]) -> dict[str, str]:
+def _resolve_optional_columns(columns: list[str], column_overrides=None) -> dict[str, str]:
     lookups = _build_header_lookups(columns)
 
     resolved: dict[str, str] = {}
-    for logical_name, candidate_names in OPTIONAL_COLUMN_SPECS.items():
-        resolved_name = _resolve_column_name(lookups, candidate_names[0], candidate_names[1:])
+    specs = {**OPTIONAL_COLUMN_SPECS, **{
+        field: (spec["primary"], *spec["fallback_aliases"])
+        for field, spec in STANDARD_OPTIONAL.items() if field in {"group_pallet_total", "group_weight_total"}
+    }}
+    for logical_name, candidate_names in specs.items():
+        try:
+            resolved_name = apply_column_override(logical_name, column_overrides, columns) or _resolve_column_name(lookups, candidate_names[0], candidate_names[1:])
+        except ColumnMappingRequired as exc:
+            raise ColumnMappingRequired(str(exc), {logical_name: next(iter(exc.requests.values()))}, columns) from exc
         if resolved_name is not None:
             resolved[logical_name] = resolved_name
 
@@ -296,31 +207,13 @@ def _combine_city_state_zip_from_values(row_values: dict[str, str]) -> str:
     return " ".join(part for part in (city_state, zip_code) if part)
 
 
-def _normalize_multistop_headers(df: pd.DataFrame) -> pd.DataFrame:
-    """Join recognized split header cells without consuming a shipment row."""
-    if df.empty:
-        return df
-    split_headers = {("DC", "ST"): "DCST", ("DC", "ZIP"): "DCZIP",
-                     ("PALLET", "DESCRIPTION"): "PalletDescription"}
-    renames = {}
-    for column in df.columns:
-        # pandas appends .1 to duplicate first-row headers.
-        top = re.sub(r"\.\d+$", "", str(column)).strip().upper()
-        bottom = _coerce_to_string(df.iloc[0][column]).upper()
-        combined = split_headers.get((top, bottom))
-        if combined:
-            renames[column] = combined
-    if renames:
-        return df.rename(columns=renames).iloc[1:]
-    return df
-
-
 def _parse_multistop_dataframe_rows(
     df: pd.DataFrame,
     column_map: dict[str, str],
     optional_column_map: dict[str, str],
 ) -> list[BolMultistopRow]:
     parsed_rows: list[BolMultistopRow] = []
+    skipped_summaries = []
     inferred_stops: dict[tuple[str, str, str, str], int] = {}
     stops_per_load: dict[str, int] = {}
     for index, row in df.iterrows():
@@ -336,6 +229,20 @@ def _parse_multistop_dataframe_rows(
 
         if not any(row_values.values()):
             continue
+        if is_weight_summary(row_values):
+            skipped_summaries.append(row_number)
+            continue
+        for field in ("dc_number", "dc_city", "dc_state", "dc_zip", "total_pallets"):
+            row_values.setdefault(field, "")
+        notes = []
+        if not row_values["upc"].strip():
+            notes.append("Missing UPC; review required.")
+        if "total_pallets" not in column_map:
+            notes.append("No separate pallet/skid count supplied; review required.")
+        if "dc_number" not in column_map:
+            derived = {"dc_name": row_values["dc_name"]}
+            notes.extend(_complete_derived_fields(derived))
+            row_values["dc_number"] = derived["dc_number"]
 
         inferred = "stop" not in column_map
         if inferred:
@@ -378,66 +285,51 @@ def _parse_multistop_dataframe_rows(
                 chargeback_3_percent=optional_row_values.get("chargeback_3_percent", ""),
                 weight_each=row_values["weight_each"],
                 weight=row_values["weight"],
+                source_values={str(header): _coerce_to_string(value) for header, value in row.items()},
+                column_mapping={**column_map, **optional_column_map},
+                parsing_notes=notes,
+                group_pallet_total=optional_row_values.get("group_pallet_total", ""),
+                group_weight_total=optional_row_values.get("group_weight_total", ""),
             )
         )
 
-    return parsed_rows
+    if parsed_rows and skipped_summaries:
+        parsed_rows[0].parsing_notes.append(f"Weight-only summary rows excluded from shipments: {', '.join(map(str, skipped_summaries))}.")
+    return reconcile_pallet_groups(parsed_rows, pallet_field="total_pallets", weight_field="weight")
 
 
-def _parse_multistop_bol_csv(file: Any) -> list[BolMultistopRow]:
+def _parse_multistop_bol_csv(file, column_overrides=None):
     file.seek(0)
-    try:
-        df = pd.read_csv(file, dtype=object)
-    except UnicodeDecodeError:
-        file.seek(0)
-        df = pd.read_csv(file, dtype=object, encoding="utf-8-sig")
+    raw = read_csv_source(file)
+    rows = _parse_source_frame(_standard_dataframe(raw), CSV_WORKSHEET_NAME, column_overrides)
+    file.seek(0)
+    return rows
 
+
+def _parse_source_frame(df, sheet_name, column_overrides=None):
     if df.empty:
-        raise ValueError("CSV file contains no rows.")
-
-    df = _normalize_multistop_headers(df)
+        raise ValueError(f"Worksheet '{sheet_name}' contains no rows.")
     columns = df.columns.tolist()
-    column_map = _resolve_columns(columns, worksheet_name=CSV_WORKSHEET_NAME)
-    optional_column_map = _resolve_optional_columns(columns)
-    parsed_rows = _parse_multistop_dataframe_rows(
-        df,
-        column_map=column_map,
-        optional_column_map=optional_column_map,
-    )
-
-    if not parsed_rows:
-        raise ValueError("No non-empty data rows found in CSV file.")
-
-    file.seek(0)
-    return parsed_rows
+    try:
+        mapping = _resolve_columns(columns, sheet_name, column_overrides)
+        optional = _resolve_optional_columns(columns, column_overrides)
+    except ColumnMappingRequired as exc:
+        raise attach_mapping_samples(exc, columns, df.head(3).values.tolist())
+    rows = _parse_multistop_dataframe_rows(df, mapping, optional)
+    if not rows:
+        raise ValueError(f"No non-empty data rows found in '{sheet_name}'.")
+    return rows
 
 
-def parse_multistop_bol_excel(file: Any) -> list[BolMultistopRow]:
+def parse_multistop_bol_excel(file, worksheet_name=None, column_overrides=None):
     if file is None:
         raise ValueError("No file uploaded. Upload an Excel or CSV file to parse.")
-
     if is_csv_upload(file):
-        return _parse_multistop_bol_csv(file)
-
-    resolved_sheet_name = _resolve_multistop_sheet_name(file)
+        return _parse_multistop_bol_csv(file, column_overrides)
     file.seek(0)
-    df = pd.read_excel(file, sheet_name=resolved_sheet_name, dtype=object)
-
-    if df.empty:
-        raise ValueError(f"Worksheet '{resolved_sheet_name}' contains no rows.")
-
-    df = _normalize_multistop_headers(df)
-    columns = df.columns.tolist()
-    column_map = _resolve_columns(columns, worksheet_name=resolved_sheet_name)
-    optional_column_map = _resolve_optional_columns(columns)
-
-    parsed_rows = _parse_multistop_dataframe_rows(
-        df,
-        column_map=column_map,
-        optional_column_map=optional_column_map,
-    )
-
-    if not parsed_rows:
-        raise ValueError(f"No non-empty data rows found in '{resolved_sheet_name}'.")
-
-    return parsed_rows
+    with pd.ExcelFile(file) as workbook:
+        selected = worksheet_name or _resolve_load_sheet_name(workbook)
+        if selected not in workbook.sheet_names:
+            raise ValueError(f"Worksheet '{selected}' was not found.")
+        raw = workbook.parse(sheet_name=selected, dtype=object, header=None)
+    return _parse_source_frame(_standard_dataframe(raw), selected, column_overrides)

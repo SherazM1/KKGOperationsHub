@@ -11,6 +11,14 @@ from openpyxl.utils.exceptions import InvalidFileException
 import pandas as pd
 
 from app.models.bol_standard_row import BolStandardRow
+from app.services.bol_excel_headers import (
+    HEADER_SCAN_ROWS, ColumnLookups, ColumnMappingRequired, apply_column_override,
+    build_column_lookups, compact_header, detect_headers, is_weight_summary,
+    normalize_header, resolve_column_name,
+    attach_mapping_samples,
+    read_csv_source,
+)
+from app.services.bol_import_totals import reconcile_pallet_groups
 from app.utils.bol_addresses import is_duplicate_bol_company, is_mclane_destination
 
 
@@ -27,7 +35,6 @@ LOAD_SHEET_NOT_FOUND_MESSAGE = (
     "or LOAD SHEET, or a sheet containing BOL load headers such as KK Load, "
     "Carrier, DC #, TGT PO #, UPC, and Total Weight."
 )
-STREAMING_BLANK_ROW_LIMIT = 100
 CSV_WORKSHEET_NAME = "CSV"
 
 REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
@@ -50,6 +57,9 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
         "primary": "WM PO #",
         "fallback_aliases": [
             "WM PO#",
+            "RETAILER PO #",
+            "Retailer PO",
+            "MCLANE PO #",
             "WM PO",
             "wm_po",
             "WM_PO",
@@ -65,8 +75,6 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
             "Retailer",
             "retailer",
             "Retailer #",
-            "Retailer Number",
-            "Retailer Name",
             "Walmart PO #",
             "Walmart PO#",
             "Walmart PO",
@@ -148,6 +156,14 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
 }
 
 OPTIONAL_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
+    "group_pallet_total": {
+        "primary": "Total PLT QTY",
+        "fallback_aliases": ["Total Load Pallets", "Load Pallet Total"],
+    },
+    "group_weight_total": {
+        "primary": "Total Load Weight",
+        "fallback_aliases": ["Load Weight Total"],
+    },
     "shipwell_number": {
         "primary": "Shipwell #",
         "fallback_aliases": ["Shipwell", "Shipwell Number", "Shipwell No", "Shipwell ID"],
@@ -206,7 +222,7 @@ ADDITIONAL_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "kk_load": ("KK Load Number", "KK Load No", "KKG Load Number", "KKG Load No"),
     "kk_po": ("KK PO Number", "KK PO No", "KK Purchase Order", "KKG PO", "KKG PO #", "KKG PO Number", "KKG Purchase Order"),
     "wm_po": ("WMT PO", "WMT PO #", "WMT PO Number", "WMT Purchase Order", "Wal Mart PO #"),
-    "dc_number": ("DC Number", "DC No", "DC ID", "Distribution Center #", "Distribution Centre Number"),
+    "dc_number": ("DC Number", "DC No", "DC ID", "Distribution Center #", "Distribution Centre Number", "DC"),
     "dc_name": ("Distribution Center Name", "Distribution Centre Name", "Destination Name", "Ship To Name", "Consignee Name"),
     "dc_street": ("DC ADDRESS", "DC Street Address", "DC Address 1", "DC Address Line 1", "DC Addr", "DC Adress", "DC Addres", "DC Steet", "Distribution Center Address", "Distribution Centre Address", "Destination Address", "Ship To Address", "Consignee Address"),
     "dc_city_state_zip": ("DC City ST Zip", "DC City State Zip Code", "Destination City State Zip", "Ship To City State Zip", "Consignee City State Zip"),
@@ -245,7 +261,8 @@ PLT_QTY_EXPLICIT_ALIASES: tuple[str, ...] = (
     "TOTAL PALLETS",
     "Total Pallets",
     "Total PLT",
-    "Total PLT QTY",
+    "Total PLTS",
+    "Total Pallet",
 )
 PLT_QTY_GENERIC_ALIASES: tuple[str, ...] = (
     "QTY",
@@ -267,11 +284,7 @@ KK_LOAD_COLUMN_PRIORITY: tuple[str, ...] = (
 
 
 def _normalize_header(header: str) -> str:
-    cleaned = str(header).replace("\r", " ").replace("\n", " ").strip()
-    cleaned = re.sub(r"\s*#\s*", "#", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    cleaned = cleaned.upper()
-    return cleaned
+    return normalize_header(header)
 
 
 def _normalize_sheet_name(sheet_name: str) -> str:
@@ -281,47 +294,36 @@ def _normalize_sheet_name(sheet_name: str) -> str:
 
 
 def _normalize_header_compact(header: str) -> str:
-    return re.sub(r"[^A-Z0-9#]+", "", _normalize_header(header))
+    return compact_header(header)
 
 
 def _build_column_lookups(
     columns: list[str],
-) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
-    resolved_columns = [str(col) for col in columns]
-    exact_columns = {col: col for col in resolved_columns}
-    normalized_columns = {_normalize_header(col): col for col in resolved_columns}
-    compact_columns = {_normalize_header_compact(col): col for col in resolved_columns}
-    return exact_columns, normalized_columns, compact_columns
+) -> ColumnLookups:
+    return build_column_lookups(columns)
 
 
 def _resolve_column_name(
-    lookups: tuple[dict[str, str], dict[str, str], dict[str, str]],
+    lookups: ColumnLookups,
     primary: str,
     aliases: list[str] | tuple[str, ...],
 ) -> str | None:
-    exact_columns, normalized_columns, compact_columns = lookups
-
-    for candidate in (primary, *aliases):
-        if candidate in exact_columns:
-            return exact_columns[candidate]
-
-        normalized_candidate = _normalize_header(candidate)
-        if normalized_candidate in normalized_columns:
-            return normalized_columns[normalized_candidate]
-
-        compact_candidate = _normalize_header_compact(candidate)
-        if compact_candidate in compact_columns:
-            return compact_columns[compact_candidate]
-
-    return None
+    return resolve_column_name(lookups, primary, aliases)
 
 
 def _resolve_dc_city_state_zip_components(
-    lookups: tuple[dict[str, str], dict[str, str], dict[str, str]],
+    lookups: ColumnLookups,
+    column_overrides: dict[str, str] | None = None,
+    columns: list[str] = (),
 ) -> dict[str, str]:
     resolved: dict[str, str] = {}
     for logical_name, aliases in DC_CITY_STATE_ZIP_COMPONENT_SPECS.items():
-        source_column = _resolve_column_name(lookups, aliases[0], aliases[1:])
+        field_lookups = lookups
+        if logical_name == "dc_city" and "DC CITY" in columns and "DCCITY" in columns:
+            # Established Sam's layout: DC CITY holds the street, DCCITY the
+            # city. The row-level address check below validates the shift.
+            field_lookups = _build_column_lookups([column for column in columns if column != "DCCITY"])
+        source_column = apply_column_override(logical_name, column_overrides, columns) or _resolve_column_name(field_lookups, aliases[0], aliases[1:])
         if source_column is not None:
             resolved[logical_name] = source_column
     return resolved
@@ -329,7 +331,7 @@ def _resolve_dc_city_state_zip_components(
 
 def _resolve_kk_load_columns(
     columns: list[str],
-    lookups: tuple[dict[str, str], dict[str, str], dict[str, str]] | None = None,
+    lookups: ColumnLookups | None = None,
 ) -> list[str]:
     resolved_lookups = lookups or _build_column_lookups(columns)
     resolved_columns: list[str] = []
@@ -341,76 +343,39 @@ def _resolve_kk_load_columns(
 
 
 def _resolve_plt_qty_column(
-    lookups: tuple[dict[str, str], dict[str, str], dict[str, str]],
+    lookups: ColumnLookups,
 ) -> str | None:
-    explicit_column = _resolve_column_name(
-        lookups, "PLT QTY",
-        (*PLT_QTY_EXPLICIT_ALIASES, *ADDITIONAL_COLUMN_ALIASES["plt_qty"]),
-    )
-    if explicit_column is not None:
-        return explicit_column
-    return _resolve_column_name(lookups, "QTY", PLT_QTY_GENERIC_ALIASES[1:])
-
-
-def _is_generic_wm_po_candidate(column: str) -> bool:
-    normalized = _normalize_header(column)
-    compact = _normalize_header_compact(column)
-
-    if compact in {
-        "KKPO",
-        "KKPO#",
-        "KKPONUMBER",
-        "KKPURCHASEORDER",
-        "KKPURCHASEORDER#",
-        "BOL",
-        "BOL#",
-        "BOLNUMBER",
-    }:
-        return False
-    if compact.startswith(("KKPO", "KKGPO", "KKPURCHASEORDER", "KKGPURCHASEORDER")):
-        return False
-
-    if "PO" not in compact and "PURCHASEORDER" not in compact and compact != "RETAILER":
-        return False
-
-    return any(
-        marker in normalized or marker in compact
-        for marker in (
-            "PO",
-            "P.O",
-            "PURCHASE ORDER",
-            "PURCHASEORDER",
-            "WM",
-            "WALMART",
-            "TGT",
-            "TARGET",
-            "CUSTOMER",
-            "CUST",
-            "ORDER",
-            "RETAILER",
+    try:
+        explicit_column = _resolve_column_name(
+            lookups, "PLT QTY",
+            (*PLT_QTY_EXPLICIT_ALIASES, *ADDITIONAL_COLUMN_ALIASES["plt_qty"]),
         )
-    )
+        if explicit_column is not None:
+            return explicit_column
+        return _resolve_column_name(lookups, "QTY", PLT_QTY_GENERIC_ALIASES[1:])
+    except ColumnMappingRequired as exc:
+        raise ColumnMappingRequired(str(exc), {"plt_qty": next(iter(exc.requests.values()))}) from exc
 
 
 def _resolve_wm_po_column(
     columns: list[str],
-    lookups: tuple[dict[str, str], dict[str, str], dict[str, str]],
+    lookups: ColumnLookups,
     primary: str,
     aliases: list[str],
 ) -> str | None:
-    resolved_name = _resolve_column_name(lookups, primary, aliases)
+    # Prefer explicit PO labels before the legacy plain RETAILER header.
+    po_aliases = [alias for alias in aliases if "PO" in compact_header(alias) or "PURCHASEORDER" in compact_header(alias)]
+    resolved_name = _resolve_column_name(lookups, primary, po_aliases)
     if resolved_name is not None:
         return resolved_name
 
-    for column in columns:
-        if _is_generic_wm_po_candidate(column):
-            return column
-
-    return None
+    # Unknown PO-like labels need review, not substring matching: POD and
+    # Purchase Order Date are real source columns, not retailer PO numbers.
+    return _resolve_column_name(lookups, "RETAILER", ())
 
 
 def _resolve_total_weight_column(
-    lookups: tuple[dict[str, str], dict[str, str], dict[str, str]],
+    lookups: ColumnLookups,
     worksheet_name: str,
 ) -> str | None:
     if _normalize_sheet_name(worksheet_name) == "revised ls":
@@ -433,6 +398,7 @@ def _resolve_total_weight_column(
 def _resolve_columns_with_missing(
     columns: list[str],
     worksheet_name: str,
+    column_overrides: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], list[str]]:
     resolved_columns = [str(col) for col in columns]
     lookups = _build_column_lookups(resolved_columns)
@@ -443,7 +409,10 @@ def _resolve_columns_with_missing(
     for logical_name, spec in REQUIRED_COLUMN_SPECS.items():
         primary = str(spec["primary"])
         fallback_aliases = [str(alias) for alias in spec["fallback_aliases"]]
-        if logical_name == "kk_load":
+        override = apply_column_override(logical_name, column_overrides, resolved_columns)
+        if override is not None:
+            resolved_name = override
+        elif logical_name == "kk_load":
             kk_load_columns = _resolve_kk_load_columns(resolved_columns, lookups)
             resolved_name = kk_load_columns[0] if kk_load_columns else None
         elif logical_name == "wm_po":
@@ -467,8 +436,10 @@ def _resolve_columns_with_missing(
                 continue
             if logical_name == "plt_qty" and _resolve_column_name(lookups, "Units", ()) and _resolve_column_name(lookups, "PLT Weight", ("Pallet Weight",)):
                 continue
+            if logical_name == "plt_qty" and _resolve_column_name(lookups, "Total PLT QTY", ("Total Load Pallets", "Load Pallet Total")):
+                continue
             if logical_name == "dc_city_state_zip":
-                component_columns = _resolve_dc_city_state_zip_components(lookups)
+                component_columns = _resolve_dc_city_state_zip_components(lookups, column_overrides, resolved_columns)
                 if len(component_columns) == len(DC_CITY_STATE_ZIP_COMPONENT_SPECS):
                     resolved.update(component_columns)
                     continue
@@ -485,7 +456,10 @@ def _resolve_columns_with_missing(
     for logical_name, spec in OPTIONAL_COLUMN_SPECS.items():
         primary = str(spec["primary"])
         fallback_aliases = [str(alias) for alias in spec["fallback_aliases"]]
-        if logical_name == "total_weight":
+        override = apply_column_override(logical_name, column_overrides, resolved_columns)
+        if override is not None:
+            resolved_name = override
+        elif logical_name == "total_weight":
             resolved_name = _resolve_total_weight_column(lookups, worksheet_name)
         else:
             resolved_name = _resolve_column_name(lookups, primary, fallback_aliases)
@@ -500,80 +474,65 @@ def _resolve_columns_with_missing(
     return resolved, missing
 
 
-def _resolve_columns(columns: list[str], worksheet_name: str) -> dict[str, str]:
-    resolved, missing = _resolve_columns_with_missing(columns, worksheet_name)
+def _resolve_columns(columns: list[str], worksheet_name: str, column_overrides=None) -> dict[str, str]:
+    try:
+        resolved, missing = _resolve_columns_with_missing(columns, worksheet_name, column_overrides)
+    except ColumnMappingRequired as exc:
+        primary, choices = next(iter(exc.requests.items()))
+        logical = next((field for field, spec in {**REQUIRED_COLUMN_SPECS, **OPTIONAL_COLUMN_SPECS}.items()
+                        if any(compact_header(name) == compact_header(primary) for name in (spec["primary"], *spec["fallback_aliases"]))), primary)
+        logical = next((field for field, names in DC_CITY_STATE_ZIP_COMPONENT_SPECS.items()
+                        if compact_header(names[0]) == compact_header(primary)), logical)
+        raise ColumnMappingRequired(str(exc), {logical: choices}, columns) from exc
     if missing:
         detected_headers = ", ".join(str(col) for col in columns)
-        raise ValueError(
+        raise ColumnMappingRequired(
             f"Missing required columns in '{worksheet_name}': "
             + "; ".join(missing)
-            + f". Detected headers: [{detected_headers}]"
+            + f". Detected headers: [{detected_headers}]",
+            {field.split(" (expected", 1)[0]: columns for field in missing}, columns
         )
 
     return resolved
 
 
 def _load_sheet_header_score(columns: list[str]) -> int:
-    resolved, _ = _resolve_columns_with_missing(columns, "")
+    # Scoring is only for finding a header. Actual mapping retains duplicates
+    # and requires a user choice rather than inheriting this temporary view.
+    unique = list({compact_header(column): column for column in columns if column}.values())
+    resolved, _ = _resolve_columns_with_missing(unique, "")
     # Count source columns once even when QTY supplies both quantity fields.
     return len(set(resolved.values()))
 
 
-def _resolve_load_sheet_name(workbook: pd.ExcelFile) -> str:
-    normalized_lookup = {
-        _normalize_sheet_name(sheet_name): str(sheet_name)
-        for sheet_name in workbook.sheet_names
-    }
-    for accepted_name in ACCEPTED_LOAD_SHEET_NAMES:
-        resolved_name = normalized_lookup.get(accepted_name)
-        if resolved_name is not None:
-            return resolved_name
-
-    best_sheet_name: str | None = None
-    best_score = 0
-    for sheet_name in workbook.sheet_names:
-        header_df = workbook.parse(sheet_name=sheet_name, dtype=object, nrows=0)
-        score = _load_sheet_header_score(header_df.columns.tolist())
-        if score > best_score:
-            best_score = score
-            best_sheet_name = str(sheet_name)
-
-    if best_sheet_name is not None and best_score >= 6:
-        return best_sheet_name
-
+def _choose_load_sheet(candidates):
+    usable = [(name, score) for name, score in candidates if score >= 6]
+    for preferred in ACCEPTED_LOAD_SHEET_NAMES:
+        for name, _ in usable:
+            if _normalize_sheet_name(name) == preferred:
+                return name
+    if usable:
+        return max(usable, key=lambda item: item[1])[0]
     raise ValueError(LOAD_SHEET_NOT_FOUND_MESSAGE)
+
+
+def _resolve_load_sheet_name(workbook: pd.ExcelFile) -> str:
+    candidates = []
+    for name in workbook.sheet_names:
+        raw = workbook.parse(sheet_name=name, dtype=object, nrows=HEADER_SCAN_ROWS, header=None)
+        headers, _ = _standard_headers_from_rows(list(raw.itertuples(index=False, name=None)))
+        candidates.append((str(name), _load_sheet_header_score(headers)))
+    return _choose_load_sheet(candidates)
 
 
 def _resolve_openpyxl_load_sheet_name(workbook: Any) -> str:
-    normalized_lookup = {
-        _normalize_sheet_name(sheet_name): str(sheet_name)
-        for sheet_name in workbook.sheetnames
-    }
-    for accepted_name in ACCEPTED_LOAD_SHEET_NAMES:
-        resolved_name = normalized_lookup.get(accepted_name)
-        if resolved_name is not None:
-            return resolved_name
-
-    best_sheet_name: str | None = None
-    best_score = 0
-    for sheet_name in workbook.sheetnames:
-        worksheet = workbook[sheet_name]
-        header_values = [
-            cell.value
-            for cell in next(
-                worksheet.iter_rows(min_row=1, max_row=1, values_only=False),
-                [],
-            )
-        ]
-        score = _load_sheet_header_score([str(value or "") for value in header_values])
-        if score > best_score:
-            best_score = score
-            best_sheet_name = str(sheet_name)
-
-    if best_sheet_name is not None and best_score >= 6:
-        return best_sheet_name
-
-    raise ValueError(LOAD_SHEET_NOT_FOUND_MESSAGE)
+    candidates = []
+    for worksheet in workbook.worksheets:
+        if worksheet.sheet_state != "visible":
+            continue
+        headers, _ = _read_standard_headers(worksheet)
+        candidates.append((str(worksheet.title), _load_sheet_header_score(headers)))
+    return _choose_load_sheet(candidates)
 
 
 def _missing_worksheet_error(worksheet_name: str, available_sheets: list[str]) -> ValueError:
@@ -690,8 +649,7 @@ def _iter_openpyxl_standard_rows(
         return []
 
     parsed_rows: list[BolStandardRow] = []
-    blank_streak = 0
-    found_data = False
+    skipped_summaries = []
 
     for row_number, values in enumerate(
         worksheet.iter_rows(
@@ -715,18 +673,10 @@ def _iter_openpyxl_standard_rows(
         row_values.setdefault("wm_po", "")
 
         if not any(row_values.values()):
-            if found_data:
-                blank_streak += 1
-                if blank_streak >= STREAMING_BLANK_ROW_LIMIT:
-                    print(
-                        "BOL parse timing: stopped_after_blank_rows="
-                        f"{STREAMING_BLANK_ROW_LIMIT} last_excel_row={row_number}"
-                    )
-                    break
             continue
-
-        found_data = True
-        blank_streak = 0
+        if is_weight_summary(row_values):
+            skipped_summaries.append(row_number)
+            continue
         source_mapping = _normalize_source_address(row_values, column_map)
         notes = _complete_derived_fields(row_values)
         parsed_rows.append(
@@ -755,10 +705,14 @@ def _iter_openpyxl_standard_rows(
                 source_values={header: _coerce_to_string(values[i]) for i, header in enumerate(header_values) if header},
                 column_mapping=source_mapping,
                 parsing_notes=notes,
+                group_pallet_total=row_values.get("group_pallet_total", ""),
+                group_weight_total=row_values.get("group_weight_total", ""),
             )
         )
 
-    return parsed_rows
+    if parsed_rows and skipped_summaries:
+        parsed_rows[0].parsing_notes.append(f"Weight-only summary rows excluded from shipments: {', '.join(map(str, skipped_summaries))}.")
+    return reconcile_pallet_groups(parsed_rows)
 
 
 def _source_column_mapping(column_map: dict[str, str]) -> dict[str, str]:
@@ -805,31 +759,17 @@ def _complete_derived_fields(values: dict[str, str]) -> list[str]:
 
 def _read_standard_headers(worksheet: Any) -> tuple[list[str], int]:
     """Join a recognized header continuation without consuming a shipment row."""
-    top_rows = list(worksheet.iter_rows(min_row=1, max_row=2, values_only=True))
+    top_rows = list(worksheet.iter_rows(min_row=1, max_row=HEADER_SCAN_ROWS, values_only=True))
     return _standard_headers_from_rows(top_rows)
 
 
 def _standard_headers_from_rows(top_rows: list[Any]) -> tuple[list[str], int]:
-    headers = [_coerce_to_string(value) for value in top_rows[0]] if top_rows else []
-    if len(top_rows) < 2:
-        return headers, 2
-    continuations = {
-        ("DC", "ST"), ("DC", "STATE"), ("DC", "ZIP"),
-        ("PALLET", "DESCRIPTION"), ("VALUE", "EACH"),
-        ("LOAD", "VALUE"), ("0.03", "CHARGE BACK"),
-        ("TOTAL PLT", "QTY"), ("TOTAL PLT", "QUANTITY"),
-        ("TOTAL LOAD", "WEIGHT"),
-    }
-    parts = [(i, _coerce_to_string(value)) for i, value in enumerate(top_rows[1]) if _coerce_to_string(value)]
-    if len(parts) >= 2 and all((_normalize_header(headers[i]), _normalize_header(value)) in continuations for i, value in parts):
-        for i, value in parts:
-            headers[i] = f"{headers[i]} {value}"
-        return headers, 3
-    return headers, 2
+    layout = detect_headers(top_rows, _load_sheet_header_score)
+    return layout.headers, layout.first_data_row
 
 
 def _standard_dataframe(raw: pd.DataFrame) -> pd.DataFrame:
-    headers, first_data_row = _standard_headers_from_rows(list(raw.head(2).itertuples(index=False, name=None)))
+    headers, first_data_row = _standard_headers_from_rows(list(raw.head(HEADER_SCAN_ROWS).itertuples(index=False, name=None)))
     df = raw.iloc[first_data_row - 1:].copy()
     df.columns = headers
     # The dataframe reader adds two to the index for the original Excel row.
@@ -851,6 +791,7 @@ def _combine_city_state_zip_from_values(row_values: dict[str, str]) -> str:
 def _parse_standard_bol_excel_openpyxl(
     file: Any,
     worksheet_name: str | None = None,
+    column_overrides: dict[str, str] | None = None,
 ) -> list[BolStandardRow]:
     started_at = perf_counter()
     file.seek(0)
@@ -890,8 +831,12 @@ def _parse_standard_bol_excel_openpyxl(
         if not header_values:
             raise ValueError(f"Worksheet '{resolved_sheet_name}' contains no rows.")
 
-        column_map = _resolve_columns(header_values, worksheet_name=resolved_sheet_name)
-        kk_load_columns = _resolve_kk_load_columns(header_values)
+        try:
+            column_map = _resolve_columns(header_values, worksheet_name=resolved_sheet_name, column_overrides=column_overrides)
+        except ColumnMappingRequired as exc:
+            preview = worksheet.iter_rows(min_row=first_data_row, max_row=first_data_row + 2, values_only=True)
+            raise attach_mapping_samples(exc, header_values, preview)
+        kk_load_columns = [column_map["kk_load"]] if (column_overrides or {}).get("kk_load") else _resolve_kk_load_columns(header_values)
         columns_resolved_at = perf_counter()
         print(
             "BOL parse timing: column_resolution_openpyxl="
@@ -920,6 +865,7 @@ def _parse_standard_dataframe_rows(
     kk_load_columns: list[str],
 ) -> list[BolStandardRow]:
     parsed_rows: list[BolStandardRow] = []
+    skipped_summaries = []
 
     for index, row in df.iterrows():
         row_number = int(index) + 2  # Source row with header on row 1.
@@ -931,6 +877,9 @@ def _parse_standard_dataframe_rows(
         row_values.setdefault("wm_po", "")
 
         if not any(row_values.values()):
+            continue
+        if is_weight_summary(row_values):
+            skipped_summaries.append(row_number)
             continue
 
         source_mapping = _normalize_source_address(row_values, column_map)
@@ -961,20 +910,20 @@ def _parse_standard_dataframe_rows(
                 source_values={str(header): _coerce_to_string(value) for header, value in row.items()},
                 column_mapping=source_mapping,
                 parsing_notes=notes,
+                group_pallet_total=row_values.get("group_pallet_total", ""),
+                group_weight_total=row_values.get("group_weight_total", ""),
             )
         )
 
-    return parsed_rows
+    if parsed_rows and skipped_summaries:
+        parsed_rows[0].parsing_notes.append(f"Weight-only summary rows excluded from shipments: {', '.join(map(str, skipped_summaries))}.")
+    return reconcile_pallet_groups(parsed_rows)
 
 
-def _parse_standard_bol_csv(file: Any) -> list[BolStandardRow]:
+def _parse_standard_bol_csv(file: Any, column_overrides=None) -> list[BolStandardRow]:
     started_at = perf_counter()
     file.seek(0)
-    try:
-        df = _standard_dataframe(pd.read_csv(file, dtype=object, header=None))
-    except UnicodeDecodeError:
-        file.seek(0)
-        df = _standard_dataframe(pd.read_csv(file, dtype=object, encoding="utf-8-sig", header=None))
+    df = _standard_dataframe(read_csv_source(file))
     csv_loaded_at = perf_counter()
     print(
         "BOL parse timing: csv_load="
@@ -984,14 +933,17 @@ def _parse_standard_bol_csv(file: Any) -> list[BolStandardRow]:
     if df.empty:
         raise ValueError("CSV file contains no rows.")
 
-    column_map = _resolve_columns(df.columns.tolist(), worksheet_name=CSV_WORKSHEET_NAME)
+    try:
+        column_map = _resolve_columns(df.columns.tolist(), worksheet_name=CSV_WORKSHEET_NAME, column_overrides=column_overrides)
+    except ColumnMappingRequired as exc:
+        raise attach_mapping_samples(exc, df.columns, df.head(3).values.tolist())
     header_resolved_at = perf_counter()
     print(
         "BOL parse timing: csv_header_resolution="
         f"{header_resolved_at - csv_loaded_at:.3f}s"
     )
 
-    kk_load_columns = _resolve_kk_load_columns(df.columns.tolist())
+    kk_load_columns = [column_map["kk_load"]] if (column_overrides or {}).get("kk_load") else _resolve_kk_load_columns(df.columns.tolist())
     parsed_rows = _parse_standard_dataframe_rows(
         df,
         column_map=column_map,
@@ -1015,15 +967,16 @@ def _parse_standard_bol_csv(file: Any) -> list[BolStandardRow]:
 def parse_standard_bol_excel(
     file: Any,
     worksheet_name: str | None = None,
+    column_overrides: dict[str, str] | None = None,
 ) -> list[BolStandardRow]:
     if file is None:
         raise ValueError("No file uploaded. Upload an Excel or CSV file to parse.")
 
     if is_csv_upload(file):
-        return _parse_standard_bol_csv(file)
+        return _parse_standard_bol_csv(file, column_overrides)
 
     try:
-        return _parse_standard_bol_excel_openpyxl(file, worksheet_name=worksheet_name)
+        return _parse_standard_bol_excel_openpyxl(file, worksheet_name=worksheet_name, column_overrides=column_overrides)
     except (InvalidFileException, OSError, KeyError):
         file.seek(0)
 
@@ -1059,14 +1012,17 @@ def parse_standard_bol_excel(
     if df.empty:
         raise ValueError(f"Worksheet '{resolved_sheet_name}' contains no rows.")
 
-    column_map = _resolve_columns(df.columns.tolist(), worksheet_name=resolved_sheet_name)
+    try:
+        column_map = _resolve_columns(df.columns.tolist(), worksheet_name=resolved_sheet_name, column_overrides=column_overrides)
+    except ColumnMappingRequired as exc:
+        raise attach_mapping_samples(exc, df.columns, df.head(3).values.tolist())
     header_resolved_at = perf_counter()
     print(
         "BOL parse timing: header_resolution="
         f"{header_resolved_at - sheet_loaded_at:.3f}s"
     )
 
-    kk_load_columns = _resolve_kk_load_columns(df.columns.tolist())
+    kk_load_columns = [column_map["kk_load"]] if (column_overrides or {}).get("kk_load") else _resolve_kk_load_columns(df.columns.tolist())
 
     parsed_rows = _parse_standard_dataframe_rows(
         df,

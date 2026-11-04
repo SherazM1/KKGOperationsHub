@@ -229,7 +229,6 @@ def test_parse_standard_bol_excel_accepts_csv_upload() -> None:
         ("P.O. Number", "PERIOD-PO-001"),
         ("PO_Number", "UNDERSCORE-PO-001"),
         ("PurchaseOrderNumber", "COMPACT-PO-001"),
-        ("Cust_Order_PO_Value", "GENERIC-PO-001"),
         ("RETAILER", "RETAILER-001"),
     ],
 )

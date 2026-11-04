@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import re
+import math
 
 from app.models.bol_standard_record import (
     BolAddressBlock,
@@ -28,7 +29,8 @@ def _parse_number(value: str) -> float | None:
     if not cleaned:
         return None
     try:
-        return float(cleaned)
+        value = float(cleaned)
+        return value if math.isfinite(value) else None
     except ValueError:
         return None
 
@@ -54,6 +56,8 @@ def _required_shipment_issues(record: BolStandardRecord) -> list[str]:
             continue
         if not value.strip():
             issues.append(f"Missing required shipment field: {field_name}.")
+    if record.po_number.strip().lower() in {"true", "false"}:
+        issues.append("Invalid PO number: a checkbox/boolean is not a retailer PO.")
 
     if not record.item_lines:
         issues.append("No item lines found for this BOL.")
@@ -74,6 +78,10 @@ def _required_shipment_issues(record: BolStandardRecord) -> list[str]:
             issues.append(f"Row {line.source_row_number}: missing QTY.")
         if not line.weight_each.strip():
             issues.append(f"Row {line.source_row_number}: missing WEIGHT EACH.")
+        for label, value in (("QTY", line.pallet_qty), ("PLT QTY", line.skids),
+                             ("WEIGHT EACH", line.weight_each), ("TOTAL WEIGHT", line.total_weight)):
+            if value.strip() and (_parse_number(value) is None or _parse_number(value) < 0):
+                issues.append(f"Row {line.source_row_number}: {label} must be a finite, non-negative number.")
 
     return issues
 
@@ -227,6 +235,14 @@ def map_standard_rows_to_records(
         record.missing_required_fields = missing_required
         record.warnings = warnings
         record.issues = issues + warnings
+        record.import_issues = list(dict.fromkeys(
+            note for row in bol_rows for note in row.parsing_notes
+            if "review required" in note and ("Group " in note or "Declared load weight" in note)
+        ))
+        record.import_issues.extend(issue for issue in issues
+                                    if "finite, non-negative number" in issue or "checkbox/boolean" in issue)
+        if len({row.kk_load.strip() for row in bol_rows if row.kk_load.strip()}) > 1:
+            record.import_issues.append("This BOL number belongs to multiple KK loads; resolve the source grouping before generation.")
 
         if missing_required:
             record.is_ready = False

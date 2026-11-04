@@ -110,6 +110,7 @@ class BolMultistopRecord:
     conversion_skip_reason: str | None = None
     issues: list[str] = field(default_factory=list)
     is_supported: bool = True
+    import_issues: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.consignee_street, self.consignee_city_state_zip = normalize_bol_address(

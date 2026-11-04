@@ -33,3 +33,5 @@ class BolStandardRow:
     source_values: dict[str, str] = field(default_factory=dict)
     column_mapping: dict[str, str] = field(default_factory=dict)
     parsing_notes: list[str] = field(default_factory=list)
+    group_pallet_total: str = ""
+    group_weight_total: str = ""

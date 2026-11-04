@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from collections import defaultdict
 from dataclasses import replace
 
@@ -26,7 +28,8 @@ def _parse_number(value: str) -> float | None:
     if not cleaned:
         return None
     try:
-        return float(cleaned)
+        value = float(cleaned)
+        return value if math.isfinite(value) and value >= 0 else None
     except ValueError:
         return None
 
@@ -175,6 +178,7 @@ def _build_item_lines(stops: list[BolMultistopStop], rows_by_stop: dict[int, Bol
                 upc=source_row.upc,
                 skids=stop.total_pallets,
                 weight_each=source_row.weight_each or stop.weight,
+                total_weight=source_row.weight,
             )
         )
     return item_lines
@@ -233,6 +237,10 @@ def map_multistop_rows_to_records(rows: list[BolMultistopRow]) -> list[BolMultis
         issues: list[str] = []
         consistency_warnings = _header_consistency_warnings(group_rows)
         optional_warnings = _optional_grouped_field_warnings(group_rows)
+        consistency_warnings.extend(dict.fromkeys(
+            f"Row {row.source_row_number}: {note}"
+            for row in group_rows for note in row.parsing_notes if "review required" in note
+        ))
         validation_warnings: list[str] = []
 
         rows_by_stop: dict[int, BolMultistopRow] = {}
@@ -443,6 +451,12 @@ def map_multistop_rows_to_records(rows: list[BolMultistopRow]) -> list[BolMultis
                 "Stop numbers inferred from destination order within the load; "
                 "item rows at each destination are combined into stop totals."
             )
+        record.import_issues = list(dict.fromkeys(
+            note for row in group_rows for note in row.parsing_notes
+            if "review required" in note and ("Group " in note or "Declared load weight" in note)
+        ))
+        record.import_issues.extend(issue for issue in record.issues
+                                    if "is not numeric" in issue or "could not be computed reliably" in issue)
 
         if stop_count > MAX_SUPPORTED_STOPS or has_unsupported_stops:
             record.is_ready = False

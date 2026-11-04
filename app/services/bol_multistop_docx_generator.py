@@ -1475,6 +1475,11 @@ def generate_multistop_docx_set(
             skipped.append(SkippedDocxRecord(bol_number=bol_label, reason=reason))
             continue
 
+        if getattr(record, "import_issues", []):
+            reason = "Import validation: " + "; ".join(record.import_issues)
+            record.generation_skip_reason = reason
+            skipped.append(SkippedDocxRecord(bol_number=bol_label, reason=reason))
+            continue
         if not record.is_ready and not allow_incomplete_records:
             reason = "Record is not ready for DOCX generation."
             if record.status == "Unsupported Stop Count":

@@ -8,6 +8,41 @@ from app.models.bol_standard_record import BolAddressBlock
 from app.ui import bol_generator
 
 
+def test_worksheet_change_discards_column_choices_and_previous_records():
+    bol_generator.st.session_state.clear()
+    bol_generator._initialize_bol_state()
+    bol_generator.st.session_state["bol_column_overrides"] = {"unit_qty": "QTY [column V]"}
+    bol_generator.st.session_state["bol_mapping_requests"] = {"plt_qty": ["QTY [column H]", "QTY [column V]"]}
+    bol_generator.st.session_state["bol_column_choice_unit_qty"] = "QTY [column V]"
+    bol_generator.st.session_state["bol_grouped_records"] = [object()]
+
+    bol_generator._clear_worksheet_dependent_state()
+
+    assert bol_generator.st.session_state["bol_column_overrides"] == {}
+    assert bol_generator.st.session_state["bol_mapping_requests"] == {}
+    assert "bol_column_choice_unit_qty" not in bol_generator.st.session_state
+    assert bol_generator.st.session_state["bol_grouped_records"] == []
+
+
+def test_mapping_review_requires_explicit_choice_in_streamlit():
+    from streamlit.testing.v1 import AppTest
+    app = AppTest.from_string('''
+import streamlit as st
+from app.ui.bol_generator import _initialize_bol_state, _render_header_mapping_choices
+_initialize_bol_state()
+st.session_state["bol_mapping_requests"] = {"unit_qty": ["QTY [column H]", "QTY [column V]"]}
+st.session_state["bol_mapping_samples"] = {"QTY [column H]": ["1"], "QTY [column V]": ["26"]}
+complete = _render_header_mapping_choices()
+st.button("Parse File", disabled=not complete)
+''').run()
+    assert not app.exception
+    assert app.button[0].disabled
+    app.selectbox[0].select("QTY [column V]").run()
+    assert not app.exception
+    assert not app.button[0].disabled
+    assert app.session_state["bol_column_overrides"] == {"unit_qty": "QTY [column V]"}
+
+
 def test_bulk_selection_updates_widgets_records_and_persists():
     from tests.test_bol_standard_pdf_generator import _ready_record
     records = [_ready_record(), _ready_record()]
