@@ -818,6 +818,7 @@ def _standard_headers_from_rows(top_rows: list[Any]) -> tuple[list[str], int]:
         ("PALLET", "DESCRIPTION"), ("VALUE", "EACH"),
         ("LOAD", "VALUE"), ("0.03", "CHARGE BACK"),
         ("TOTAL PLT", "QTY"), ("TOTAL PLT", "QUANTITY"),
+        ("TOTAL LOAD", "WEIGHT"),
     }
     parts = [(i, _coerce_to_string(value)) for i, value in enumerate(top_rows[1]) if _coerce_to_string(value)]
     if len(parts) >= 2 and all((_normalize_header(headers[i]), _normalize_header(value)) in continuations for i, value in parts):
