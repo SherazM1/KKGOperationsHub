@@ -592,6 +592,22 @@ def _pdf_result_matches_docx_result(docx_result: StandardDocxGenerationResult) -
     return all(Path(pdf_file.file_path).exists() for pdf_file in pdf_result.converted_files)
 
 
+def _generate_docx_with_progress(generate_docx, *args, **kwargs) -> StandardDocxGenerationResult:
+    progress_bar = st.progress(0)
+    progress_status = st.empty()
+    progress_status.write("Preparing Word documents...")
+
+    def update_progress(completed: int, total: int, detail: str) -> None:
+        progress_bar.progress(completed / total if total else 0)
+        progress_status.write(f"Word documents processed: {completed} of {total}. {detail}")
+
+    try:
+        return generate_docx(*args, **kwargs, progress_callback=update_progress)
+    finally:
+        progress_bar.empty()
+        progress_status.empty()
+
+
 def _generate_pdf_result(
     *,
     mode: str,
@@ -1441,7 +1457,8 @@ def render_bol_generator_view() -> None:
                     "bol_multistop_individual_template_mode",
                     "Standard",
                 )
-                result = generate_multistop_docx_set(
+                result = _generate_docx_with_progress(
+                    generate_multistop_docx_set,
                     grouped_records,
                     selected_facility=_generation_facility(),
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
@@ -1459,7 +1476,8 @@ def render_bol_generator_view() -> None:
                 )
             else:
                 _, template_path = _resolve_generation_context()
-                result = generate_standard_docx_set(
+                result = _generate_docx_with_progress(
+                    generate_standard_docx_set,
                     grouped_records,
                     selected_facility=_generation_facility(),
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
@@ -1604,7 +1622,8 @@ def render_bol_generator_view() -> None:
                     "bol_multistop_individual_template_mode",
                     "Standard",
                 )
-                docx_result_all = generate_multistop_docx_set(
+                docx_result_all = _generate_docx_with_progress(
+                    generate_multistop_docx_set,
                     grouped_records,
                     selected_facility=_generation_facility(),
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),
@@ -1622,7 +1641,8 @@ def render_bol_generator_view() -> None:
                 )
             else:
                 _, template_path = _resolve_generation_context()
-                docx_result_all = generate_standard_docx_set(
+                docx_result_all = _generate_docx_with_progress(
+                    generate_standard_docx_set,
                     grouped_records,
                     selected_facility=_generation_facility(),
                     batch_comment=st.session_state.get("bol_batch_comment_textarea", ""),

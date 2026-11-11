@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tempfile import mkdtemp
+from typing import Callable
 from xml.sax.saxutils import escape
 import re
 import zipfile
@@ -1224,6 +1225,7 @@ def generate_standard_docx_set(
     file_name_prefix: str = "standard_bol",
     allow_incomplete_records: bool = False,
     item_row_count: int = MAX_ITEM_ROWS,
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> StandardDocxGenerationResult:
     validate_item_row_count(item_row_count)
     if selected_facility is None:
@@ -1245,6 +1247,14 @@ def generate_standard_docx_set(
     skipped: list[SkippedDocxRecord] = []
     failed: list[FailedDocxRecord] = []
     notices: list[DocxGenerationNotice] = []
+    total_documents = sum(
+        1 for record in records
+        if record.selected_for_generation and not getattr(record, "import_issues", [])
+        and (record.is_ready or allow_incomplete_records)
+    )
+    completed_documents = 0
+    if progress_callback is not None:
+        progress_callback(0, total_documents, "Preparing Word documents")
 
     for record in records:
         bol_label = record.bol_number or "(missing BOL #)"
@@ -1269,6 +1279,9 @@ def generate_standard_docx_set(
             skipped.append(SkippedDocxRecord(bol_number=bol_label, reason=reason))
             continue
 
+        if progress_callback is not None:
+            progress_callback(completed_documents, total_documents, f"Generating BOL {bol_label}")
+        progress_detail = f"Created BOL {bol_label}"
         try:
             doc = Document(str(resolved_template))
             is_standard_template = resolved_template.name == STANDARD_TEMPLATE_PATH.name
@@ -1322,6 +1335,10 @@ def generate_standard_docx_set(
                 notices.append(DocxGenerationNotice(bol_number=bol_label, message=message))
         except Exception as exc:
             failed.append(FailedDocxRecord(bol_number=bol_label, error=str(exc)))
+            progress_detail = f"Failed BOL {bol_label}"
+        completed_documents += 1
+        if progress_callback is not None:
+            progress_callback(completed_documents, total_documents, progress_detail)
 
     if not generated and not failed:
         if allow_incomplete_records:

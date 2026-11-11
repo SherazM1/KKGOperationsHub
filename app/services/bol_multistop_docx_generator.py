@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from tempfile import mkdtemp
 from functools import lru_cache
+from typing import Callable
 
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE
@@ -1426,6 +1427,7 @@ def generate_multistop_docx_set(
     master_comment_text: str = "",
     comment_scope: str = "Master only",
     item_row_count: int = MAX_ITEM_ROWS,
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> StandardDocxGenerationResult:
     validate_item_row_count(item_row_count)
     if selected_facility is None:
@@ -1459,6 +1461,18 @@ def generate_multistop_docx_set(
     skipped: list[SkippedDocxRecord] = []
     failed: list[FailedDocxRecord] = []
     notices: list[DocxGenerationNotice] = []
+    total_documents = sum(
+        1 + len(record.stops) for record in records
+        if record.selected_for_generation and not getattr(record, "import_issues", [])
+        and (record.is_ready or allow_incomplete_records)
+    )
+    completed_documents = 0
+
+    def report_progress(detail: str) -> None:
+        if progress_callback is not None:
+            progress_callback(completed_documents, total_documents, detail)
+
+    report_progress("Preparing Word documents")
 
     for record in records:
         record.ship_from = selected_ship_from
@@ -1486,6 +1500,8 @@ def generate_multistop_docx_set(
             skipped.append(SkippedDocxRecord(bol_number=bol_label, reason=reason))
             continue
 
+        load_start = completed_documents
+        report_progress(f"Generating master BOL {bol_label} for load {record.kk_load_number}")
         try:
             safe_bol = _sanitize_filename_part(record.bol_number)
             safe_kk_load = _sanitize_filename_part(record.kk_load_number)
@@ -1511,8 +1527,14 @@ def generate_multistop_docx_set(
                     item_row_count=item_row_count,
                 )
             )
+            completed_documents += 1
+            report_progress(f"Created master BOL {bol_label} for load {record.kk_load_number}")
 
             for stop_index, stop in enumerate(record.stops):
+                report_progress(
+                    f"Generating stop {stop.stop_number}, BOL {stop.bol_number or bol_label} "
+                    f"for load {record.kk_load_number}"
+                )
                 safe_stop_bol = _sanitize_filename_part(stop.bol_number or record.bol_number)
                 stop_base_name = f"stop_{stop.stop_number}_bol_{safe_stop_bol}"
                 generated.append(
@@ -1533,8 +1555,17 @@ def generate_multistop_docx_set(
                         notices=notices,
                     )
                 )
+                completed_documents += 1
+                report_progress(
+                    f"Created stop {stop.stop_number}, BOL {stop.bol_number or bol_label} "
+                    f"for load {record.kk_load_number}"
+                )
         except Exception as exc:
             failed.append(FailedDocxRecord(bol_number=bol_label, error=str(exc)))
+            # This load's remaining documents are abandoned by the existing
+            # error handler. Account for them without reporting them as created.
+            completed_documents = load_start + 1 + len(record.stops)
+            report_progress(f"Failed load {record.kk_load_number}; remaining documents skipped")
 
     if not generated and not failed:
         if allow_incomplete_records:
