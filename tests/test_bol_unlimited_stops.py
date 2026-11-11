@@ -128,7 +128,17 @@ def test_every_delivery_and_child_bol_survives_word_and_pdf(tmp_path, count, mod
     doc = Document(master.file_path)
     text = "\n".join(node.text or "" for node in doc.element.body.iter()
                      if node.tag.endswith("}t"))
-    assert "Delivery continuation" in text
+    assert "Master BOL: BOL-001" in text
+    assert text.count("Final Delivery: ") == (count + 14) // 15
+    final_entries = [(row, cell) for table in doc.tables for row in table.rows
+                   for cell in {id(cell._tc): cell for cell in row.cells}.values()
+                   if cell.text.startswith("Final Delivery:")]
+    assert len(final_entries) == (count + 14) // 15
+    for row, cell in final_entries:
+        assert f"DC {count}" in cell.text
+        assert f"{count} Delivery Marker Avenue" in cell.text
+        assert any(run.bold for run in cell.paragraphs[0].runs if "Final Delivery:" in run.text)
+        assert sum(paragraph.paragraph_format.line_spacing.pt for paragraph in cell.paragraphs) <= row.height.pt
     for number in range(1, count + 1):
         assert f"{number} Delivery Marker Avenue" in text
         assert f"Pallet {number}" in text
@@ -142,11 +152,19 @@ def test_every_delivery_and_child_bol_survives_word_and_pdf(tmp_path, count, mod
     assert len(pdfs.converted_files) == count + 1
     master_pdf = next(file for file in pdfs.converted_files if file.document_type == "combined")
     pages = PdfReader(master_pdf.file_path).pages
-    assert len(pages) == (count + 14) // 15 + (count + 7) // 8
+    assert len(pages) == (count + 14) // 15 + 1
     text = "\n".join(page.extract_text() for page in pages)
     for number in range(1, count + 1):
         assert f"{number} Delivery Marker Avenue" in text
         assert text.count(f"Pallet {number}\n") == 1
+    for page in pages[:(count + 14) // 15]:
+        master_text = page.extract_text()
+        assert "Final Delivery:" in master_text
+        assert f"DC {count}" in master_text
+        assert f"{count} Delivery Marker Avenue" in master_text
+    for file in pdfs.converted_files:
+        if file.document_type == "stop":
+            assert "Final Delivery:" not in "\n".join(page.extract_text() for page in PdfReader(file.file_path).pages)
     for page in pages[(count + 14) // 15:]:
         assert "Delivery continuation" in page.extract_text()
         assert "Master BOL: BOL-001" in page.extract_text()

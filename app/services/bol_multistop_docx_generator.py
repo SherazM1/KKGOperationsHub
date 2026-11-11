@@ -854,6 +854,95 @@ def _populate_combined_bill_to_block(doc: Document, record: BolMultistopRecord) 
     return False
 
 
+def _fit_consignee_cell(cell, row) -> None:
+    lines = cell.text.splitlines() or [""]
+    width = cell.width.pt - 8
+    size = 7.5
+    while size > 6.5 and (
+        max(stringWidth(line, "Helvetica-Bold", size) for line in lines) > width
+        or (row.height is not None and row.height_rule == WD_ROW_HEIGHT_RULE.EXACTLY
+            and len(lines) * (size + 0.5) > row.height.pt - 1)
+    ):
+        size -= 0.25
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    for paragraph in cell.paragraphs:
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        fmt = paragraph.paragraph_format
+        fmt.space_before = fmt.space_after = Pt(0)
+        fmt.left_indent = fmt.right_indent = fmt.first_line_indent = Pt(0)
+        fmt.line_spacing = Pt(size + 0.5)
+        fmt.keep_with_next = False
+        for run in paragraph.runs:
+            run.font.name = "Arial"
+            run.font.size = Pt(size)
+
+
+def _populate_final_delivery(doc: Document, record: BolMultistopRecord) -> bool:
+    """Use the blank bottom row of the master consignee box for the last stop."""
+    if not record.stops:
+        return False
+    stop = record.stops[-1]
+    address = " ".join(
+        " ".join(part.split()) for part in
+        (stop.delivery_address, stop.delivery_city_state_zip) if part.strip()
+    )
+    for table in doc.tables:
+        left_span = None
+        candidate = None
+        candidate_row = None
+        for row in table.rows:
+            cells = _row_unique_cells(row)
+            if not cells:
+                continue
+            if "TO (CONSIGNEE)" in cells[0][1].text.upper():
+                left_span = cells[0][1]._tc.grid_span
+                continue
+            if left_span is None:
+                continue
+            if cells[0][1]._tc.grid_span >= left_span:
+                break
+            left_cells = [cell for index, cell in cells if index < left_span]
+            for cell in left_cells:
+                if "\n" in cell.text.strip():
+                    _fit_consignee_cell(cell, row)
+            if left_cells and not any(cell.text.strip() for cell in left_cells):
+                candidate = left_cells
+                candidate_row = row
+        if not candidate:
+            continue
+        cell = candidate[0].merge(candidate[-1])
+        cell.text = ""
+        paragraph = cell.paragraphs[0]
+        paragraph.add_run("Final Delivery: ").bold = True
+        paragraph.add_run(stop.delivery_dc)
+        cell.add_paragraph(address)
+        properties = cell._tc.get_or_add_tcPr()
+        margins = properties.find(qn("w:tcMar"))
+        if margins is None:
+            margins = OxmlElement("w:tcMar")
+            properties.append(margins)
+        for edge, value in (("top", "0"), ("bottom", "0"), ("left", "60"), ("right", "60")):
+            node = margins.find(qn(f"w:{edge}"))
+            if node is None:
+                node = OxmlElement(f"w:{edge}")
+                margins.append(node)
+            node.set(qn("w:w"), value)
+            node.set(qn("w:type"), "dxa")
+        borders = properties.find(qn("w:tcBorders"))
+        if borders is None:
+            borders = OxmlElement("w:tcBorders")
+            properties.append(borders)
+        top = borders.find(qn("w:top"))
+        if top is None:
+            top = OxmlElement("w:top")
+            borders.append(top)
+        for attr, value in (("val", "single"), ("sz", "4"), ("color", "BFBFBF")):
+            top.set(qn(f"w:{attr}"), value)
+        _fit_consignee_cell(cell, candidate_row)
+        return True
+    return False
+
+
 def _fit_combined_bol_number(doc: Document, bol_number: str) -> bool:
     if not (bol_number or "").strip():
         return False
@@ -1283,6 +1372,13 @@ def _save_multistop_docx(
         resolved_comment,
         template_mode,
     )
+    # Header alignment applies the reference form's exact row heights. Fit the
+    # final address afterward so the tighter No Recourse row cannot clip it.
+    if record.stops and not _populate_final_delivery(doc, record):
+        notices.append(DocxGenerationNotice(
+            bol_number=bol_label,
+            message="Could not locate the bottom consignee row for Final Delivery.",
+        ))
 
     apply_docx_item_row_layout(
         doc, item_row_count, template_mode if is_standard_family_template else "Multistop"

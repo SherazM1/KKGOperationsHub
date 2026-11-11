@@ -1686,7 +1686,6 @@ def _draw_multistop_overlay(
                 NO_RECOURSE_MASTER_COMMENT_BOX,
                  )
         return
-    _clear_multistop_consignee_rules(canv, "Multistop")
     # Draw the top Multistop fields
     values = _multistop_record_values(
         record,
@@ -1695,11 +1694,14 @@ def _draw_multistop_overlay(
     )
 
     for field_name, box in config.fields.items():
+        if field_name.startswith("delivery_"):
+            continue
         _draw_box_value(
             canv,
             box,
             values.get(field_name, ""),
         )
+    _draw_multistop_consignee_block(canv, record, no_recourse=False)
 
     # Draw Standard or No Recourse paragraph
     _draw_multistop_terms(canv, no_recourse)
@@ -1731,6 +1733,50 @@ def _draw_no_recourse_driver_date(canv: canvas.Canvas) -> None:
     canv.restoreState()
 
 
+def _draw_multistop_consignee_block(canv, record, *, no_recourse):
+    """Keep the first delivery entries and reserve the bottom for the final stop."""
+    bottom = 496.5 if no_recourse else 446.5
+    top = 597.5 if no_recourse else 572.5
+    first_baseline = 589.0 if no_recourse else 559.0
+    step = 22.0 if no_recourse else 27.0
+    canv.saveState()
+    canv.setFillColor(colors.white)
+    canv.rect(22.5, bottom, 313, top - bottom, stroke=0, fill=1)
+    canv.restoreState()
+    for index in range(1, 4):
+        baseline = first_baseline - (index - 1) * step
+        _draw_box_value(canv, _without_whiteout(_box_for_baseline(
+            x=29, baseline=baseline, width=74, font_size=7.5, bold=True,
+        )), f"DELIVERY #{index}")
+        _draw_box_value(canv, _without_whiteout(_box_for_baseline(
+            x=107, baseline=baseline, width=223, font_size=8, min_font_size=6.5, bold=True,
+        )), getattr(record, f"delivery_{index}_dc"))
+        address = " ".join(getattr(record, f"delivery_{index}_address").split())
+        _draw_box_value(canv, _without_whiteout(_box_for_baseline(
+            x=107, baseline=baseline - (9 if no_recourse else 11), width=223,
+            font_size=7, min_font_size=5.5,
+        )), address)
+    if not record.stops:
+        return
+    final = record.stops[-1]
+    canv.saveState()
+    canv.setStrokeColor(colors.HexColor("#BFBFBF"))
+    canv.setLineWidth(0.5)
+    canv.line(29, bottom + 30, 330, bottom + 30)
+    canv.restoreState()
+    _draw_box_value(canv, _without_whiteout(_box_for_baseline(
+        x=29, baseline=bottom + 19, width=74, font_size=7.5, bold=True,
+    )), "Final Delivery:")
+    _draw_box_value(canv, _without_whiteout(_box_for_baseline(
+        x=107, baseline=bottom + 19, width=223, font_size=7.5, min_font_size=6.5,
+    )), final.delivery_dc)
+    address = " ".join(part.strip() for part in
+                       (final.delivery_address, final.delivery_city_state_zip) if part.strip())
+    _draw_box_value(canv, _without_whiteout(_box_for_baseline(
+        x=29, baseline=bottom + 7, width=301, font_size=7.5, min_font_size=6.5,
+    )), address)
+
+
 def _draw_no_recourse_multistop_overlay(
     canv: canvas.Canvas,
     record: BolMultistopRecord,
@@ -1753,24 +1799,7 @@ def _draw_no_recourse_multistop_overlay(
         if not name.startswith("consignee_") and name != "dc_number":
             _draw_box_value(canv, box, values.get(name, ""))
 
-    # Replace only the consignee interior; keep the surrounding form borders.
-    canv.saveState()
-    canv.setFillColor(colors.white)
-    canv.rect(22.5, 496.5, 313, 101, stroke=0, fill=1)
-    canv.restoreState()
-    for index in range(1, 4):
-        baseline = 588.0 - (index - 1) * 32.0
-        # Keep each delivery label and address without adding black writing rules beneath them.
-        _draw_box_value(canv, _without_whiteout(_box_for_baseline(
-            x=29, baseline=baseline, width=78, font_size=8.0, bold=True,
-        )), f"DELIVERY #{index}")
-        _draw_box_value(canv, _without_whiteout(_box_for_baseline(
-            x=112.5, baseline=baseline, width=218, font_size=8.7, min_font_size=6.5,
-        )), values[f"delivery_{index}_dc"])
-        _draw_box_value(canv, TextBox(
-            112.5, baseline - 23, 218, 22, 8.0, min_font_size=6.5,
-            multiline=True, leading=10, whiteout=False,
-        ), values[f"delivery_{index}_address"])
+    _draw_multistop_consignee_block(canv, record, no_recourse=True)
 
     _draw_multistop_item_table(canv, config, record, item_rows=item_rows)
     _draw_box_value(canv, _box_for_baseline(
