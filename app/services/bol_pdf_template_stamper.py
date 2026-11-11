@@ -6,6 +6,7 @@ from app.services.bol_item_layout import MAX_ITEM_ROWS, validate_item_row_count
 
 from dataclasses import dataclass, replace
 from app.services.bol_comment_scope import include_bol_comment
+from app.services.bol_stop_continuation import append_delivery_continuation_pdf
 from io import BytesIO
 from pathlib import Path
 import re
@@ -2156,6 +2157,7 @@ def stamp_bol_pdf_set(
                         preserve_detail_lines=True, item_row_count=item_row_count,
                     )],
                 )
+                append_delivery_continuation_pdf(destination_pdf, record)
             else:
                 record = standard_lookup.get(_safe_text(generated_file.bol_number))
                 if record is None:

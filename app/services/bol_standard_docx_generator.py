@@ -213,6 +213,14 @@ def _replace_text_in_document(
 
 
 def _replace_tokens_in_row_element(row_element, replacements: dict[str, str]) -> None:
+    optional_details = []
+    for paragraph in row_element.findall(".//w:p", row_element.nsmap):
+        original = "".join(node.text or "" for node in paragraph.findall(".//w:t", paragraph.nsmap))
+        empty_fields = [field for field in ("ITEM_NUMBER", "UPC")
+                        if any(_tok(alias) in original and replacements.get(_tok(alias)) == ""
+                               for alias in ITEM_TOKEN_ALIASES[field])]
+        if empty_fields:
+            optional_details.append((paragraph, empty_fields))
     text_nodes = row_element.findall(".//w:t", row_element.nsmap)
     for node in text_nodes:
         text = node.text or ""
@@ -220,6 +228,19 @@ def _replace_tokens_in_row_element(row_element, replacements: dict[str, str]) ->
             if source in text:
                 text = text.replace(source, target)
         node.text = text
+    # The templates print literal labels next to the merge fields. Omit those
+    # labels as well when an optional identifier is absent, preserving the
+    # description and any identifier that was supplied.
+    for paragraph, empty_fields in optional_details:
+        nodes = paragraph.findall(".//w:t", paragraph.nsmap)
+        text = "".join(node.text or "" for node in nodes)
+        for field in empty_fields:
+            pattern = r"Item\s*#\s*:\s*" if field == "ITEM_NUMBER" else r"UPC\s*#?\s*:\s*"
+            text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+        if nodes:
+            nodes[0].text = text.strip()
+            for node in nodes[1:]:
+                node.text = ""
 
 
 def _row_has_any_token_text(row, tokens: tuple[str, ...]) -> bool:

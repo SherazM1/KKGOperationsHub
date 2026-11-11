@@ -33,7 +33,7 @@ ACCEPTED_LOAD_SHEET_NAMES: tuple[str, ...] = (
 LOAD_SHEET_NOT_FOUND_MESSAGE = (
     "Could not find a BOL load sheet. Expected a sheet named MAIN LOAD SHEET "
     "or LOAD SHEET, or a sheet containing BOL load headers such as KK Load, "
-    "Carrier, DC #, TGT PO #, UPC, and Total Weight."
+    "Carrier, DC #, TGT PO #, and Total Weight."
 )
 CSV_WORKSHEET_NAME = "CSV"
 
@@ -129,8 +129,6 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
         "primary": "DC CITY, STATE, ZIP",
         "fallback_aliases": ["DC City, State, Zip", "DC CITY STATE ZIP"],
     },
-    "item_number": {"primary": "ITEM #", "fallback_aliases": ["ITEM#"]},
-    "upc": {"primary": "UPC", "fallback_aliases": []},
     "item_description": {
         "primary": "PalletDescription",
         "fallback_aliases": ["Pallet Description", "PALLETDESCRIPTION"],
@@ -156,6 +154,8 @@ REQUIRED_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
 }
 
 OPTIONAL_COLUMN_SPECS: dict[str, dict[str, str | list[str]]] = {
+    "item_number": {"primary": "ITEM #", "fallback_aliases": ["ITEM#"]},
+    "upc": {"primary": "UPC", "fallback_aliases": []},
     "group_pallet_total": {
         "primary": "Total PLT QTY",
         "fallback_aliases": ["Total Load Pallets", "Load Pallet Total"],
@@ -692,8 +692,8 @@ def _iter_openpyxl_standard_rows(
                 dc_name=row_values["dc_name"],
                 dc_street=row_values["dc_street"],
                 dc_city_state_zip=_combine_city_state_zip_from_values(row_values),
-                item_number=row_values["item_number"],
-                upc=row_values["upc"],
+                item_number=row_values.get("item_number", ""),
+                upc=row_values.get("upc", ""),
                 item_description=row_values["item_description"],
                 unit_qty=row_values["unit_qty"],
                 plt_qty=row_values["plt_qty"],
@@ -897,8 +897,8 @@ def _parse_standard_dataframe_rows(
                 dc_name=row_values["dc_name"],
                 dc_street=row_values["dc_street"],
                 dc_city_state_zip=_combine_city_state_zip_from_values(row_values),
-                item_number=row_values["item_number"],
-                upc=row_values["upc"],
+                item_number=row_values.get("item_number", ""),
+                upc=row_values.get("upc", ""),
                 item_description=row_values["item_description"],
                 unit_qty=row_values["unit_qty"],
                 plt_qty=row_values["plt_qty"],

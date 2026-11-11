@@ -87,7 +87,7 @@ def test_shifted_incomplete_street_does_not_pass_validation():
     assert any("street name" in issue for issue in record.issues)
 
 
-@pytest.mark.parametrize("field,value", [("DC STREET", "2"), ("DC ZIP", ""), ("UPC", ""), ("ITEM #", ""), ("QTY", ""), ("weight each", "")])
+@pytest.mark.parametrize("field,value", [("DC STREET", "2"), ("DC ZIP", ""), ("QTY", ""), ("weight each", "")])
 def test_incomplete_required_data_is_not_ready(field, value):
     row = _standard_load_row()
     row[field] = value

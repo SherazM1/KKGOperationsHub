@@ -819,6 +819,11 @@ def render_bol_generator_view() -> None:
     )
     if st.session_state["bol_mode"] == "Multistop":
         st.session_state["bol_input_source"] = "Excel upload"
+        st.caption(
+            "Loads can have any number of stops. Loads with more than three stops "
+            "include a complete delivery list on additional master pages; "
+            "each stop also gets its own BOL."
+        )
 
     st.markdown("---")
 
@@ -1341,8 +1346,6 @@ def render_bol_generator_view() -> None:
                 st.caption("Missing required: " + ", ".join(record.missing_required_fields))
             if getattr(record, "import_issues", []):
                 st.error("Generation blocked: " + "; ".join(record.import_issues))
-            if record.status == "Unsupported Stop Count":
-                st.caption("Unsupported: stop count exceeds the current maximum of 3.")
             if record.warnings:
                 st.caption("Warnings: " + " | ".join(record.warnings))
             if record.issues and not (record.missing_required_fields or record.warnings):

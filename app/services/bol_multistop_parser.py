@@ -135,7 +135,7 @@ def _resolve_columns_with_missing(columns, column_overrides=None):
             raise ColumnMappingRequired(str(exc), {field: next(iter(exc.requests.values()))}, columns) from exc
         if selected is not None:
             resolved[field] = selected
-        elif field not in {"dc_city_state_zip", "stop", "country", "dept", "mabd", "dc_number"}:
+        elif field not in {"dc_city_state_zip", "stop", "country", "dept", "mabd", "dc_number", "upc"}:
             if field == "total_pallets" and _resolve_column_name(lookups, "Total PLT QTY", ("Total Load Pallets",)):
                 continue
             if field == "total_pallets" and _resolve_column_name(lookups, "Units", ()) and _resolve_column_name(lookups, "PLT Weight", ("Pallet Weight",)):
@@ -235,8 +235,6 @@ def _parse_multistop_dataframe_rows(
         for field in ("dc_number", "dc_city", "dc_state", "dc_zip", "total_pallets"):
             row_values.setdefault(field, "")
         notes = []
-        if not row_values["upc"].strip():
-            notes.append("Missing UPC; review required.")
         if "total_pallets" not in column_map:
             notes.append("No separate pallet/skid count supplied; review required.")
         if "dc_number" not in column_map:
@@ -276,7 +274,7 @@ def _parse_multistop_dataframe_rows(
                 dc_number=row_values["dc_number"],
                 target_po_number=row_values["target_po_number"],
                 item_number=optional_row_values.get("item_number", ""),
-                upc=row_values["upc"],
+                upc=row_values.get("upc", ""),
                 pallet_description=row_values["pallet_description"],
                 cases=row_values["cases"],
                 total_pallets=row_values["total_pallets"],

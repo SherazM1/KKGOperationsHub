@@ -12,9 +12,6 @@ from app.models.bol_multistop_row import BolMultistopRow
 from app.models.bol_standard_record import BolAddressBlock, BolStandardItemLine
 
 
-MAX_SUPPORTED_STOPS = 3
-
-
 def _first_non_empty(rows: list[BolMultistopRow], attr_name: str) -> str:
     for row in rows:
         value = getattr(row, attr_name, "")
@@ -188,11 +185,11 @@ def _group_key(row: BolMultistopRow) -> str:
     return row.kk_load.strip()
 
 
-def _stop_sort_key(row: BolMultistopRow) -> tuple[int, int]:
+def _stop_sort_key(row: BolMultistopRow) -> tuple[bool, int, int]:
     stop_number = row.stop_number
     if stop_number is None or stop_number <= 0:
-        return (MAX_SUPPORTED_STOPS + row.source_row_number, row.source_row_number)
-    return (stop_number, row.source_row_number)
+        return (True, 0, row.source_row_number)
+    return (False, stop_number, row.source_row_number)
 
 
 def _optional_grouped_field_warnings(group_rows: list[BolMultistopRow]) -> list[str]:
@@ -281,12 +278,7 @@ def map_multistop_rows_to_records(rows: list[BolMultistopRow]) -> list[BolMultis
                 continue
             rows_by_stop[row.stop_number] = row
 
-        has_unsupported_stops = any(stop_number > MAX_SUPPORTED_STOPS for stop_number in distinct_stops)
         stop_count = len(distinct_stops)
-        if stop_count > MAX_SUPPORTED_STOPS or has_unsupported_stops:
-            issues.append(
-                f"Unsupported stop count: found {stop_count} stops with max stop {max(distinct_stops) if distinct_stops else 0}; maximum supported is {MAX_SUPPORTED_STOPS}."
-            )
 
         ordered_stops: list[BolMultistopStop] = []
         used_stop_numbers: set[int] = set()
@@ -295,7 +287,6 @@ def map_multistop_rows_to_records(rows: list[BolMultistopRow]) -> list[BolMultis
             if (
                 stop_number is None
                 or stop_number <= 0
-                or stop_number > MAX_SUPPORTED_STOPS
                 or stop_number in used_stop_numbers
                 or stop_number not in rows_by_stop
             ):
@@ -313,10 +304,14 @@ def map_multistop_rows_to_records(rows: list[BolMultistopRow]) -> list[BolMultis
             issues.extend(_validate_stop_fields(stop))
 
         if distinct_stops:
-            highest_supported = min(max(distinct_stops), MAX_SUPPORTED_STOPS)
-            for expected_stop in range(1, highest_supported + 1):
-                if expected_stop not in rows_by_stop:
-                    issues.append(f"Missing Stop {expected_stop} row in this grouped shipment.")
+            previous = 0
+            for stop_number in sorted(distinct_stops):
+                expected = previous + 1
+                if stop_number > expected:
+                    missing = (f"Stop {expected}" if stop_number == expected + 1
+                               else f"Stops {expected}-{stop_number - 1}")
+                    issues.append(f"Missing {missing} row in this grouped shipment.")
+                previous = stop_number
         elif malformed_stop_rows:
             issues.append("No valid stop numbers were found in this grouped shipment.")
 
@@ -443,7 +438,7 @@ def map_multistop_rows_to_records(rows: list[BolMultistopRow]) -> list[BolMultis
             generation_skip_reason=None,
             conversion_skip_reason=None,
             issues=list(dict.fromkeys(issues + consistency_warnings + validation_warnings)),
-            is_supported=not (stop_count > MAX_SUPPORTED_STOPS or has_unsupported_stops),
+            is_supported=True,
         )
 
         if any(row.stop_inferred for row in group_rows):
@@ -458,10 +453,7 @@ def map_multistop_rows_to_records(rows: list[BolMultistopRow]) -> list[BolMultis
         record.import_issues.extend(issue for issue in record.issues
                                     if "is not numeric" in issue or "could not be computed reliably" in issue)
 
-        if stop_count > MAX_SUPPORTED_STOPS or has_unsupported_stops:
-            record.is_ready = False
-            record.status = "Unsupported Stop Count"
-        elif missing_required_fields:
+        if missing_required_fields:
             record.is_ready = False
             record.status = "Missing Required Data"
         elif record.issues:

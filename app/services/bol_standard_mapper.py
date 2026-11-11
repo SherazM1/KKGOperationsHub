@@ -70,10 +70,6 @@ def _required_shipment_issues(record: BolStandardRecord) -> list[str]:
     for line in record.item_lines:
         if not line.item_description.strip():
             issues.append(f"Row {line.source_row_number}: missing item description.")
-        if not line.item_number.strip():
-            issues.append(f"Row {line.source_row_number}: missing ITEM #.")
-        if not line.upc.strip():
-            issues.append(f"Row {line.source_row_number}: missing UPC.")
         if not line.pallet_qty.strip():
             issues.append(f"Row {line.source_row_number}: missing QTY.")
         if not line.weight_each.strip():

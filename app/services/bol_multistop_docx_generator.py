@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from copy import deepcopy
 from app.services.bol_comment_scope import include_bol_comment
 from app.services.bol_item_layout import MAX_ITEM_ROWS, apply_docx_item_row_layout, validate_item_row_count
+from app.services.bol_stop_continuation import append_delivery_continuation_docx
 from datetime import datetime
 from pathlib import Path
 from tempfile import mkdtemp
@@ -1285,6 +1286,7 @@ def _save_multistop_docx(
     apply_docx_item_row_layout(
         doc, item_row_count, template_mode if is_standard_family_template else "Multistop"
     )
+    append_delivery_continuation_docx(doc, record)
     doc.save(str(destination))
 
 
@@ -1469,12 +1471,6 @@ def generate_multistop_docx_set(
             skipped.append(SkippedDocxRecord(bol_number=bol_label, reason=reason))
             continue
 
-        if record.stop_count > 3:
-            reason = "Unsupported stop count: more than 3 stops."
-            record.generation_skip_reason = reason
-            skipped.append(SkippedDocxRecord(bol_number=bol_label, reason=reason))
-            continue
-
         if getattr(record, "import_issues", []):
             reason = "Import validation: " + "; ".join(record.import_issues)
             record.generation_skip_reason = reason
@@ -1482,9 +1478,7 @@ def generate_multistop_docx_set(
             continue
         if not record.is_ready and not allow_incomplete_records:
             reason = "Record is not ready for DOCX generation."
-            if record.status == "Unsupported Stop Count":
-                reason = "Unsupported stop count: more than 3 stops."
-            elif record.missing_required_fields:
+            if record.missing_required_fields:
                 reason = "Missing required data: " + ", ".join(record.missing_required_fields)
             elif record.issues:
                 reason = "; ".join(record.issues)
