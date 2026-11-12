@@ -175,8 +175,8 @@ class TextBox:
 # The master template's appointment notice ends at y=392. Keep a 2 pt
 # gap and align the unique comment directly under the notice's text.
 MASTER_COMMENT_BOX = TextBox(
-    x=364,
-    y=392 - 2 - 12,
+    x=375.5,
+    y=590,
     width=224,
     height=12,
 )
@@ -631,14 +631,14 @@ def draw_multiline_text(canv: canvas.Canvas, box: TextBox, value: Any) -> None:
 
     font_name = _font_name(box.bold)
     font_size = box.font_size
-    while font_size > box.min_font_size:
+    while True:
         lines: list[str] = []
         for raw_line in text.splitlines() or [text]:
             lines.extend(_split_line_to_width(canv, raw_line, font_name, font_size, box.width))
         leading = box.leading or font_size + 1.2
-        if len(lines) * leading <= box.height:
+        if len(lines) * leading <= box.height or font_size <= box.min_font_size:
             break
-        font_size -= 0.25
+        font_size = max(box.min_font_size, font_size - 0.25)
 
     final_font_size = max(font_size, box.min_font_size)
     canv.setFont(font_name, final_font_size)
@@ -1544,14 +1544,15 @@ def _draw_multistop_terms(
         else MULTISTOP_STANDARD_TERMS
     )
 
-    # Cover the paragraph already printed in the PDF template.
+    # The original paragraph extends beyond x=590. Clear through the page's
+    # right edge so its last letters cannot show beside the replacement text.
     canv.saveState()
     canv.setFillColor(colors.white)
     canv.setStrokeColor(colors.white)
     canv.rect(
         22,
         312,
-        568,
+        PAGE_WIDTH - 22,
         65,
         stroke=0,
         fill=1,
@@ -1560,9 +1561,9 @@ def _draw_multistop_terms(
 
     terms_box = TextBox(
         x=25,
-        y=314,
+        y=312,
         width=560,
-        height=60,
+        height=65,
         font_size=8.5,
         min_font_size=7.5,
         multiline=True,
@@ -1636,7 +1637,7 @@ def _draw_master_comment_box(
 )-> None:
     """Draw a single highlighted line without covering adjacent form content."""
     line = " ".join((text or "").split())
-    size = _fit_font_size(canv, line, FONT_BOLD, 8, box.width - 8, 6)
+    size = _fit_font_size(canv, line, FONT_BOLD, 10, box.width - 8, 6)
     if stringWidth(line, FONT_BOLD, size) > box.width - 8:
         while line and stringWidth(line + "...", FONT_BOLD, size) > box.width - 8:
             line = line[:-1]

@@ -33,6 +33,22 @@ from app.utils.bol_facilities import BOL_FACILITY_LOOKUP, BOL_FACILITY_OPTIONS
 from app.utils.bol_facilities import facility_to_ship_from
 
 
+def test_multistop_terms_redraw_preserves_the_complete_paragraph() -> None:
+    from io import BytesIO
+    from reportlab.pdfgen import canvas
+    from app.services.bol_pdf_template_stamper import (
+        MULTISTOP_STANDARD_TERMS, _draw_multistop_terms,
+    )
+
+    output = BytesIO()
+    canv = canvas.Canvas(output, pagesize=(612, 792))
+    _draw_multistop_terms(canv, no_recourse=False)
+    canv.save()
+    output.seek(0)
+    text = PdfReader(output).pages[0].extract_text()
+    assert " ".join(text.split()) == " ".join(MULTISTOP_STANDARD_TERMS.split())
+
+
 def _address(company: str = "Trident Transport, LLC") -> BolAddressBlock:
     return BolAddressBlock(
         company=company,

@@ -163,7 +163,7 @@ def append_delivery_continuation_pdf(destination: Path, record):
     def draw_heading(canv, _document):
         # Keep the load identity on every page if an unusually large schedule
         # cannot fit at the minimum readable font size.
-        title = Paragraph("Delivery continuation", title_style)
+        title = Paragraph("Stop Manifest", title_style)
         _, title_height = title.wrap(TABLE_WIDTH, 40)
         title.drawOn(canv, 36, letter[1] - 36 - title_height)
         identity = Paragraph(escape(_identity(record)), style)
